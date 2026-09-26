@@ -28,7 +28,7 @@ configure_file(input: '../gimprc_user.in', output: 'gimprc_user',
   configuration: gimprc_conf,
   install: true, install_dir: data_install_dir)
 
-install_data('../gimp_tips.txt', '../gtkrc',
+install_data('../gimp_tips.txt',
   install_dir: data_install_dir)
 
 # The application icon, in the hicolor theme GTK looks in for window icons.
