@@ -500,8 +500,7 @@ script_fu_report_cc (gchar *command)
     {
       char *new_command;
 
-      new_command = g_new (gchar, strlen (command) + 10);
-      sprintf (new_command, "%s <%d>", command, ++consec_command_count);
+      new_command = g_strdup_printf ("%s <%d>", command, ++consec_command_count);
       if (current_command_enabled == TRUE)
 	gtk_editable_set_text (GTK_EDITABLE (sf_interface.cc), new_command);
       g_free (new_command);
@@ -576,85 +575,53 @@ script_fu_script_proc (char     *name,
 	  if (status == STATUS_SUCCESS)
 	    {
 	      gint err_msg;
-	      char *text = NULL;
-	      char *command, *c;
-	      char buffer[32];
-	      int length;
+	      GString *command;
 	      int i;
 
-	      length = strlen (script->script_name) + 3;
+	      /*  built with a GString: an SF_VALUE string can be any length  */
+	      command = g_string_new ("(");
+	      g_string_append (command, script->script_name);
 
-	      for (i = 0; i < script->num_args; i++)
-		switch (script->arg_types[i])
-		  {
-		  case SF_IMAGE:
-		  case SF_DRAWABLE:
-		  case SF_LAYER:
-		  case SF_CHANNEL:
-		    length += 12;  /*  Maximum size of integer value will not exceed this many characters  */
-		    break;
-		  case SF_COLOR:
-		    length += 16;  /*  Maximum size of color string: '(XXX XXX XXX)  */
-		    break;
-		  case SF_TOGGLE:
-		    length += 6;   /*  Maximum size of (TRUE, FALSE)  */
-		    break;
-		  case SF_VALUE:
-		    length += strlen (params[i + 1].data.d_string) + 1;
-		    break;
-		  default:
-		    break;
-		  }
-
-	      c = command = g_new (char, length);
-
-	      if (script->num_args)
-	      {
-	      sprintf (command, "(%s ", script->script_name);
-	      c += strlen (script->script_name) + 2;
 	      for (i = 0; i < script->num_args; i++)
 		{
+		  g_string_append_c (command, ' ');
+
 		  switch (script->arg_types[i])
 		    {
 		    case SF_IMAGE:
 		    case SF_DRAWABLE:
 		    case SF_LAYER:
 		    case SF_CHANNEL:
-		      sprintf (buffer, "%d", params[i + 1].data.d_image);
-		      text = buffer;
+		      g_string_append_printf (command, "%d",
+					      params[i + 1].data.d_image);
 		      break;
 		    case SF_COLOR:
-		      sprintf (buffer, "'(%d %d %d)",
-			       params[i + 1].data.d_color.red,
-			       params[i + 1].data.d_color.green,
-			       params[i + 1].data.d_color.blue);
-		      text = buffer;
+		      g_string_append_printf (command, "'(%d %d %d)",
+					      params[i + 1].data.d_color.red,
+					      params[i + 1].data.d_color.green,
+					      params[i + 1].data.d_color.blue);
 		      break;
 		    case SF_TOGGLE:
-		      sprintf (buffer, "%s", (params[i + 1].data.d_int32) ? "TRUE" : "FALSE");
-		      text = buffer;
+		      g_string_append (command,
+				       (params[i + 1].data.d_int32) ? "TRUE" : "FALSE");
 		      break;
 		    case SF_VALUE:
-		      text = params[i + 1].data.d_string;
+		      if (params[i + 1].data.d_string)
+			g_string_append (command, params[i + 1].data.d_string);
+		      else
+			g_string_append (command, "\"\"");
 		      break;
 		    default:
 		      break;
 		    }
-
-		  if (i == script->num_args - 1)
-		    sprintf (c, "%s)", text);
-		  else
-		    sprintf (c, "%s ", text);
-		  c += strlen (text) + 1;
 		}
-	      }
-	      else
-		sprintf (command, "(%s)", script->script_name);
+
+	      g_string_append_c (command, ')');
 
 	      /*  run the command through the interpreter  */
-	      err_msg = (repl_c_string (command, 0, 0, 1) != 0) ? TRUE : FALSE;
+	      err_msg = (repl_c_string (command->str, 0, 0, 1) != 0) ? TRUE : FALSE;
 
-	      g_free (command);
+	      g_string_free (command, TRUE);
 	    }
 	  break;
 
@@ -943,78 +910,50 @@ script_fu_ok_callback (GtkWidget *widget,
   GtkWidget *dlg = GTK_WIDGET (data);
   SFScript *script;
   gint err_msg;
-  const char *text = NULL;
-  char *command, *c;
-  char buffer[32];
-  int length;
+  GString *cmd;
+  char *command;
   int i;
 
   if ((script = sf_interface.script) == NULL)
     return;
 
-  length = strlen (script->script_name) + 3;
+  /*  built with a GString: no fixed buffers for the values, whatever the
+   *  script's defaults or the user typed
+   */
+  cmd = g_string_new ("(");
+  g_string_append (cmd, script->script_name);
 
-  for (i = 0; i < script->num_args; i++)
-    switch (script->arg_types[i])
-      {
-      case SF_IMAGE:
-      case SF_DRAWABLE:
-      case SF_LAYER:
-      case SF_CHANNEL:
-	length += 12;  /*  Maximum size of integer value will not exceed this many characters  */
-	break;
-      case SF_COLOR:
-	length += 16;  /*  Maximum size of color string: '(XXX XXX XXX)  */
-	break;
-      case SF_TOGGLE:
-	length += 6;   /*  Maximum size of (TRUE, FALSE)  */
-	break;
-      case SF_VALUE:
-	length += strlen (gtk_editable_get_text (GTK_EDITABLE (script->args_widgets[i]))) + 1;
-	break;
-      default:
-	break;
-      }
-
-  c = command = g_new (char, length);
-
-  sprintf (command, "(%s ", script->script_name);
-  c += strlen (script->script_name) + 2;
   for (i = 0; i < script->num_args; i++)
     {
+      g_string_append_c (cmd, ' ');
+
       switch (script->arg_types[i])
 	{
 	case SF_IMAGE:
 	case SF_DRAWABLE:
 	case SF_LAYER:
 	case SF_CHANNEL:
-	  sprintf (buffer, "%d", script->arg_values[i].sfa_image);
-	  text = buffer;
+	  g_string_append_printf (cmd, "%d", script->arg_values[i].sfa_image);
 	  break;
 	case SF_COLOR:
-	  sprintf (buffer, "'(%d %d %d)",
-		   (gint32) (script->arg_values[i].sfa_color.color[0] * 255.999),
-		   (gint32) (script->arg_values[i].sfa_color.color[1] * 255.999),
-		   (gint32) (script->arg_values[i].sfa_color.color[2] * 255.999));
-	  text = buffer;
+	  g_string_append_printf (cmd, "'(%d %d %d)",
+				  (gint32) (script->arg_values[i].sfa_color.color[0] * 255.999),
+				  (gint32) (script->arg_values[i].sfa_color.color[1] * 255.999),
+				  (gint32) (script->arg_values[i].sfa_color.color[2] * 255.999));
 	  break;
 	case SF_TOGGLE:
-	  sprintf (buffer, "%s", (script->arg_values[i].sfa_toggle) ? "TRUE" : "FALSE");
-	  text = buffer;
+	  g_string_append (cmd, (script->arg_values[i].sfa_toggle) ? "TRUE" : "FALSE");
 	  break;
 	case SF_VALUE:
-	  text = gtk_editable_get_text (GTK_EDITABLE (script->args_widgets[i]));
+	  g_string_append (cmd, gtk_editable_get_text (GTK_EDITABLE (script->args_widgets[i])));
 	  break;
 	default:
 	  break;
 	}
-
-      if (i == script->num_args - 1)
-	sprintf (c, "%s)", text);
-      else
-	sprintf (c, "%s ", text);
-      c += strlen (text) + 1;
     }
+
+  g_string_append_c (cmd, ')');
+  command = g_string_free (cmd, FALSE);
 
   /*  The dialog stays up showing the current command while the script
    *  runs, but takes no input.

@@ -98,6 +98,10 @@ save_image (char   *filename,
   guchar *d;
   guchar *data;
 
+  /* the encoder below reads three bytes (R, G, B) per pixel */
+  if (gimp_drawable_bpp (drawable_ID) < 3)
+    return FALSE;
+
   if ((fp = fopen (filename, "w")) == NULL)
     return FALSE;
 

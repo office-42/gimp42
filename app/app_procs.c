@@ -496,7 +496,7 @@ app_init (void)
   if (swap_path == NULL)
     swap_path = (char *) g_get_tmp_dir ();
   if (!g_file_test (swap_path, G_FILE_TEST_IS_DIR))
-    g_mkdir_with_parents (swap_path, 0755);
+    g_mkdir_with_parents (swap_path, 0700);
   {
     char *name = g_strdup_printf ("gimpswap.%ld", (long) getpid ());
     path = g_build_filename (swap_path, name, NULL);

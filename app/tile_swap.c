@@ -27,6 +27,7 @@ struct _SwapFile
   SwapFunc swap_func;
   gpointer user_data;
   int fd;
+  int created;      /* has the (default) swap file been created yet? */
 };
 
 struct _DefSwapFile
@@ -122,7 +123,9 @@ tile_swap_exit1 (gpointer key,
 	  tile_swap_print_gaps (def_swap_file);
 	}
 
-      unlink (swap_file->filename);
+      /* never remove a file that we didn't create ourselves */
+      if (swap_file->created)
+	unlink (swap_file->filename);
     }
 }
 
@@ -164,6 +167,7 @@ tile_swap_add (char     *filename,
   swap_file->swap_func = swap_func;
   swap_file->user_data = user_data;
   swap_file->fd = -1;
+  swap_file->created = (swap_func != tile_swap_default);
 
   g_hash_table_insert (swap_files, &swap_file->swap_num, swap_file);
 
@@ -292,7 +296,36 @@ tile_swap_open (SwapFile *swap_file)
       nopen_swap_files -= 1;
     }
 
-  swap_file->fd = g_open (swap_file->filename, O_CREAT|O_RDWR|O_BINARY, S_IRUSR|S_IWUSR);
+  if (!swap_file->created)
+    {
+      /* The swap file usually lives in a shared temp directory under
+       * a predictable name.  Create it exclusively so that a file or
+       * symlink planted there by someone else is never followed or
+       * reused; pick another name if the preferred one is taken.
+       */
+      char *base = swap_file->filename;
+      int tries;
+
+      swap_file->filename = g_strdup (base);
+      for (tries = 0; tries < 100; tries++)
+	{
+	  swap_file->fd = g_open (swap_file->filename,
+				  O_CREAT|O_EXCL|O_RDWR|O_BINARY,
+				  S_IRUSR|S_IWUSR);
+	  if (swap_file->fd != -1 || errno != EEXIST)
+	    break;
+
+	  g_free (swap_file->filename);
+	  swap_file->filename = g_strdup_printf ("%s.%d", base, tries + 1);
+	}
+      g_free (base);
+
+      if (swap_file->fd != -1)
+	swap_file->created = TRUE;
+    }
+  else
+    swap_file->fd = g_open (swap_file->filename, O_RDWR|O_BINARY, 0);
+
   if (swap_file->fd == -1)
     {
       g_message ("unable to open swap file...BAD THINGS WILL HAPPEN SOON");

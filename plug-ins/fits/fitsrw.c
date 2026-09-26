@@ -88,6 +88,7 @@ static char ident[] = "@(#) libfits.c              0.11  20-Dec-97  (%I%)";
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 
 #include "fitsrw.h"
 
@@ -173,7 +174,7 @@ static int fits_ieee64_motorola = 0;
 
 #define FITS_WRITE_STRINGCARD(fp,key,value) \
 {char card[81]; int k;\
- sprintf (card, "%-8.8s= \'%s", key, value); \
+ snprintf (card, sizeof (card), "%-8.8s= \'%.68s", key, value); \
  for (k = strlen (card); k < 81; k++) card[k] = ' '; \
  k = strlen (key); if (k < 8) card[19] = '\''; else card[11+k] = '\''; \
  fwrite (card, 1, 80, fp); }
@@ -551,6 +552,8 @@ FITS_FILE *fits_open (char *filename, char *openmode)
      break;
    }
    ff->n_hdu++;
+   if (hdulist->numpic > INT_MAX - ff->n_pic)   /* Avoid int overflow */
+     hdulist->numpic = 0;
    ff->n_pic += hdulist->numpic;
 
    if (hdulist->used.blank_value) ff->blank_used = 1;
@@ -961,6 +964,7 @@ static FITS_HDU_LIST *fits_decode_header (FITS_RECORD_LIST *hdr,
  char errmsg[80], key[9];
  int k, bpp, random_groups;
  long mul_axis, data_size, bitpix_supported;
+ double d_mul_axis;
 
 #define FITS_DECODE_CARD(mhdr,mkey,mfdat,mtyp) \
  {strcpy (key, mkey); \
@@ -985,6 +989,11 @@ static FITS_HDU_LIST *fits_decode_header (FITS_RECORD_LIST *hdr,
  if (hdulist->used.xtension)
  {
    fdat = fits_decode_card (fits_search_card (hdr, "XTENSION"), typ_fstring);
+   if (fdat == NULL)
+   {
+     strcpy (key, "XTENSION");
+     goto err_missing;
+   }
    strcpy (hdulist->xtension, fdat->fstring);
  }
 
@@ -1021,6 +1030,7 @@ static FITS_HDU_LIST *fits_decode_header (FITS_RECORD_LIST *hdr,
  }
 
  mul_axis = 1;
+ d_mul_axis = 1.0;
 
  /* Find all NAXISx-cards */
  for (k = 1; k <= FITS_MAX_AXIS; k++)
@@ -1048,7 +1058,10 @@ static FITS_HDU_LIST *fits_decode_header (FITS_RECORD_LIST *hdr,
      }
    }
    else
+   {
      mul_axis *= hdulist->naxisn[k-1];
+     d_mul_axis *= (double)hdulist->naxisn[k-1];
+   }
  }
 
  if ((hdulist->naxis > 0) && (k < hdulist->naxis))
@@ -1065,6 +1078,23 @@ static FITS_HDU_LIST *fits_decode_header (FITS_RECORD_LIST *hdr,
  {
    mul_axis = 0;
    hdulist->naxisn[0] = 1;
+ }
+
+ /* Check for arithmetic overflow of the data size (long may be 32 bits). */
+ /* The per-axis product is redone in double precision for the check. */
+ {double d_size = d_mul_axis;
+
+   if (hdulist->naxis < 1) d_size = 0.0;
+   if (hdulist->used.xtension)
+     d_size = (double)bpp * (double)hdulist->gcount
+              * ((double)hdulist->pcount + d_size);
+   else
+     d_size *= (double)bpp;
+   if ((d_size < 0.0) || (d_size > (double)(LONG_MAX - FITS_RECORD_SIZE)))
+   {
+     strcpy (errmsg, "fits_decode_header: data size out of range");
+     goto err_return;
+   }
  }
 
  if (hdulist->used.xtension)
@@ -1100,23 +1130,24 @@ static FITS_HDU_LIST *fits_decode_header (FITS_RECORD_LIST *hdr,
    
  if (bitpix_supported)
  {
-   if (hdulist->used.simple)
+   if (   (hdulist->used.simple)
+       || (   hdulist->used.xtension
+           && (strncmp (hdulist->xtension, "IMAGE", 5) == 0)))
    {
      if (hdulist->naxis > 0)
      {
        hdulist->numpic = 1;
        for (k = 3; k <= hdulist->naxis; k++)
+       {
+         /* Avoid int overflow: treat such an HDU as not displayable */
+         if (   (hdulist->naxisn[k-1] > 0)
+             && (hdulist->numpic > INT_MAX / hdulist->naxisn[k-1]))
+         {
+           hdulist->numpic = 0;
+           break;
+         }
          hdulist->numpic *= hdulist->naxisn[k-1];
-     }
-   }
-   else if (   hdulist->used.xtension
-            && (strncmp (hdulist->xtension, "IMAGE", 5) == 0))
-   {
-     if (hdulist->naxis > 0)
-     {
-       hdulist->numpic = 1;
-       for (k = 3; k <= hdulist->naxis; k++)
-         hdulist->numpic *= hdulist->naxisn[k-1];
+       }
      }
    }
  }
@@ -1329,7 +1360,12 @@ static int fits_eval_pixrange (FILE *fp, FITS_HDU_LIST *hdu)
        ptr = pixdat;
        while (maxelem-- > 0)
        {
-         if (!fits_nan_32 (ptr))
+         if (fits_nan_32 (ptr))   /* Skip NaN values */
+         {
+           nan_found = 1;
+           ptr += 4;
+         }
+         else
          {
            FITS_GETBITPIXM32 (ptr, pixval);
            ptr += 4;
@@ -1341,7 +1377,6 @@ static int fits_eval_pixrange (FILE *fp, FITS_HDU_LIST *hdu)
            else if (pixval < minval) { minval = pixval; }
            else if (pixval > maxval) { maxval = pixval; }
          }
-         else nan_found = 1;
        }
      }
      hdu->pixmin = minval;
@@ -1370,7 +1405,12 @@ static int fits_eval_pixrange (FILE *fp, FITS_HDU_LIST *hdu)
        ptr = pixdat;
        while (maxelem-- > 0)
        {
-         if (!fits_nan_64 (ptr))
+         if (fits_nan_64 (ptr))   /* Skip NaN values */
+         {
+           nan_found = 1;
+           ptr += 8;
+         }
+         else
          {
            FITS_GETBITPIXM64 (ptr, pixval);
            ptr += 8;
@@ -1382,7 +1422,6 @@ static int fits_eval_pixrange (FILE *fp, FITS_HDU_LIST *hdu)
            else if (pixval < minval) { minval = pixval; }
            else if (pixval > maxval) { maxval = pixval; }
          }
-         else nan_found = 1;
        }
      }
      hdu->pixmin = minval;

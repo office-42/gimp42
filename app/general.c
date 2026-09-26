@@ -108,19 +108,38 @@ char *token_sym;
 double token_num;
 int token_int;
 
+/*  Appends c to the token being collected, growing the token buffer
+ *  as needed (tokens, e.g. plug-in help strings in pluginrc, can be
+ *  arbitrarily long).  info->tokenbuf must be heap allocated.
+ */
+static void
+token_append (ParseInfo *info,
+	      int       *tokenpos,
+	      char       c)
+{
+  /* always leave room for the terminating '\0' */
+  if (*tokenpos + 1 >= info->tokenbuf_size)
+    {
+      info->tokenbuf_size *= 2;
+      info->tokenbuf = g_realloc (info->tokenbuf, info->tokenbuf_size);
+    }
+
+  info->tokenbuf[(*tokenpos)++] = c;
+}
+
 int
 get_token (ParseInfo *info)
 {
   char *buffer;
-  char *tokenbuf;
   int tokenpos = 0;
   int state;
   int count;
   int slashed;
+  int octal_count = 0;    /*  digits of an octal escape read so far  */
+  int octal_value = 0;
 
   state = 0;
   buffer = info->buffer;
-  tokenbuf = info->tokenbuf;
   slashed = FALSE;
 
   while (1)
@@ -141,7 +160,7 @@ get_token (ParseInfo *info)
       if ((info->position == -1) || (buffer[info->position] == '\0'))
 	{
 	  count = fread (buffer, sizeof (char), info->buffer_size - 1, info->fp);
-	  if ((count == 0) && feof (info->fp))
+	  if (count == 0)  /* end of file, or a read error */
 	    return TOKEN_EOF;
 	  buffer[count] = '\0';
 	  info->position = 0;
@@ -176,9 +195,9 @@ get_token (ParseInfo *info)
 	      state = 1;
 	      slashed = FALSE;
 	    }
-	  else if ((buffer[info->position] == '-') || isdigit (buffer[info->position]))
+	  else if ((buffer[info->position] == '-') || isdigit ((unsigned char) buffer[info->position]))
 	    {
-	      tokenbuf[tokenpos++] = buffer[info->position];
+	      token_append (info, &tokenpos, buffer[info->position]);
 	      info->position += 1;
 	      state = 3;
 	    }
@@ -187,7 +206,7 @@ get_token (ParseInfo *info)
 		   (buffer[info->position] != '\n') &&
 		   (buffer[info->position] != '\r'))
 	    {
-	      tokenbuf[tokenpos++] = buffer[info->position];
+	      token_append (info, &tokenpos, buffer[info->position]);
 	      info->position += 1;
 	      state = 2;
 	    }
@@ -202,7 +221,40 @@ get_token (ParseInfo *info)
 	    }
 	  break;
 	case 1:
-	  if ((buffer[info->position] == '\\') && (!slashed))
+	  /*  An octal escape, \ooo: up to three digits, which may be split
+	   *  across two reads of the file.
+	   */
+	  if (octal_count > 0)
+	    {
+	      char c = buffer[info->position];
+
+	      if (c >= '0' && c <= '7' && octal_count < 3)
+		{
+		  octal_value = octal_value * 8 + (c - '0');
+		  octal_count += 1;
+		  info->position += 1;
+		  if (octal_count == 3)
+		    {
+		      token_append (info, &tokenpos, (char) (octal_value & 0xff));
+		      octal_count = 0;
+		    }
+		  break;
+		}
+
+	      /*  a shorter escape ends here; c is handled below  */
+	      token_append (info, &tokenpos, (char) (octal_value & 0xff));
+	      octal_count = 0;
+	    }
+
+	  if (slashed && buffer[info->position] >= '0' &&
+	      buffer[info->position] <= '7')
+	    {
+	      slashed = FALSE;
+	      octal_value = buffer[info->position] - '0';
+	      octal_count = 1;
+	      info->position += 1;
+	    }
+	  else if ((buffer[info->position] == '\\') && (!slashed))
 	    {
 	      slashed = TRUE;
 	      info->position += 1;
@@ -210,14 +262,14 @@ get_token (ParseInfo *info)
 	  else if (slashed || (buffer[info->position] != '"'))
 	    {
 	      slashed = FALSE;
-	      tokenbuf[tokenpos++] = buffer[info->position];
+	      token_append (info, &tokenpos, buffer[info->position]);
 	      info->position += 1;
 	    }
 	  else
 	    {
-	      tokenbuf[tokenpos] = '\0';
-	      token_str = tokenbuf;
-	      token_sym = tokenbuf;
+	      info->tokenbuf[tokenpos] = '\0';
+	      token_str = info->tokenbuf;
+	      token_sym = info->tokenbuf;
 	      info->position += 1;
 	      return TOKEN_STRING;
 	    }
@@ -231,21 +283,21 @@ get_token (ParseInfo *info)
 	      (buffer[info->position] != '(') &&
 	      (buffer[info->position] != ')'))
 	    {
-	      tokenbuf[tokenpos++] = buffer[info->position];
+	      token_append (info, &tokenpos, buffer[info->position]);
 	      info->position += 1;
 	    }
 	  else
 	    {
-	      tokenbuf[tokenpos] = '\0';
-	      token_sym = tokenbuf;
+	      info->tokenbuf[tokenpos] = '\0';
+	      token_sym = info->tokenbuf;
 	      return TOKEN_SYMBOL;
 	    }
 	  break;
 	case 3:
-	  if (isdigit (buffer[info->position]) ||
+	  if (isdigit ((unsigned char) buffer[info->position]) ||
 	      (buffer[info->position] == '.'))
 	    {
-	      tokenbuf[tokenpos++] = buffer[info->position];
+	      token_append (info, &tokenpos, buffer[info->position]);
 	      info->position += 1;
 	    }
 	  else if ((buffer[info->position] != ' ') &&
@@ -256,16 +308,16 @@ get_token (ParseInfo *info)
 		   (buffer[info->position] != '(') &&
 		   (buffer[info->position] != ')'))
 	    {
-	      tokenbuf[tokenpos++] = buffer[info->position];
+	      token_append (info, &tokenpos, buffer[info->position]);
 	      info->position += 1;
 	      state = 2;
 	    }
 	  else
 	    {
-	      tokenbuf[tokenpos] = '\0';
-	      token_sym = tokenbuf;
-	      token_num = atof (tokenbuf);
-	      token_int = atoi (tokenbuf);
+	      info->tokenbuf[tokenpos] = '\0';
+	      token_sym = info->tokenbuf;
+	      token_num = atof (info->tokenbuf);
+	      token_int = atoi (info->tokenbuf);
 	      return TOKEN_NUMBER;
 	    }
 	  break;

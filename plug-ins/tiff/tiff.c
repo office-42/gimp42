@@ -351,6 +351,12 @@ static gint32 load_image (char *filename) {
     gimp_quit();
   }
 
+  /* the sample unpacking below only works for these depths */
+  if (bps != 1 && bps != 2 && bps != 4 && bps != 8) {
+    g_message("TIFF Can't handle %d-bit samples\n", (int) bps);
+    gimp_quit();
+  }
+
   if (!TIFFGetField (tif, TIFFTAG_PLANARCONFIG, &planar))
     planar = PLANARCONFIG_SEPARATE;
   if (!TIFFGetField (tif, TIFFTAG_SAMPLESPERPIXEL, &spp))
@@ -365,6 +371,11 @@ static gint32 load_image (char *filename) {
 
   if (!TIFFGetField (tif, TIFFTAG_IMAGELENGTH, &rows)) {
     g_message("TIFF Can't get image length");
+    gimp_quit ();
+  }
+
+  if (cols <= 0 || rows <= 0 || cols > 262144 || rows > 262144) {
+    g_message("TIFF Unsupported image dimensions");
     gimp_quit ();
   }
 
@@ -417,6 +428,14 @@ static gint32 load_image (char *filename) {
     default:
       g_message ("TIFF Unknown photometric\n Number %d", photomet);
       gimp_quit ();
+  }
+
+  /* The loaders consume (colour samples + alpha + extra) samples per
+   * pixel; make sure that matches what each scanline actually holds.  */
+  if (((photomet == PHOTOMETRIC_RGB) ? 3 : 1) + alpha + extra != spp) {
+    g_message ("TIFF Unsupported samples per pixel (%d) for this image type",
+               (int) spp);
+    gimp_quit ();
   }
 
   if ((image = gimp_image_new (cols, rows, image_type)) == -1) {
@@ -1091,6 +1110,12 @@ static gint save_image (char *filename, gint32 image, gint32 layer) {
       alpha = 0;
 
       cmap = gimp_image_get_cmap (image, &colors);
+      if (colors > 256)
+	colors = 256;
+
+      memset (red, 0, sizeof (red));
+      memset (grn, 0, sizeof (grn));
+      memset (blu, 0, sizeof (blu));
 
       for (i = 0; i < colors; i++)
 	{

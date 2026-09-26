@@ -190,7 +190,8 @@ run (char    *name,
 	  if (nparams != 6)
 	    status = STATUS_CALLING_ERROR;
 	  else
-	    strncpy (givals.icon_name, param[5].data.d_string, 256);
+	    g_strlcpy (givals.icon_name, param[5].data.d_string,
+		       sizeof (givals.icon_name));
 	  break;
 
 	case RUN_WITH_LAST_VALS:
@@ -227,6 +228,7 @@ load_image (char *filename)
   gint32 layer_ID;
   char name_buf[256];
   char * data_buf;
+  char * row_format;
   unsigned char *dest;
   int val;
   int width, height;
@@ -240,20 +242,33 @@ load_image (char *filename)
     }
 
   /*  Check the identifier string  */
-  fscanf (fp, "/*  %s icon image format -- S. Kimball, P. Mattis  */\n", name_buf);
+  name_buf[0] = '\0';
+  fscanf (fp, "/*  %255s icon image format -- S. Kimball, P. Mattis  */\n", name_buf);
   if (strcmp ("GIMP", name_buf))
     {
       fprintf (stderr, "Not a GIcon file: %s!\n", filename);
+      fclose (fp);
       return -1;
     }
 
   /*  Parse the icon name  */
-  fscanf (fp, "/*  Image name: %s  */\n", name_buf);
+  fscanf (fp, "/*  Image name: %255s  */\n", name_buf);
 
   /*  Get the width and height  */
-  fscanf (fp, "#define %s %d\n", name_buf, &width);
-  fscanf (fp, "#define %s %d\n", name_buf, &height);
-  fscanf (fp, "static char *%s [] = \n{\n", name_buf);
+  width = height = 0;
+  if (fscanf (fp, "#define %255s %d\n", name_buf, &width) != 2 ||
+      fscanf (fp, "#define %255s %d\n", name_buf, &height) != 2 ||
+      width <= 0 || width > 262144 || height <= 0 || height > 262144)
+    {
+      fprintf (stderr, "GIcon: invalid image size in %s\n", filename);
+      fclose (fp);
+      return -1;
+    }
+  fscanf (fp, "static char *%255s [] = \n{\n", name_buf);
+
+  /*  Each row is read with "%<n>s", which also picks up the trailing
+      quote and comma, so allow for those plus the terminator.  */
+  row_format = g_strdup_printf ("  \"%%%ds\",\n", width + 2);
 
   /*  Get a new image structure  */
   image_ID = gimp_image_new (width, height, GRAY);
@@ -267,12 +282,14 @@ load_image (char *filename)
   gimp_pixel_rgn_init (&pixel_rgn, drawable, 0, 0, drawable->width,
 		       drawable->height, TRUE, FALSE);
 
-  data_buf = g_new (char, width);
+  data_buf = g_new (char, width + 3);
   dest     = g_new (guchar, width * 2);
 
   for (i = 0; i < height; i++)
     {
-      fscanf (fp, "  \"%s\",\n", data_buf);
+      memset (data_buf, '.', width + 3);
+      data_buf[width + 2] = '\0';
+      fscanf (fp, row_format, data_buf);
       for (j = 0; j < width; j++)
 	{
 	  val = data_buf[j];
@@ -298,6 +315,7 @@ load_image (char *filename)
 
   g_free (data_buf);
   g_free (dest);
+  g_free (row_format);
 
   return image_ID;
 }
@@ -447,5 +465,6 @@ static void
 entry_callback (GtkWidget *widget,
 		gpointer   data)
 {
-  strncpy(givals.icon_name, gtk_editable_get_text (GTK_EDITABLE (widget)), 256);
+  g_strlcpy (givals.icon_name, gtk_editable_get_text (GTK_EDITABLE (widget)),
+	     sizeof (givals.icon_name));
 }

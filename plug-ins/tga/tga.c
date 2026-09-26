@@ -738,6 +738,12 @@ ReadImage (FILE *fp, struct tga_header *hdr, char *filename)
   width = (hdr->widthHi << 8) | hdr->widthLo;
   height = (hdr->heightHi << 8) | hdr->heightLo;
 
+  if (width <= 0 || height <= 0)
+    {
+      printf ("TGA: invalid image dimensions %dx%d\n", width, height);
+      return -1;
+    }
+
   bpp = hdr->bpp;
   abpp = hdr->descriptor & TGA_DESC_ABITS;
 
@@ -885,9 +891,10 @@ ReadImage (FILE *fp, struct tga_header *hdr, char *filename)
 	printf ("TGA: reading color map (%d + %d) * (%d bits)\n",
 		index, length, hdr->colorMapSize);
 #endif
-      if (length == 0)
+      if (length == 0 || length + index > 256)
 	{
-	  printf ("TGA: invalid color map length %d\n", length);
+	  /* 8-bit indices can address at most 256 colormap entries */
+	  printf ("TGA: invalid color map (%d + %d entries)\n", index, length);
 	  gimp_image_delete (image_ID);
 	  return -1;
 	}
@@ -903,14 +910,16 @@ ReadImage (FILE *fp, struct tga_header *hdr, char *filename)
       if (fread (cmap + (index * pelbytes), pelbytes, length, fp) != length)
 	{
 	  printf ("TGA: error reading colormap (ftell == %ld)\n", ftell (fp));
+	  g_free (cmap);
 	  gimp_image_delete (image_ID);
 	  return -1;
 	}
 
       /* If we have an alpha channel, then create a mapping to the alpha
-	 values. */
+	 values.  Always make room for every possible 8-bit index so
+	 out-of-range pixel values cannot read past the table. */
       if (pelbytes > 3)
-	alphas = (guchar *) g_malloc (colors);
+	alphas = (guchar *) g_malloc0 (256);
 
       k = 0;
       for (j = 0; j < colors * pelbytes; j += pelbytes)
@@ -1171,6 +1180,13 @@ save_image (char   *filename,
     }
   else
     myfwrite = std_fwrite;
+
+  /* The header only has 16 bits for each dimension. */
+  if (width > 65535 || height > 65535)
+    {
+      printf ("TGA: image too large (%dx%d)\n", width, height);
+      return FALSE;
+    }
 
   hdr.widthLo = (width & 0xff);
   hdr.widthHi = (width >> 8);

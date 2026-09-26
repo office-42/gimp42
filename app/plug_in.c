@@ -844,7 +844,7 @@ plug_in_append_quoted (GString    *cmdline,
   const char *p;
   int backslashes = 0;
 
-  if (*arg && !strpbrk (arg, " \t\""))
+  if (*arg && !strpbrk (arg, " \t\n\v\""))
     {
       g_string_append (cmdline, arg);
       return;
@@ -859,8 +859,11 @@ plug_in_append_quoted (GString    *cmdline,
 	{
 	  if (*p == '"')
 	    {
-	      /*  double the backslashes before a quote, and escape it  */
-	      g_string_append_len (cmdline, "\\\\\\\\\\\\\\\\", MIN (backslashes, 8));
+	      /*  double the backslashes before a quote (one copy of them
+	       *  is already there), and escape the quote itself
+	       */
+	      while (backslashes-- > 0)
+		g_string_append_c (cmdline, '\\');
 	      g_string_append_c (cmdline, '\\');
 	    }
 	  backslashes = 0;
@@ -895,6 +898,13 @@ plug_in_spawn (PlugIn *plug_in)
   wcmdline = g_utf8_to_utf16 (cmdline->str, -1, NULL, NULL, NULL);
   wprog = g_utf8_to_utf16 (plug_in->args[0], -1, NULL, NULL, NULL);
   g_string_free (cmdline, TRUE);
+
+  if (!wcmdline || !wprog)
+    {
+      g_free (wcmdline);
+      g_free (wprog);
+      return FALSE;
+    }
 
   memset (&si, 0, sizeof (si));
   si.cb = sizeof (si);
@@ -1145,6 +1155,14 @@ plug_in_get_current_return_vals (ProcRecord *proc_rec)
       /* Allocate new return values of the correct size. */
       return_vals = procedural_db_return_args (proc_rec, FALSE);
 
+      /* Those the plug-in did not return are empty, not uninitialized. */
+      {
+	int i;
+
+	for (i = 1; i < nargs; i++)
+	  memset (&return_vals[i].value, 0, sizeof (return_vals[i].value));
+      }
+
       /* Copy all of the arguments we can. */
       memcpy (return_vals, current_return_vals,
 	      sizeof (Argument) * MIN (current_return_nvals, nargs));
@@ -1158,6 +1176,27 @@ plug_in_get_current_return_vals (ProcRecord *proc_rec)
     {
       /* Just return a dummy set of values. */
       return_vals = procedural_db_return_args (proc_rec, FALSE);
+    }
+
+  /* The plug-in decides the types of what it returns, but the caller
+     reads the values as the types the procedure was installed with:
+     a mismatch would make it use an integer as a pointer. */
+  if (current_return_vals)
+    {
+      int i;
+
+      for (i = 0; i < nargs; i++)
+	if (return_vals[i].arg_type !=
+	    ((i == 0) ? PDB_STATUS : proc_rec->values[i - 1].arg_type))
+	  break;
+
+      if (i < nargs)
+	{
+	  g_message ("plug-in \"%s\" returned values of the wrong type\n",
+		     proc_rec->name);
+	  plug_in_args_destroy (return_vals, nargs, TRUE);
+	  return_vals = procedural_db_return_args (proc_rec, FALSE);
+	}
     }
 
   /* We have consumed any saved values, so clear them. */
@@ -1453,6 +1492,7 @@ plug_in_handle_tile_req (GPTileReq *tile_req)
       if (msg.type != GP_TILE_DATA)
 	{
 	  g_message ("expected tile data and received: %d\n", msg.type);
+	  wire_destroy (&msg);
 	  plug_in_close (current_plug_in, TRUE);
 	  return;
 	}
@@ -1467,6 +1507,7 @@ plug_in_handle_tile_req (GPTileReq *tile_req)
       if (!tm)
 	{
 	  g_message ("plug-in requested invalid drawable (killing)\n");
+	  wire_destroy (&msg);
 	  plug_in_close (current_plug_in, TRUE);
 	  return;
 	}
@@ -1475,6 +1516,23 @@ plug_in_handle_tile_req (GPTileReq *tile_req)
       if (!tile)
 	{
 	  g_message ("plug-in requested invalid tile (killing)\n");
+	  wire_destroy (&msg);
+	  plug_in_close (current_plug_in, TRUE);
+	  return;
+	}
+
+      /*  The plug-in says how big its data is: it has to be exactly the
+       *  tile it writes into, or the copy below over- or under-reads.
+       *  It also must use the transport we told it to.
+       */
+      if (tile_info->bpp != tile->bpp ||
+	  tile_info->width != tile->ewidth ||
+	  tile_info->height != tile->eheight ||
+	  (tile_info->use_shm ? TRUE : FALSE) != tile_data.use_shm ||
+	  (!tile_data.use_shm && !tile_info->data))
+	{
+	  g_message ("plug-in sent tile data that does not match the tile (killing)\n");
+	  wire_destroy (&msg);
 	  plug_in_close (current_plug_in, TRUE);
 	  return;
 	}
@@ -1552,6 +1610,7 @@ plug_in_handle_tile_req (GPTileReq *tile_req)
       if (msg.type != GP_TILE_ACK)
 	{
 	  g_message ("expected tile ack and received: %d\n", msg.type);
+	  wire_destroy (&msg);
 	  plug_in_close (current_plug_in, TRUE);
 	  return;
 	}
@@ -1580,7 +1639,54 @@ plug_in_handle_proc_run (GPProcRun *proc_run)
       return;
     }
 
+  /*  The PDB checks the argument types, but it trusts the caller to pass
+   *  as many arguments as the procedure takes.
+   */
+  if ((int) proc_run->nparams < proc_rec->num_args)
+    {
+      GPParam status;
+
+      g_message ("plug-in called %s with too few arguments\n", proc_run->name);
+      plug_in_args_destroy (args, proc_run->nparams, FALSE);
+
+      status.type = PDB_STATUS;
+      status.data.d_status = PDB_CALLING_ERROR;
+      proc_return.name = proc_run->name;
+      proc_return.nparams = 1;
+      proc_return.params = &status;
+
+      if (!gp_proc_return_write (current_writechannel, &proc_return))
+	{
+	  g_message ("plug_in_handle_proc_run: ERROR");
+	  plug_in_close (current_plug_in, TRUE);
+	}
+      return;
+    }
+
   return_vals = procedural_db_execute (proc_run->name, args);
+
+  if (return_vals &&
+      (return_vals[0].arg_type != PDB_STATUS ||
+       return_vals[0].value.pdb_int != PDB_SUCCESS))
+    {
+      /*  On failure (a calling error for arguments of the wrong type, say)
+       *  only the status is set: the values are uninitialized memory,
+       *  which must be neither sent to the plug-in nor freed.  Send it
+       *  empty values of the right types instead.
+       */
+      Argument *failed;
+      int i;
+
+      failed = g_new0 (Argument, proc_rec->num_values + 1);
+      failed[0].arg_type = PDB_STATUS;
+      failed[0].value.pdb_int = (return_vals[0].arg_type == PDB_STATUS) ?
+	return_vals[0].value.pdb_int : PDB_EXECUTION_ERROR;
+      for (i = 0; i < proc_rec->num_values; i++)
+	failed[i + 1].arg_type = proc_rec->values[i].arg_type;
+
+      plug_in_args_destroy (return_vals, 1, TRUE);
+      return_vals = failed;
+    }
 
   if (return_vals)
     {
@@ -1656,6 +1762,38 @@ plug_in_handle_proc_return (GPProcReturn *proc_return)
 	    }
 	}
     }
+}
+
+/*  Argument types must be known ones, and every array must follow the
+ *  INT32 that holds its length.  The PDB and the wire protocol rely on it.
+ */
+static gboolean
+plug_in_param_defs_valid (GPParamDef *defs,
+			  int         ndefs)
+{
+  int i;
+
+  for (i = 0; i < ndefs; i++)
+    {
+      if (defs[i].type >= PDB_END)
+	return FALSE;
+
+      switch (defs[i].type)
+	{
+	case PDB_INT32ARRAY:
+	case PDB_INT16ARRAY:
+	case PDB_INT8ARRAY:
+	case PDB_FLOATARRAY:
+	case PDB_STRINGARRAY:
+	  if (i == 0 || defs[i-1].type != PDB_INT32)
+	    return FALSE;
+	  break;
+	default:
+	  break;
+	}
+    }
+
+  return TRUE;
 }
 
 static void
@@ -1740,23 +1878,40 @@ plug_in_handle_proc_install (GPProcInstall *proc_install)
     }
 
   /*
-   *  Sanity check for array arguments
+   *  Sanity check for the procedure type and the argument types
    */
 
-  for (i = 1; i < proc_install->nparams; i++)
+  switch (proc_install->type)
     {
-      if ((proc_install->params[i].type == PDB_INT32ARRAY ||
-	   proc_install->params[i].type == PDB_INT8ARRAY ||
-	   proc_install->params[i].type == PDB_FLOATARRAY ||
-	   proc_install->params[i].type == PDB_STRINGARRAY) &&
-	  proc_install->params[i-1].type != PDB_INT32)
+    case PDB_PLUGIN:
+    case PDB_EXTENSION:
+      /*  only while the plug-in is being queried  */
+      if (!current_plug_in->user_data)
 	{
 	  g_message ("plug_in \"%s\" attempted to install procedure \"%s\" "
-		     "which fails to comply with the array parameter "
-		     "passing standard.  Argument %d is noncompliant.",
-		     current_plug_in->args[0], proc_install->name, i);
+		     "outside of its query", current_plug_in->args[0],
+		     proc_install->name);
 	  return;
 	}
+      break;
+    case PDB_TEMPORARY:
+      break;
+    default:
+      g_message ("plug_in \"%s\" attempted to install procedure \"%s\" "
+		 "of an invalid type", current_plug_in->args[0],
+		 proc_install->name);
+      return;
+    }
+
+  if (!plug_in_param_defs_valid (proc_install->params, proc_install->nparams) ||
+      !plug_in_param_defs_valid (proc_install->return_vals,
+				 proc_install->nreturn_vals))
+    {
+      g_message ("plug_in \"%s\" attempted to install procedure \"%s\" "
+		 "which fails to comply with the array parameter "
+		 "passing standard or uses an invalid argument type.",
+		 current_plug_in->args[0], proc_install->name);
+      return;
     }
 
 
@@ -2032,9 +2187,20 @@ plug_in_write_rc_string (FILE *fp,
   if (str)
     while (*str)
       {
-	if ((*str == '"') || (*str == '\\'))
-	  fputc ('\\', fp);
-	fputc (*str, fp);
+	unsigned char c = *str;
+
+	/*  Control characters (the magic numbers of file formats have
+	 *  them) are written as octal escapes: a raw ^Z ends a text file
+	 *  on Windows, and a raw newline would split the string.
+	 */
+	if (c < 0x20 || c == 0x7f)
+	  fprintf (fp, "\\%03o", c);
+	else
+	  {
+	    if ((c == '"') || (c == '\\'))
+	      fputc ('\\', fp);
+	    fputc (c, fp);
+	  }
 	str += 1;
       }
 
@@ -2075,8 +2241,9 @@ plug_in_write_rc (char *filename)
 	      proc_def = tmp2->data;
 	      tmp2 = tmp2->next;
 
-	      fprintf (fp, "             (proc-def \"%s\" %d\n",
-		       proc_def->db_info.name, proc_def->db_info.proc_type);
+	      fprintf (fp, "             (proc-def ");
+	      plug_in_write_rc_string (fp, proc_def->db_info.name);
+	      fprintf (fp, " %d\n", proc_def->db_info.proc_type);
 	      fprintf (fp, "                       ");
 	      plug_in_write_rc_string (fp, proc_def->db_info.blurb);
 	      fprintf (fp, "\n                       ");

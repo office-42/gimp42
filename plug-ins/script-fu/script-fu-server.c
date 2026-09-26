@@ -67,6 +67,10 @@
 #define RSP_LEN_H_BYTE  2
 #define RSP_LEN_L_BYTE  3
 
+#define MAX_RESPONSE_LEN       0xFFFF  /*  what the header can express  */
+#define MAX_QUEUE_LENGTH       256     /*  pending requests  */
+#define SERVER_CLIENT_TIMEOUT  30      /*  seconds  */
+
 /*
  *  Local Structures
  */
@@ -256,6 +260,10 @@ server_accept (GSocket      *socket,
     }
 
   g_socket_set_blocking (client, TRUE);
+  /*  A client that stops half way through a request must not hang the
+   *  server (and the GIMP waiting on it) forever.
+   */
+  g_socket_set_timeout (client, SERVER_CLIENT_TIMEOUT);
 
   /*  Associate the client address with the socket  */
   address = g_socket_get_remote_address (client, NULL);
@@ -313,6 +321,14 @@ server_start (gint   port,
     server_log_file = NULL;
   if (server_log_file == NULL)
     server_log_file = stdout;
+
+  if (port <= 0 || port > 65535)
+    {
+      g_printerr ("script-fu server: invalid port %d\n", port);
+      if (server_log_file != stdout)
+	fclose (server_log_file);
+      return;
+    }
 
   /* Create the socket and set it up to accept connections. */
   server_sock = make_socket (port);
@@ -463,6 +479,12 @@ execute_command (SFCommand *cmd)
 		  cmd->request_no, difftime (clock2, clock1), ctime (&clock2));
     }
 
+  /*  the length has to fit in the two header bytes, or the client reads
+   *  the rest of the response as the next header
+   */
+  if (response_len > MAX_RESPONSE_LEN)
+    response_len = MAX_RESPONSE_LEN;
+
   buffer[MAGIC_BYTE] = MAGIC;
   buffer[ERROR] = (error) ? 1 : 0;
   buffer[RSP_LEN_H_BYTE] = (guchar) (response_len >> 8);
@@ -491,7 +513,8 @@ read_from_client (GSocket *client)
 
   nbytes = server_read (client, (gchar *) buffer, COMMAND_HEADER);
   if (nbytes < 0)
-    return 0;
+    /* Read error (or time out): drop the client. */
+    return -1;
   else if (nbytes < COMMAND_HEADER)
     /* End-of-file. */
     return -1;
@@ -501,6 +524,12 @@ read_from_client (GSocket *client)
       server_log ("Error in script-fu command transmission.\n");
       return -1;
     }
+  if (queue_length >= MAX_QUEUE_LENGTH)
+    {
+      server_log ("Too many pending requests.\n");
+      return -1;
+    }
+
   command_len = (buffer [CMD_LEN_H_BYTE] << 8) | buffer [CMD_LEN_L_BYTE];
   command = g_new (gchar, command_len + 1);
 
@@ -550,8 +579,12 @@ make_socket (guint port)
       gimp_quit ();
     }
 
-  /* Give the socket a name. */
-  any = g_inet_address_new_any (G_SOCKET_FAMILY_IPV4);
+  /* Give the socket a name.  Every request is Scheme code that is run
+   * unchecked, and Scheme can run any program: listen on the loopback
+   * interface only, so that only this machine can connect, never on
+   * all interfaces.
+   */
+  any = g_inet_address_new_loopback (G_SOCKET_FAMILY_IPV4);
   name = g_inet_socket_address_new (any, port);
   g_object_unref (any);
 

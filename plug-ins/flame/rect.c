@@ -20,6 +20,7 @@
 #include "rect.h"
 
 #include <string.h>
+#include <limits.h>
 
 
 /* for batch
@@ -105,6 +106,12 @@ void render_rectangle(spec, out, out_width, field, nchan, progress)
    int gutter_width;
    int sbc;
 
+   /* these come from (possibly loaded) parameters: keep them sane */
+   if (oversample < 1)
+      oversample = 1;
+   if (nbatches < 1)
+      nbatches = 1;
+
    image_width = spec->cps[0].width;
    if (field) {
       image_height = spec->cps[0].height / 2;
@@ -115,8 +122,14 @@ void render_rectangle(spec, out, out_width, field, nchan, progress)
       image_height = spec->cps[0].height;
 
    if (1) {
-      filter_width = (2.0 * FILTER_CUTOFF * oversample *
-		      spec->cps[0].spatial_filter_radius);
+      double fw = (2.0 * FILTER_CUTOFF * oversample *
+		   spec->cps[0].spatial_filter_radius);
+      /* also catches NaN */
+      if (!(fw >= 0.0))
+	 fw = 0.0;
+      else if (fw > 1000.0)
+	 fw = 1000.0;
+      filter_width = fw;
       /* make sure it has same parity as oversample */
       if ((filter_width ^ oversample) & 1)
 	 filter_width++;
@@ -164,6 +177,16 @@ void render_rectangle(spec, out, out_width, field, nchan, progress)
    gutter_width = (filter_width - oversample) / 2;
    height = oversample * image_height + 2 * gutter_width;
    width  = oversample * image_width  + 2 * gutter_width;
+
+   if (width <= 0 || height <= 0 || image_width <= 0 || image_height <= 0 ||
+       (double) width * height * (sizeof(bucket) + sizeof(abucket)) +
+       sizeof(point) * SUB_BATCH_SIZE > (double) INT_MAX) {
+      fprintf(stderr, "render_rectangle: invalid or too large image.\n");
+      free(filter);
+      free(temporal_filter);
+      free(temporal_deltas);
+      return;
+   }
 
    nbuckets = width * height;
    if (1) {
@@ -247,7 +270,7 @@ void render_rectangle(spec, out, out_width, field, nchan, progress)
       nsamples = (int) (sample_density * nbuckets /
 			(oversample * oversample));
    
-      batch_size = nsamples / cp.nbatches;
+      batch_size = nsamples / (cp.nbatches > 0 ? cp.nbatches : 1);
 
       sbc = 0;
       for (sub_batch = 0;
@@ -269,18 +292,22 @@ void render_rectangle(spec, out, out_width, field, nchan, progress)
 	    int k, color_index;
 	    double *p = points[j];
 	    bucket *b;
-	    if (p[0] < bounds[0] ||
-		p[1] < bounds[1] ||
-		p[0] > bounds[2] ||
-		p[1] > bounds[3])
+	    int bx, by;
+	    /* written this way round so that NaNs are skipped too */
+	    if (!(p[0] >= bounds[0] &&
+		  p[1] >= bounds[1] &&
+		  p[0] <= bounds[2] &&
+		  p[1] <= bounds[3]))
 	       continue;
 	    color_index = (int) (p[2] * CMAP_SIZE);
 	    if (color_index < 0) color_index = 0;
 	    else if (color_index > (CMAP_SIZE-1))
 	       color_index = CMAP_SIZE-1;
-	    b = buckets +
-	       (int) (width * (p[0] - bounds[0]) * size[0]) +
-		  width * (int) (height * (p[1] - bounds[1]) * size[1]);	    
+	    bx = (int) (width * (p[0] - bounds[0]) * size[0]);
+	    by = (int) (height * (p[1] - bounds[1]) * size[1]);
+	    if (bx < 0 || bx >= width || by < 0 || by >= height)
+	       continue;
+	    b = buckets + bx + width * by;
 	    for (k = 0; k < 4; k++)
 	       bump_no_overflow(b[0][k], cmap[color_index][k], short);
 	 }

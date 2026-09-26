@@ -802,6 +802,7 @@ DoExtension (FILE *fd,
 {
   static guchar buf[256];
   char *str;
+  int count;
 
   switch (label)
     {
@@ -838,24 +839,27 @@ DoExtension (FILE *fd,
       break;
     case 0xfe:			/* Comment Extension */
       str = "Comment Extension";
-      while (GetDataBlock (fd, (unsigned char *) buf) != 0)
+      while ((count = GetDataBlock (fd, (unsigned char *) buf)) > 0)
 	{
+	  buf[count] = '\0';
 	  if (showComment)
 	    g_print ("GIF: gif comment: %s\n", buf);
 	}
       return FALSE;
     case 0xf9:			/* Graphic Control Extension */
       str = "Graphic Control Extension";
-      (void) GetDataBlock (fd, (unsigned char *) buf);
-      Gif89.disposal = (buf[0] >> 2) & 0x7;
-      Gif89.inputFlag = (buf[0] >> 1) & 0x1;
-      Gif89.delayTime = LM_to_uint (buf[1], buf[2]);
-      if ((buf[0] & 0x1) != 0)
-	Gif89.transparent = buf[3];
-      else
-	Gif89.transparent = -1;
+      if (GetDataBlock (fd, (unsigned char *) buf) >= 4)
+	{
+	  Gif89.disposal = (buf[0] >> 2) & 0x7;
+	  Gif89.inputFlag = (buf[0] >> 1) & 0x1;
+	  Gif89.delayTime = LM_to_uint (buf[1], buf[2]);
+	  if ((buf[0] & 0x1) != 0)
+	    Gif89.transparent = buf[3];
+	  else
+	    Gif89.transparent = -1;
+	}
 
-      while (GetDataBlock (fd, (unsigned char *) buf) != 0)
+      while (GetDataBlock (fd, (unsigned char *) buf) > 0)
 	;
       return FALSE;
     default:
@@ -866,7 +870,7 @@ DoExtension (FILE *fd,
 
   g_print ("GIF: got a '%s' extension\n", str);
 
-  while (GetDataBlock (fd, (unsigned char *) buf) != 0)
+  while (GetDataBlock (fd, (unsigned char *) buf) > 0)
     ;
 
   return FALSE;
@@ -905,13 +909,15 @@ GetCode (FILE *fd,
   static unsigned char buf[280];
   static int curbit, lastbit, done, last_byte;
   int i, j, ret;
-  unsigned char count;
+  int count;
 
   if (flag)
     {
       curbit = 0;
       lastbit = 0;
       done = FALSE;
+      last_byte = 2;
+      buf[0] = buf[1] = 0;
       return 0;
     }
 
@@ -922,15 +928,18 @@ GetCode (FILE *fd,
 	  if (curbit >= lastbit)
 	    {
 	      g_message ("GIF: ran off the end of by bits\n");
-	      gimp_quit ();
 	    }
 	  return -1;
 	}
       buf[0] = buf[last_byte - 2];
       buf[1] = buf[last_byte - 1];
 
-      if ((count = GetDataBlock (fd, &buf[2])) == 0)
-	done = TRUE;
+      if ((count = GetDataBlock (fd, &buf[2])) <= 0)
+	{
+	  /* end of data, or a read error on a truncated file */
+	  count = 0;
+	  done = TRUE;
+	}
 
       last_byte = 2 + count;
       curbit = (curbit - lastbit) + 16;
@@ -963,6 +972,14 @@ LWZReadByte (FILE *fd,
 
   if (flag)
     {
+      /* The initial code size comes from the file; anything above 8 bits
+       * per pixel is invalid and would overrun the code tables.  */
+      if (input_code_size < 1 || input_code_size > 8)
+	{
+	  g_message ("GIF: invalid LZW minimum code size %d\n",
+		     input_code_size);
+	  return -1;
+	}
       set_code_size = input_code_size;
       code_size = set_code_size + 1;
       clear_code = 1 << set_code_size;
@@ -1046,6 +1063,12 @@ LWZReadByte (FILE *fd,
 
       while (code >= clear_code)
 	{
+	  /* a corrupt code table can form long or circular chains */
+	  if (sp >= stack + (sizeof (stack) / sizeof (stack[0])) - 2)
+	    {
+	      g_message ("GIF: corrupt LZW code table\n");
+	      return -2;
+	    }
 	  *sp++ = table[1][code];
 	  if (code == table[0][code])
 	    {
@@ -1125,6 +1148,14 @@ ReadImage (FILE *fd,
     {
       g_message ("GIF: error while reading\n");
       return -1;
+    }
+
+  if (len <= 0 || height <= 0)
+    {
+      /* Empty frame: skip its image data */
+      while (LWZReadByte (fd, FALSE, c) >= 0)
+	;
+      return (frame_number == 1) ? -1 : image_ID;
     }
 
   if (frame_number == 1 )
@@ -1231,10 +1262,17 @@ ReadImage (FILE *fd,
   max_progress = height;
 
   if (alpha_frame)
-    dest = (guchar *) g_malloc (len * height *
-				(promote_to_rgb ? 4 : 2));
+    dest = (guchar *) g_try_malloc0 ((gsize) len * height *
+				     (promote_to_rgb ? 4 : 2));
   else
-    dest = (guchar *) g_malloc (len * height);
+    dest = (guchar *) g_try_malloc0 ((gsize) len * height);
+
+  if (!dest)
+    {
+      g_message ("GIF: image too large\n");
+      gimp_drawable_detach (drawable);
+      return -1;
+    }
 
   if (verbose)
     g_print ("GIF: reading %d by %d%s GIF image, ncols=%d\n",
@@ -1248,6 +1286,10 @@ ReadImage (FILE *fd,
 
   while ((v = LWZReadByte (fd, FALSE, c)) >= 0)
     {
+      /* a corrupt code stream can yield codes above the colour table */
+      if (v >= MAXCOLORMAPSIZE)
+	v = 0;
+
       if (alpha_frame)
 	{
 	  if (((guchar)v > highest_used_index) && !(v == Gif89.transparent))
@@ -1255,7 +1297,7 @@ ReadImage (FILE *fd,
 
 	  if (promote_to_rgb)
 	    {
-	      temp = dest + ( (ypos * len) + xpos ) * 4;
+	      temp = dest + ( ((gsize) ypos * len) + xpos ) * 4;
 	      *(temp  ) = (guchar) cmap[0][v];
 	      *(temp+1) = (guchar) cmap[1][v];
 	      *(temp+2) = (guchar) cmap[2][v];
@@ -1263,7 +1305,7 @@ ReadImage (FILE *fd,
 	    }
 	  else
 	    {
-	      temp = dest + ( (ypos * len) + xpos ) * 2;
+	      temp = dest + ( ((gsize) ypos * len) + xpos ) * 2;
 	      *temp = (guchar) v;
 	      *(temp+1) = (guchar) ((v == Gif89.transparent) ? 0 : 255);
 	    }
@@ -1273,7 +1315,7 @@ ReadImage (FILE *fd,
 	  if ((guchar)v > highest_used_index)
 	    highest_used_index = (guchar)v;
 
-	  temp = dest + (ypos * len) + xpos;
+	  temp = dest + ((gsize) ypos * len) + xpos;
 	  *temp = (guchar) v;
 	}
 
@@ -1297,7 +1339,7 @@ ReadImage (FILE *fd,
 		  break;
 		}
 
-	      if (ypos >= height)
+	      while (ypos >= height)
 		{
 		  ++pass;
 		  switch (pass)
@@ -1390,14 +1432,14 @@ typedef long int count_int;
 
 
 static int find_unused_ia_colour (guchar *pixels,
-				  int numpixels,
+				  gsize numpixels,
 				  int num_indices,
 				  int* colors);
 
 void special_flatten_indexed_alpha (guchar *pixels,
 				    int *transparent,
 				    int *colors,
-				    int numpixels);
+				    gsize numpixels);
 static int colorstobpp (int);
 static int bpptocolors (int);
 static int GetPixel (int, int);
@@ -1435,11 +1477,12 @@ static void flush_char (void);
 
 
 static int find_unused_ia_colour (guchar *pixels,
-				  int numpixels,
+				  gsize numpixels,
 				  int num_indices,
 				  int* colors)
 {
-  int i;
+  gsize i;
+  int j;
   gboolean ix_used[256];
 
   g_print ("GIF: fuiac: Image claims to use %d/%d indices - finding free "
@@ -1455,12 +1498,12 @@ static int find_unused_ia_colour (guchar *pixels,
       if (pixels[i*2+1]) ix_used[pixels[i*2]] = (gboolean)TRUE;
     }
   
-  for (i=num_indices-1; i>=0; i--)
+  for (j=MIN (num_indices, 256)-1; j>=0; j--)
     {
-      if (ix_used[i] == (gboolean)FALSE)
+      if (ix_used[j] == (gboolean)FALSE)
 	{
-	  g_print ("GIF: Found unused colour index %d.\n",(int)i);
-	  return i;
+	  g_print ("GIF: Found unused colour index %d.\n",(int)j);
+	  return j;
 	}
     }
 
@@ -1484,9 +1527,9 @@ void
 special_flatten_indexed_alpha (guchar *pixels,
 			       int *transparent,
 			       int *colors,
-			       int numpixels)
+			       gsize numpixels)
 {
-  guint32 i;
+  gsize i;
 
   /* Each transparent pixel in the image is mapped to a uniform value for
      encoding, if image already has <=255 colours */
@@ -1693,7 +1736,11 @@ save_image (char   *filename,
       is_gif89 = TRUE;
     case INDEXED_IMAGE:
       cmap = gimp_image_get_cmap (image_ID, &colors);
-      
+      if (colors > MAXCOLORS)
+	colors = MAXCOLORS;
+      if (colors < 0)
+	colors = 0;
+
       gimp_palette_get_background(&bgred, &bggreen, &bgblue);
 
       for (i = 0; i < colors; i++)
@@ -1726,7 +1773,15 @@ save_image (char   *filename,
     }
 
 
-  /* init the progress meter */    
+  /* GIF stores dimensions as 16-bit values */
+  if (gimp_image_width (image_ID) > 65535 ||
+      gimp_image_height (image_ID) > 65535)
+    {
+      g_message ("GIF: image is too large to be saved as a GIF.\n");
+      return FALSE;
+    }
+
+  /* init the progress meter */
   temp_buf = g_malloc (strlen (filename) + 11);
   sprintf (temp_buf, "Saving %s:", filename);
   gimp_progress_init (temp_buf);
@@ -1803,7 +1858,7 @@ save_image (char   *filename,
       cur_progress = 0;
       max_progress = drawable->height;
       
-      pixels = (guchar *) g_malloc (drawable->width *
+      pixels = (guchar *) g_malloc ((gsize) drawable->width *
 				    drawable->height *
 				    (((drawable_type == INDEXEDA_IMAGE)||
 				      (drawable_type == GRAYA_IMAGE)) ? 2:1) );
@@ -1820,14 +1875,14 @@ save_image (char   *filename,
 	  
 	  transparent =
 	    find_unused_ia_colour(pixels,
-				  drawable->width * drawable->height,
+				  (gsize) drawable->width * drawable->height,
 				  bpptocolors(colorstobpp(colors)),
 				  &colors);
 
 	  special_flatten_indexed_alpha (pixels,
 					 &transparent,
 					 &colors,
-					 drawable->width * drawable->height);
+					 (gsize) drawable->width * drawable->height);
 	}
       else
 	transparent = -1;
@@ -2163,7 +2218,7 @@ static int
 GetPixel (int x,
 	  int y)
 {
-  return *(pixels + (rowstride * (long) y) + (long) x);
+  return *(pixels + ((gsize) rowstride * y) + x);
 }
 
 
@@ -2681,6 +2736,8 @@ GIFEncodeLoopExt (FILE    *fp,
 
 static void GIFEncodeCommentExt (FILE *fp, char *comment)
 {
+  gsize len;
+
   if (comment==NULL||strlen(comment)<1)
     {
       g_print ("GIF: warning: no comment given - comment block not written.\n");
@@ -2689,8 +2746,10 @@ static void GIFEncodeCommentExt (FILE *fp, char *comment)
 
   fputc(0x21,fp);
   fputc(0xfe,fp);
-  fputc(strlen(comment),fp);
-  fputs((const char *)comment,fp);
+  /* a data sub-block holds at most 255 bytes */
+  len = MIN (strlen (comment), 255);
+  fputc(len,fp);
+  fwrite(comment, 1, len, fp);
   fputc(0x00,fp);
 }
 

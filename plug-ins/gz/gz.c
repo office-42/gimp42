@@ -482,6 +482,13 @@ static char* find_extension (char* filename)
       return ".xcf";  /* we've found it */
     }
     if (0 != strcmp(ext,".gz")) {
+      /* the extension becomes part of a temp file name: letters and
+	 digits only (no ':' for a Windows stream name and the like) */
+      const char *p;
+
+      for (p = ext + 1; *p; p++)
+	if (!g_ascii_isalnum (*p))
+	  return "";
       return ext;
     } else {
       /* we found ".gz" so strip it, loop back, and look again */

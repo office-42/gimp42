@@ -172,6 +172,12 @@ gimp_tile_get (GTile *tile)
       gimp_quit ();
     }
 
+  if (tile_data->use_shm && !_shm_addr)
+    {
+      g_message ("received tile data in shared memory, but there is none\n");
+      gimp_quit ();
+    }
+
   if (tile_data->use_shm)
     {
       tile->data = g_new (guchar, tile->ewidth * tile->eheight * tile->bpp);
@@ -217,6 +223,12 @@ gimp_tile_put (GTile *tile)
     }
 
   tile_info = msg.data;
+
+  if (tile_info->use_shm && !_shm_addr)
+    {
+      g_message ("asked to put tile data in shared memory, but there is none\n");
+      gimp_quit ();
+    }
 
   tile_data.drawable_ID = tile->drawable->id;
   tile_data.tile_num = tile->tile_num;

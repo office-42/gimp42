@@ -359,15 +359,6 @@ save_image (char   *filename,
       return FALSE;
     }
 
-  /* open the file */
-  fp = fopen(filename, "wb");
-  if (fp == NULL)
-    {
-      /* Ought to pass errno back... */
-      fprintf (stderr, "hrz: can't open \"%s\"\n", filename);
-      return FALSE;
-    }
-
   xres = drawable->width;
   yres = drawable->height;
 
@@ -376,9 +367,19 @@ save_image (char   *filename,
       fprintf (stderr, "hrz: Image must be 256x240 for HRZ format.\n");
       return FALSE;
     }
-  if (drawable_type == INDEXED_IMAGE)
+  /* the row writer assumes 3 bytes per pixel */
+  if (drawable_type != RGB_IMAGE || drawable->bpp != 3)
     {
       fprintf (stderr, "hrz: Image must be RGB for HRZ format.\n");
+      return FALSE;
+    }
+
+  /* open the file */
+  fp = fopen(filename, "wb");
+  if (fp == NULL)
+    {
+      /* Ought to pass errno back... */
+      fprintf (stderr, "hrz: can't open \"%s\"\n", filename);
       return FALSE;
     }
 

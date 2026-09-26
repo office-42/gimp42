@@ -198,11 +198,15 @@ ps_parameters(int  model,	/* I - Printer model */
     if (line[0] != '*')
       continue;
 
-    if (sscanf(line, "*%s %[^/:]", lname, loption) != 2)
+    /* the fields are bounded by the size of lname and loption */
+    if (sscanf(line, "*%254s %254[^/:]", lname, loption) != 2)
       continue;
 
     if (strcasecmp(lname, name) == 0)
     {
+      if (*count >= 100)
+        break;		/* no room for more values */
+
       valptrs[*count] = g_strdup(loption);
       (*count) ++;
     };
@@ -867,27 +871,31 @@ ppd_find(char *ppd_file,	/* I - Name of PPD file */
       sscanf(line, "%*s%d", order);
       continue;
     }
-    else if (sscanf(line, "*%s %[^/:]", lname, loption) != 2)
+    else if (sscanf(line, "*%254s %254[^/:]", lname, loption) != 2)
       continue;
 
     if (strcasecmp(lname, name) == 0 &&
         strcasecmp(loption, option) == 0)
     {
-      opt = strchr(line, ':') + 1;
+      if ((opt = strchr(line, ':')) == NULL)
+        continue;
+      opt ++;
       while (*opt == ' ' || *opt == '\t')
         opt ++;
       if (*opt != '\"')
         continue;
 
-      strcpy(value, opt + 1);
+      g_strlcpy(value, opt + 1, sizeof(value));
       if ((opt = strchr(value, '\"')) == NULL)
       {
+        /* a multi-line string: bounded by the size of value */
         while (fgets(line, sizeof(line), ps_ppd) != NULL)
         {
-          strcat(value, line);
+          g_strlcat(value, line, sizeof(value) - 1);
           if (strchr(line, '\"') != NULL)
           {
-            strcpy(strchr(value, '\"'), "\n");
+            if ((opt = strchr(value, '\"')) != NULL)
+              strcpy(opt, "\n");
             break;
           };
         };

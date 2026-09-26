@@ -111,6 +111,8 @@ static gint   save_image (char   *filename,
 static gint   save_dialog ();
 
 static gint   color_comp (guchar *buffer, guchar *buf2);
+static void   gtm_get_pixel (GPixelRgn *pixel_rgn, GDrawable *drawable,
+			     guchar *buf, int x, int y);
 static void   save_close_callback  (GtkWidget *widget, gpointer   data);
 static void   gtm_entry_callback  (GtkWidget *widget, gpointer   data);
 static void   gtm_toggle_callback  (GtkWidget *widget, gpointer   data);
@@ -205,9 +207,13 @@ save_image (char   *filename,
 
   FILE *fp;
 
-  palloc = malloc(drawable->width * drawable->height * sizeof(int));
+  palloc = g_new (int, (gsize) drawable->width * drawable->height);
 
   fp = fopen(filename, "w");
+  if (fp == NULL) {
+    g_free (palloc);
+    return FALSE;
+  }
   if (gtmvals.fulldoc) {
     fprintf (fp,"<HTML>\n<HEAD><TITLE>%s</TITLE></HEAD>\n<BODY>\n",filename);
     fprintf (fp,"<H1>%s</H1>\n",filename);
@@ -225,8 +231,9 @@ save_image (char   *filename,
 
   cols = drawable->width;
   rows = drawable->height;
-  buffer = g_new(guchar,drawable->bpp);
-  buf2 = g_new(guchar,drawable->bpp);
+  /* always room for R, G, B (and alpha), even for gray drawables */
+  buffer = g_new0(guchar, MAX (drawable->bpp, 4));
+  buf2 = g_new0(guchar, MAX (drawable->bpp, 4));
 
   width = malloc (2);
   height = malloc (2);
@@ -253,7 +260,7 @@ save_image (char   *filename,
   for (y = 0; y < rows; y++) {
     fprintf (fp,"   <TR>\n");
     for (x = 0; x < cols; x++) {
-      gimp_pixel_rgn_get_pixel(&pixel_rgn, buffer, x, y);
+      gtm_get_pixel(&pixel_rgn, drawable, buffer, x, y);
 
       /* Determine ROWSPAN and COLSPAN */
 
@@ -263,13 +270,13 @@ save_image (char   *filename,
 	colcount=0;
 	colspan=0;
 	rowspan=0;
-	gimp_pixel_rgn_get_pixel(&pixel_rgn, buf2, col, row);
+	gtm_get_pixel(&pixel_rgn, drawable, buf2, col, row);
 	
-	while (color_comp(buffer,buf2) && palloc[drawable->width * row + col] == 1 && row < drawable->height) {
-	  while (color_comp(buffer,buf2) && palloc[drawable->width * row + col] == 1 && col < drawable->width ) {
+	while (row < drawable->height && color_comp(buffer,buf2) && palloc[drawable->width * row + col] == 1) {
+	  while (col < drawable->width && color_comp(buffer,buf2) && palloc[drawable->width * row + col] == 1) {
 	    colcount++;
 	    col++;
-	    gimp_pixel_rgn_get_pixel(&pixel_rgn, buf2, col, row);
+	    gtm_get_pixel(&pixel_rgn, drawable, buf2, col, row);
 	  }
 	  
 	  if (colcount != 0) {
@@ -282,7 +289,7 @@ save_image (char   *filename,
 	  
 	  col=x;
 	  colcount=0;
-	  gimp_pixel_rgn_get_pixel(&pixel_rgn, buf2, col, row);
+	  gtm_get_pixel(&pixel_rgn, drawable, buf2, col, row);
 	}
 	
 	if (colspan > 1 || rowspan > 1) {
@@ -317,6 +324,9 @@ save_image (char   *filename,
   gimp_drawable_detach (drawable);
   free(width);
   free(height);
+  g_free(palloc);
+  g_free(buffer);
+  g_free(buf2);
 
   free(palloc);
 
@@ -504,6 +514,19 @@ static gint save_dialog ()
   return bint.run;
 }
 
+/* Fetch one pixel as R, G, B; gray values are replicated.  Coordinates
+ * outside the drawable leave the buffer unchanged. */
+static void gtm_get_pixel (GPixelRgn *pixel_rgn, GDrawable *drawable,
+			   guchar *buf, int x, int y)
+{
+  if (x < 0 || y < 0 || x >= drawable->width || y >= drawable->height)
+    return;
+
+  gimp_pixel_rgn_get_pixel (pixel_rgn, buf, x, y);
+  if (drawable->bpp < 3)
+    buf[1] = buf[2] = buf[0];
+}
+
 static gint color_comp (guchar *buffer, guchar *buf2) {
   if (buffer[0] == buf2[0] && buffer[1] == buf2[1] && buffer[2] == buf2[2])
     return 1;
@@ -547,20 +570,20 @@ static void save_ok_callback (GtkWidget *widget, gpointer   data)
 
 static void gtm_caption_callback (GtkWidget *widget, gpointer   data)
 {
-  strcpy(gtmvals.captiontxt, gtk_editable_get_text (GTK_EDITABLE (widget)));
+  g_strlcpy(gtmvals.captiontxt, gtk_editable_get_text (GTK_EDITABLE (widget)), sizeof (gtmvals.captiontxt));
 }
 
 static void gtm_cellcontent_callback (GtkWidget *widget, gpointer   data)
 {
-  strcpy(gtmvals.cellcontent, gtk_editable_get_text (GTK_EDITABLE (widget)));
+  g_strlcpy(gtmvals.cellcontent, gtk_editable_get_text (GTK_EDITABLE (widget)), sizeof (gtmvals.cellcontent));
 }
 
 static void gtm_clwidth_callback (GtkWidget *widget, gpointer   data)
 {
-  strcpy(gtmvals.clwidth, gtk_editable_get_text (GTK_EDITABLE (widget)));
+  g_strlcpy(gtmvals.clwidth, gtk_editable_get_text (GTK_EDITABLE (widget)), sizeof (gtmvals.clwidth));
 }
 
 static void gtm_clheight_callback (GtkWidget *widget, gpointer   data)
 {
-  strcpy(gtmvals.clheight, gtk_editable_get_text (GTK_EDITABLE (widget)));
+  g_strlcpy(gtmvals.clheight, gtk_editable_get_text (GTK_EDITABLE (widget)), sizeof (gtmvals.clheight));
 }

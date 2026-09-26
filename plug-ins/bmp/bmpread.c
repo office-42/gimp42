@@ -17,8 +17,13 @@ gint32 ReadBMP (name)
   char buf[5];
   int ColormapSize, SpeicherZeile, Maps, Grey;
   unsigned char ColorMap[256][3];
-  guchar puffer[50];
-  
+  guchar puffer[64];
+  gint32 width, height;
+  int bpp;
+
+  memset (ColorMap, 0, sizeof (ColorMap));
+  memset (buf, 0, sizeof (buf));
+
   if (interactive_bmp)
     {
       temp_buf = g_malloc (strlen (name) + 11);
@@ -63,10 +68,16 @@ gint32 ReadBMP (name)
   
   /* Is it a Windows (R) Bitmap or not */  
   
-  if (Bitmap_File_Head.biSize!=40) 
+  if (Bitmap_File_Head.biSize < 40)
     {
-      printf("\nos2 unsupported!\n");
-      if (!ReadOK (fd, puffer, Bitmap_File_Head.biSize))
+      /* OS/2 1.x header: 12 bytes, of which the size field is already read */
+      if (Bitmap_File_Head.biSize != 12)
+        {
+          printf ("%s: unsupported bitmap header size\n", prog_name);
+          fclose (fd);
+          return -1;
+        }
+      if (!ReadOK (fd, puffer, Bitmap_File_Head.biSize - 4))
         {
           printf ("%s: error reading bitmap header\n", prog_name);
           return -1;
@@ -104,25 +115,57 @@ gint32 ReadBMP (name)
       Bitmap_Head.biClrUsed=ToL(&puffer[0x1C]);		/* 2E */
       Bitmap_Head.biClrImp=ToL(&puffer[0x20]);		/* 32 */
     					                /* 36 */
+      /* skip the rest of larger (V4, V5, OS/2 2.x) headers */
+      if (Bitmap_File_Head.biSize > 40 &&
+          (Bitmap_File_Head.biSize > 0x10000 ||
+           fseek (fd, Bitmap_File_Head.biSize - 40, SEEK_CUR) != 0))
+        {
+          printf ("\n%s: error reading bitmap header\n", prog_name);
+          fclose (fd);
+          return -1;
+        }
       Maps=4;
     }
-  
+
   /* This means wrong file Format. I test this because it could crash the */
   /* entire gimp.							  */
-  
-  if (Bitmap_Head.biBitCnt>24) 
+
+  bpp = Bitmap_Head.biBitCnt;
+  width = (gint32) Bitmap_Head.biWidth;
+  height = (gint32) Bitmap_Head.biHeight;
+
+  if (bpp != 1 && bpp != 4 && bpp != 8 && bpp != 24)
   {
-    printf("\n%s: to many colors: %u\n",prog_name,(unsigned int) Bitmap_Head.biBitCnt);
+    printf("\n%s: unsupported bit count: %u\n",prog_name,(unsigned int) Bitmap_Head.biBitCnt);
+    fclose (fd);
     return -1;
   }
 
+  if (width <= 0 || height <= 0 || width > 262144 || height > 262144)
+    {
+      printf ("\n%s: unsupported image dimensions\n", prog_name);
+      fclose (fd);
+      return -1;
+    }
+
   /* There should be some colors used! */
-  
-  ColormapSize = (Bitmap_File_Head.bfOffs-Bitmap_File_Head.biSize-14) / Maps;
+
+  if (Bitmap_File_Head.bfOffs < Bitmap_File_Head.biSize + 14 ||
+      Bitmap_File_Head.bfOffs > 0x7fffffff)
+    ColormapSize = 0;
+  else
+    ColormapSize = (Bitmap_File_Head.bfOffs-Bitmap_File_Head.biSize-14) / Maps;
+  if (ColormapSize > 256)
+    ColormapSize = 256;
+  if (bpp == 24)
+    ColormapSize = 0;
   if ((Bitmap_Head.biClrUsed==0) && (Bitmap_Head.biBitCnt<24)) Bitmap_Head.biClrUsed=ColormapSize;
-  if (Bitmap_Head.biBitCnt==24) SpeicherZeile=((Bitmap_File_Head.bfSize-Bitmap_File_Head.bfOffs)/Bitmap_Head.biHeight);
-  else SpeicherZeile=((Bitmap_File_Head.bfSize-Bitmap_File_Head.bfOffs)/Bitmap_Head.biHeight)*(8/Bitmap_Head.biBitCnt);
-  
+  if (Bitmap_Head.biClrUsed > 256)
+    Bitmap_Head.biClrUsed = 256;
+
+  /* Bytes per row, padded to a multiple of 4 */
+  SpeicherZeile = (int) ((((gint64) width * bpp + 31) / 32) * 4);
+
 #ifdef DEBUG
   printf("\nSize: %u, Colors: %u, Bits: %u, Width: %u, Height: %u, Comp: %u, Zeile: %u\n",
           Bitmap_File_Head.bfSize,Bitmap_Head.biClrUsed,Bitmap_Head.biBitCnt,Bitmap_Head.biWidth,
@@ -131,16 +174,25 @@ gint32 ReadBMP (name)
   
   /* Get the Colormap */
   
-  if (ReadColorMap(fd, ColorMap, ColormapSize, Maps, &Grey) == -1) return -1;
-  
+  if (ReadColorMap(fd, ColorMap, ColormapSize, Maps, &Grey) == -1)
+    {
+      fclose (fd);
+      return -1;
+    }
+
 #ifdef DEBUG
   printf("Colormap read\n");
 #endif
 
+  /* The image data starts at bfOffs */
+  if (Bitmap_File_Head.bfOffs <= 0x7fffffff &&
+      Bitmap_File_Head.bfOffs >= Bitmap_File_Head.biSize + 14)
+    fseek (fd, Bitmap_File_Head.bfOffs, SEEK_SET);
+
   /* Get the Image and return the ID or -1 on error*/
 
-  return(ReadImage(fd, Bitmap_Head.biWidth, Bitmap_Head.biHeight, ColorMap, 
-      Bitmap_Head.biClrUsed, Bitmap_Head.biBitCnt, Bitmap_Head.biCompr, SpeicherZeile, Grey));
+  return(ReadImage(fd, width, height, ColorMap,
+      Bitmap_Head.biClrUsed, bpp, Bitmap_Head.biCompr, SpeicherZeile, Grey));
 
 }
 
@@ -197,8 +249,8 @@ Image ReadImage (fd, len, height, cmap, ncols, bpp, compression, spzeile, grey)
   guchar *dest, *temp;
   guchar gimp_cmap[768];
   long rowstride, channels;
-  int i, j, cur_progress, max_progress, egal;
-  
+  int i, j, cur_progress, max_progress, egal, padding;
+
   /* Make a new image in the gimp */
   
   if (grey)
@@ -226,13 +278,32 @@ Image ReadImage (fd, len, height, cmap, ncols, bpp, compression, spzeile, grey)
   name_buf = g_malloc (strlen (filename) + 10);
   sprintf (name_buf, "%s", filename);
   gimp_image_set_filename(image,name_buf);
-  free (name_buf);
-  
+  g_free (name_buf);
+
   gimp_image_add_layer(image,layer,0);
   drawable = gimp_drawable_get(layer);
-  
-  dest = g_malloc(drawable->width*drawable->height*channels);
+
+  if (drawable->width != len || drawable->height != height)
+    {
+      fclose (fd);
+      return -1;
+    }
+  dest = g_try_malloc0 ((gsize) drawable->width * drawable->height * channels);
+  if (!dest)
+    {
+      printf ("%s: image too large\n", prog_name);
+      fclose (fd);
+      return -1;
+    }
   rowstride = drawable->width * channels;
+
+  /* Number of padding bytes at the end of each uncompressed row */
+  if (bpp == 24)
+    padding = spzeile - len * 3;
+  else
+    padding = spzeile - (int) (((gint64) len * bpp + 7) / 8);
+  if (padding < 0 || padding > 3)
+    padding = 0;
   
   ypos=height-1;		/* Bitmaps begin in the lower left corner */
   cur_progress = 0;
@@ -242,7 +313,7 @@ Image ReadImage (fd, len, height, cmap, ncols, bpp, compression, spzeile, grey)
     {
       while (ReadOK(fd,buf,3))
         {
-          temp = dest + (ypos * rowstride) + (xpos * channels);
+          temp = dest + ((gsize) ypos * rowstride) + (xpos * channels);
           *temp=buf[2];
           temp++;
           *temp=buf[1];
@@ -251,7 +322,7 @@ Image ReadImage (fd, len, height, cmap, ncols, bpp, compression, spzeile, grey)
           xpos++;
           if (xpos == len)
             {
-              egal=ReadOK(fd,buf,spzeile-(len*3));
+              egal=ReadOK(fd,buf,padding);
               ypos--;
               xpos=0;
               cur_progress++;
@@ -269,13 +340,13 @@ Image ReadImage (fd, len, height, cmap, ncols, bpp, compression, spzeile, grey)
 	  {
           for (i=1;(i<=(8/bpp)) && (xpos<len);i++,xpos++)
             {
-              temp = dest + (ypos * rowstride) + (xpos * channels);
+              temp = dest + ((gsize) ypos * rowstride) + (xpos * channels);
               /* look at my bitmask !! */
               *temp=( v & ( ((1<<bpp)-1) << (8-(i*bpp)) ) ) >> (8-(i*bpp));
             }
           if (xpos == len)
             {
-              egal=ReadOK(fd,buf,(spzeile-len)/(8/bpp));
+              egal=ReadOK(fd,buf,padding);
               ypos--;
               xpos=0;
               cur_progress++;
@@ -288,10 +359,11 @@ Image ReadImage (fd, len, height, cmap, ncols, bpp, compression, spzeile, grey)
       }
     default:						/* Compressed images */
       {
-	while (TRUE)
+	while (ypos >= 0)
 	  {
-	    egal=ReadOK(fd,buf,2);
-	    if ((unsigned char) buf[0]!=0) 
+	    if (!ReadOK(fd,buf,2))
+	      break;
+	    if ((unsigned char) buf[0]!=0)
 	      /* Count + Color - record */
 	      {
 		for (j=0;((unsigned char) j < (unsigned char) buf[0]) && (xpos<len);)
@@ -301,7 +373,7 @@ Image ReadImage (fd, len, height, cmap, ncols, bpp, compression, spzeile, grey)
 #endif
 		    for (i=1;((i<=(8/bpp)) && (xpos<len) && ((unsigned char) j < (unsigned char) buf[0]));i++,xpos++,j++)
 		      {
-			temp = dest + (ypos * rowstride) + (xpos * channels);
+			temp = dest + ((gsize) ypos * rowstride) + (xpos * channels);
 			*temp=( buf[1] & ( ((1<<bpp)-1) << (8-(i*bpp)) ) ) >> (8-(i*bpp));
 		      }
 		  }
@@ -316,7 +388,7 @@ Image ReadImage (fd, len, height, cmap, ncols, bpp, compression, spzeile, grey)
 		    i=1;
 		    while ((i<=(8/bpp)) && (xpos<len))
 		      {
-			temp = dest + (ypos * rowstride) + (xpos * channels);
+			temp = dest + ((gsize) ypos * rowstride) + (xpos * channels);
 			*temp=(v & ( ((1<<bpp)-1) << (8-(i*bpp)) ) ) >> (8-(i*bpp));
 			i++;
 			xpos++;
@@ -342,8 +414,13 @@ Image ReadImage (fd, len, height, cmap, ncols, bpp, compression, spzeile, grey)
 	    if (((unsigned char) buf[0]==0) && ((unsigned char) buf[1]==2))
 	      /* Deltarecord */
 	      {
+		if (!ReadOK(fd,&buf[2],2))
+		  break;
 		xpos+=(unsigned char) buf[2];
-		ypos+=(unsigned char) buf[3];
+		if (xpos > len)
+		  xpos = len;
+		/* rows are stored bottom-up, so "down" is towards row 0 */
+		ypos-=(unsigned char) buf[3];
 	      }
 	  }
 	break;

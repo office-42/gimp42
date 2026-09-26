@@ -16,6 +16,7 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <glib/gstdio.h>
@@ -31,8 +32,13 @@
 #include "paint_funcs.h"
 #include "temp_buf.h"
 
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 
-static unsigned char *   temp_buf_allocate (unsigned int);
+
+static unsigned char *   temp_buf_allocate (gsize);
+static gsize             temp_buf_size (int, int, int);
 static void              temp_buf_to_color (TempBuf *, TempBuf *);
 static void              temp_buf_to_gray (TempBuf *, TempBuf *);
 
@@ -40,14 +46,35 @@ static void              temp_buf_to_gray (TempBuf *, TempBuf *);
 /*  Memory management  */
 
 static unsigned char *
-temp_buf_allocate (size)
-     unsigned int size;
+temp_buf_allocate (gsize size)
 {
   unsigned char * data;
 
   data = (unsigned char *) g_malloc (size);
 
   return data;
+}
+
+/*  Compute width * height * bytes, refusing negative dimensions and
+ *  results that don't fit in an int (much of the code indexes temp
+ *  bufs with int arithmetic).
+ */
+static gsize
+temp_buf_size (int width,
+	       int height,
+	       int bytes)
+{
+  guint64 size;
+
+  if (width < 0 || height < 0 || bytes < 0)
+    g_error ("temp_buf: invalid dimensions %d x %d x %d", width, height, bytes);
+
+  size = (guint64) width * (guint64) height * (guint64) bytes;
+  if (size > G_MAXINT)
+    g_error ("temp_buf: buffer of %d x %d x %d is too large",
+	     width, height, bytes);
+
+  return (gsize) size;
 }
 
 
@@ -130,7 +157,7 @@ temp_buf_new (width, height, bytes, x, y, col)
   temp->swapped = FALSE;
   temp->filename = NULL;
 
-  temp->data = data = temp_buf_allocate (width * height * bytes);
+  temp->data = data = temp_buf_allocate (temp_buf_size (width, height, bytes));
 
   /*  initialize the data  */
   if (col)
@@ -229,7 +256,7 @@ temp_buf_resize (buf, bytes, x, y, w, h)
   int size;
 
   /*  calculate the requested size  */
-  size = w * h * bytes;
+  size = temp_buf_size (w, h, bytes);
 
   /*  First, configure the canvas buffer  */
   if (!buf)
@@ -405,26 +432,55 @@ mask_buf_data (mask_buf)
  *    temp bufs are not cached in memory at all, they go right to disk.
  */
 
-#define MAX_FILENAME    2048
-
 /*  a static counter for generating unique filenames  */
 static int swap_index = 0;
-static char filename_buf[MAX_FILENAME];
 
 /*  a static pointer which keeps track of the last request for a swapped buffer  */
 static TempBuf * cached_in_memory = NULL;
 
 
-static char *
-generate_unique_filename (void)
+/*  Create a new swap file that nobody else can have prepared for us:
+ *  the file is created exclusively (never following an existing file
+ *  or symlink planted in a shared temp directory) and is readable
+ *  and writable by the owner only.  Returns the open stream and
+ *  stores the (newly allocated) filename in *filename.
+ */
+static FILE *
+open_unique_swap_file (char **filename)
 {
   pid_t pid;
+  int fd;
+  int tries;
 
   pid = getpid ();
 
-  sprintf (filename_buf, "%s/gimp%d.%d", temp_path, (int) pid, swap_index++);
+  for (tries = 0; tries < 1000; tries++)
+    {
+      *filename = g_strdup_printf ("%s" G_DIR_SEPARATOR_S "gimp%d.%d",
+				   temp_path, (int) pid, swap_index++);
 
-  return g_strdup (filename_buf);
+      fd = g_open (*filename, O_CREAT | O_EXCL | O_WRONLY | O_BINARY,
+		   S_IRUSR | S_IWUSR);
+      if (fd != -1)
+	{
+	  FILE *fp = fdopen (fd, "wb");
+
+	  if (fp)
+	    return fp;
+
+	  close (fd);
+	  unlink (*filename);
+	  break;
+	}
+
+      if (errno != EEXIST)
+	break;
+
+      g_free (*filename);
+      *filename = NULL;
+    }
+
+  return NULL;
 }
 
 
@@ -433,9 +489,7 @@ temp_buf_swap (buf)
      TempBuf * buf;
 {
   TempBuf * swap;
-  char * filename;
-  struct stat stat_buf;
-  int err;
+  char * filename = NULL;
   FILE * fp;
 
   if (!buf || buf->swapped)
@@ -456,24 +510,8 @@ temp_buf_swap (buf)
   if (!swap)
     return;
 
-  /*  Get a unique filename for caching the data to a UNIX file  */
-  filename = generate_unique_filename ();
-
-  /*  Check if generated filename is valid  */
-  err = stat (filename, &stat_buf);
-  if (!err)
-    {
-      if (stat_buf.st_mode & S_IFDIR)
-	{
-	  g_message ("Error in temp buf caching: \"%s\" is a directory (cannot overwrite)",
-		   filename);
-	  g_free (filename);
-	  return;
-	}
-    }
-
-  /*  Open file for overwrite  */
-  if ((fp = g_fopen (filename, "wb")))
+  /*  Create a new, private file for caching the data  */
+  if ((fp = open_unique_swap_file (&filename)))
     {
       size_t blocks_written;
       blocks_written = fwrite (swap->data, swap->width * swap->height * swap->bytes, 1, fp);
@@ -484,15 +522,18 @@ temp_buf_swap (buf)
           perror ("Write error on temp buf");
           g_message ("Cannot write \"%s\"", filename);
           g_free (filename);
+          /* keep the data in memory rather than lose it */
+          swap->swapped = FALSE;
           return;
         }
     }
   else
     {
-      (void) unlink (filename);
       perror ("Error in temp buf caching");
-      g_message ("Cannot write \"%s\"", filename);
+      g_message ("Cannot write \"%s\"", filename ? filename : temp_path);
       g_free (filename);
+      /* keep the data in memory rather than lose it */
+      swap->swapped = FALSE;
       return;
     }
   /*  Finally, free the buffer's data  */

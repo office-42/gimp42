@@ -282,6 +282,18 @@ sgiOpenFile(FILE *file,	/* I - File to open */
         getlong(sgip->file);		/* Minimum pixel */
         getlong(sgip->file);		/* Maximum pixel */
 
+       /*
+        * Reject headers we cannot handle; the decoders rely on these...
+        */
+
+        if (sgip->comp < SGI_COMP_NONE || sgip->comp > SGI_COMP_RLE ||
+            sgip->bpp < 1 || sgip->bpp > 2 ||
+            sgip->xsize < 1 || sgip->ysize < 1 || sgip->zsize < 1)
+        {
+          free(sgip);
+          return (NULL);
+        };
+
         if (sgip->comp)
         {
          /*
@@ -291,12 +303,25 @@ sgiOpenFile(FILE *file,	/* I - File to open */
           fseek(sgip->file, 512, SEEK_SET);
 
           sgip->table    = calloc(sgip->zsize, sizeof(long *));
-          sgip->table[0] = calloc(sgip->ysize * sgip->zsize, sizeof(long));
+          if (sgip->table == NULL)
+          {
+            free(sgip);
+            return (NULL);
+          };
+          /* size_t arithmetic: ysize * zsize can overflow an int */
+          sgip->table[0] = calloc((size_t)sgip->ysize * sgip->zsize,
+                                  sizeof(long));
+          if (sgip->table[0] == NULL)
+          {
+            free(sgip->table);
+            free(sgip);
+            return (NULL);
+          };
           for (i = 1; i < sgip->zsize; i ++)
             sgip->table[i] = sgip->table[0] + i * sgip->ysize;
 
-          for (i = 0; i < sgip->zsize; i ++)
-            for (j = 0; j < sgip->ysize; j ++)
+          for (i = 0; i < sgip->zsize && !feof(sgip->file); i ++)
+            for (j = 0; j < sgip->ysize && !feof(sgip->file); j ++)
               sgip->table[i][j] = getlong(sgip->file);
         };
         break;
@@ -551,8 +576,9 @@ getlong(FILE *fp)	/* I - File to read from */
   unsigned char	b[4];
 
 
-  fread(b, 4, 1, fp);
-  return ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]);
+  if (fread(b, 4, 1, fp) != 1)
+    return (0);
+  return ((int)(((unsigned)b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]));
 }
 
 
@@ -566,7 +592,8 @@ getshort(FILE *fp)	/* I - File to read from */
   unsigned char	b[2];
 
 
-  fread(b, 2, 1, fp);
+  if (fread(b, 2, 1, fp) != 1)
+    return (EOF);
   return ((b[0] << 8) | b[1]);
 }
 
@@ -636,14 +663,23 @@ read_rle8(FILE           *fp,	/* I - File to read from */
     if (count == 0)
       break;
 
+    /* Never write past the end of the row */
+    if (count > xsize)
+      return (-1);
+
     if (ch & 128)
     {
       for (i = 0; i < count; i ++, row ++, xsize --, length ++)
-        *row = getc(fp);
+      {
+        if ((ch = getc(fp)) == EOF)
+          return (-1);
+        *row = ch;
+      };
     }
     else
     {
-      ch = getc(fp);
+      if ((ch = getc(fp)) == EOF)
+        return (-1);
       length ++;
       for (i = 0; i < count; i ++, row ++, xsize --)
         *row = ch;
@@ -681,14 +717,23 @@ read_rle16(FILE           *fp,	/* I - File to read from */
     if (count == 0)
       break;
 
+    /* Never write past the end of the row */
+    if (count > xsize)
+      return (-1);
+
     if (ch & 128)
     {
       for (i = 0; i < count; i ++, row ++, xsize --, length ++)
-        *row = getshort(fp);
+      {
+        if ((ch = getshort(fp)) == EOF)
+          return (-1);
+        *row = ch;
+      };
     }
     else
     {
-      ch = getshort(fp);
+      if ((ch = getshort(fp)) == EOF)
+        return (-1);
       length ++;
       for (i = 0; i < count; i ++, row ++, xsize --)
         *row = ch;

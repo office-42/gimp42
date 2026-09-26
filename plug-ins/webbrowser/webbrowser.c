@@ -188,6 +188,46 @@ run (char *name,
     g_assert (FALSE);
 }
 
+static gboolean
+open_url_is_safe (const gchar *uri)
+{
+  static const gchar *safe_schemes[] = { "http", "https", "ftp", "mailto" };
+  static const gchar *safe_suffixes[] = { ".html", ".htm", ".txt" };
+  gchar    *scheme;
+  gchar    *filename;
+  gchar    *lower;
+  gboolean  safe = FALSE;
+  guint     i;
+
+  scheme = g_uri_parse_scheme (uri);
+  if (! scheme)
+    return FALSE;
+
+  for (i = 0; i < G_N_ELEMENTS (safe_schemes); i++)
+    if (g_ascii_strcasecmp (scheme, safe_schemes[i]) == 0)
+      safe = TRUE;
+
+  /*  (no query or fragment to hide the real file name behind)  */
+  if (! safe && g_ascii_strcasecmp (scheme, "file") == 0 &&
+      ! strpbrk (uri, "?#"))
+    {
+      filename = g_filename_from_uri (uri, NULL, NULL);
+      if (filename)
+	{
+	  lower = g_ascii_strdown (filename, -1);
+	  for (i = 0; i < G_N_ELEMENTS (safe_suffixes); i++)
+	    if (g_str_has_suffix (lower, safe_suffixes[i]))
+	      safe = TRUE;
+	  g_free (lower);
+	  g_free (filename);
+	}
+    }
+
+  g_free (scheme);
+
+  return safe;
+}
+
 static gint
 open_url (const char *url, int new_window)
 {
@@ -204,17 +244,29 @@ open_url (const char *url, int new_window)
   /*  Netscape accepted "www.gimp.org" and local file names; the
    *  desktop wants a real URI.
    */
-  scheme = g_uri_parse_scheme (url);
-  if (scheme)
-    uri = g_strdup (url);
-  else if (g_path_is_absolute (url))
+  /*  (a path first: "C:\..." would parse as a URI with scheme "C")  */
+  scheme = NULL;
+  if (g_path_is_absolute (url))
     uri = g_filename_to_uri (url, NULL, NULL);
+  else if ((scheme = g_uri_parse_scheme (url)) != NULL)
+    uri = g_strdup (url);
   else
     uri = g_strconcat ("http://", url, NULL);
   g_free (scheme);
 
   if (! uri)
     return FALSE;
+
+  /*  The desktop starts whatever program handles a URI, and a local file
+   *  is "opened" by running it if it is a program: only web pages and
+   *  mail, and local HTML or text documents.
+   */
+  if (! open_url_is_safe (uri))
+    {
+      g_message ("webbrowser: refusing to open %s", uri);
+      g_free (uri);
+      return FALSE;
+    }
 
   if (! g_app_info_launch_default_for_uri (uri, NULL, &error))
     {

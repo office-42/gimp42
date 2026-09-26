@@ -141,6 +141,34 @@ load_image (char *filename)
       return -1;
     }
 
+  /*  The extension becomes part of a local file name: letters and digits
+   *  only, so that it cannot add path components ("\..\") or the like.
+   */
+  {
+    const char *p;
+
+    for (p = ext + 1; *p; p++)
+      if (! g_ascii_isalnum (*p))
+	{
+	  g_message ("url: can't open URL with the extension \"%s\"\n", ext);
+	  return -1;
+	}
+  }
+
+  /*  It has to be a URL (and so cannot look like an option to curl or
+   *  wget either).
+   */
+  {
+    char *scheme = g_uri_parse_scheme (filename);
+
+    if (! scheme)
+      {
+	g_message ("url: \"%s\" is not a URL\n", filename);
+	return -1;
+      }
+    g_free (scheme);
+  }
+
   params = gimp_run_procedure ("gimp_temp_name",
 			       &retvals,
 			       PARAM_STRING, ext + 1,
@@ -218,6 +246,26 @@ fetch_with_tool (const gchar *uri,
 {
   GSubprocess *proc;
   gchar       *tool;
+  gchar       *scheme;
+  gboolean     network;
+
+  /*  Only hand the tools plain network URLs; curl in particular speaks
+   *  many more protocols (file, dict, telnet, ...).  Such a URL also
+   *  never starts with '-', so it cannot be taken for an option.
+   */
+  scheme = g_uri_parse_scheme (uri);
+  network = (scheme &&
+	     (g_ascii_strcasecmp (scheme, "http") == 0 ||
+	      g_ascii_strcasecmp (scheme, "https") == 0 ||
+	      g_ascii_strcasecmp (scheme, "ftp") == 0));
+  g_free (scheme);
+
+  if (! network)
+    {
+      g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+		   "only http, https and ftp URLs can be downloaded");
+      return FALSE;
+    }
 
   tool = g_find_program_in_path ("curl");
   if (tool)
@@ -226,7 +274,9 @@ fetch_with_tool (const gchar *uri,
 			       G_SUBPROCESS_FLAGS_STDERR_SILENCE,
 			       error,
 			       tool, "-f", "-s", "-S", "-L",
-			       "-o", tmpname, uri, NULL);
+			       "--proto", "=http,https,ftp",
+			       "--proto-redir", "=http,https,ftp",
+			       "-o", tmpname, "--", uri, NULL);
     }
   else
     {
@@ -241,7 +291,7 @@ fetch_with_tool (const gchar *uri,
       proc = g_subprocess_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
 			       G_SUBPROCESS_FLAGS_STDERR_SILENCE,
 			       error,
-			       tool, "-q", uri, "-O", tmpname, NULL);
+			       tool, "-q", "-O", tmpname, "--", uri, NULL);
     }
 
   if (! proc)

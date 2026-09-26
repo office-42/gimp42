@@ -273,7 +273,7 @@ query(void)
       "Michael Sweet <mike@easysw.com>, Daniel Skarda <0rfelyus@atrey.karlin.mff.cuni.cz>",
       "Michael Sweet <mike@easysw.com>, Daniel Skarda <0rfelyus@atrey.karlin.mff.cuni.cz>",
       PLUG_IN_VERSION,
-      "<Save>/PNG", "RGB*,GRAY*,INDEXED", PROC_PLUG_IN, nsave_args, 0, save_args, NULL);
+      "<Save>/PNG", "RGB*,GRAY*,INDEXED*", PROC_PLUG_IN, nsave_args, 0, save_args, NULL);
 
   gimp_register_magic_load_handler("file_png_load", "png", "", "0,string,\211PNG\r\n\032\n");
   gimp_register_save_handler("file_png_save", "png", "");
@@ -390,6 +390,60 @@ run(char   *name,		/* I - Name of filter program. */
 
 
 /*
+ * Palette images with transparency: libpng hands out one index per pixel,
+ * the layer holds index and alpha.  Each row buffer is 2 * width bytes; the
+ * indices sit in its first half.
+ */
+
+static void
+png_add_palette_alpha(guchar       **rows,	/* I/O - Row buffers */
+                      int            num,	/* I - Number of rows */
+                      png_uint_32    width,	/* I - Pixels per row */
+                      const guchar  *alpha)	/* I - Alpha per index */
+{
+  int		y;
+  png_uint_32	x;
+
+  for (y = 0; y < num; y ++)
+  {
+    guchar *row = rows[y];
+
+    /*  back to front, so nothing is overwritten before it is read  */
+    for (x = width; x > 0; x --)
+    {
+      guchar index = row[x - 1];
+
+      row[(x - 1) * 2]     = index;
+      row[(x - 1) * 2 + 1] = alpha[index];
+    }
+  }
+}
+
+/*
+ * The reverse, for the later passes of an interlaced image: the rows already
+ * loaded go back to one index per pixel for libpng to fill in.
+ */
+
+static void
+png_pack_indices(guchar       *pixel,	/* I - First row */
+                 guchar      **rows,	/* I/O - Row buffers */
+                 int           num,	/* I - Number of rows */
+                 png_uint_32   width)	/* I - Pixels per row */
+{
+  int		y;
+  png_uint_32	x;
+
+  for (y = 0; y < num; y ++)
+  {
+    guchar *row = rows[y];
+
+    for (x = 0; x < width; x ++)
+      row[x] = row[x * 2];
+  }
+}
+
+
+/*
  * 'load_image()' - Load a PNG image into a new image window.
  */
 
@@ -398,6 +452,7 @@ load_image(char *filename)	/* I - File to load */
 {
   int		i,		/* Looping var */
 		bpp,		/* Bytes per pixel */
+		layer_bpp,	/* Bytes per pixel in the layer */
 		image_type,	/* Type of image */
 		layer_type,	/* Type of drawable/layer */
 		num_passes,	/* Number of interlace passes in file */
@@ -422,6 +477,9 @@ load_image(char *filename)	/* I - File to load */
   png_color_8p	sig_bit;
   png_colorp	palette;
   int		num_palette;
+  png_bytep	trans = NULL;	/* Palette transparency (tRNS) */
+  int		num_trans = 0;
+  guchar	trans_alpha[256];	/* Alpha of each palette entry */
 
 
  /*
@@ -486,7 +544,33 @@ load_image(char *filename)	/* I - File to load */
     }
   }
   else if (bit_depth == 16)
+  {
+    /*  The GIMP works in 8 bits per channel; round, don't truncate.  */
+#ifdef PNG_READ_SCALE_16_TO_8_SUPPORTED
+    png_set_scale_16(pp);
+#else
     png_set_strip_16(pp);
+#endif
+  }
+
+ /*
+  * Transparency.  A palette image keeps its indices and gets an alpha
+  * channel made from its tRNS table below; a grey or RGB image with a
+  * transparent colour key (tRNS) gets a real alpha channel.
+  */
+
+  if (png_get_valid(pp, info, PNG_INFO_tRNS))
+  {
+    if (color_type == PNG_COLOR_TYPE_PALETTE)
+    {
+      png_get_tRNS(pp, info, &trans, &num_trans, NULL);
+      memset(trans_alpha, 255, sizeof (trans_alpha));
+      for (i = 0; i < num_trans && i < 256; i ++)
+        trans_alpha[i] = trans[i];
+    }
+    else if (bit_depth >= 8)
+      png_set_tRNS_to_alpha(pp);
+  }
 
  /*
   * Turn on interlace handling...
@@ -498,6 +582,22 @@ load_image(char *filename)	/* I - File to load */
     num_passes = 1;
 
   png_read_update_info(pp, info);
+
+ /*
+  * The transforms above may change the colour type (e.g. png_set_expand
+  * turns a tRNS chunk into an alpha channel), so size the row buffers
+  * from the updated info rather than from the file header.
+  */
+
+  color_type = png_get_color_type(pp, info);
+
+  if (width == 0 || height == 0 || width > 262144 || height > 262144)
+  {
+    g_message("PNG: %s has unsupported image dimensions", filename);
+    png_destroy_read_struct(&pp, &info, NULL);
+    fclose(fp);
+    return (-1);
+  }
 
   bpp = 1;
   image_type = GRAY;
@@ -532,9 +632,17 @@ load_image(char *filename)	/* I - File to load */
     case PNG_COLOR_TYPE_PALETTE :	/* Indexed */
         bpp        = 1;
         image_type = INDEXED;
-        layer_type = INDEXED_IMAGE;
+        layer_type = (num_trans > 0) ? INDEXEDA_IMAGE : INDEXED_IMAGE;
         break;
   };
+
+  if (png_get_rowbytes(pp, info) > (png_size_t) width * bpp)
+  {
+    g_message("PNG: unsupported pixel format in %s", filename);
+    png_destroy_read_struct(&pp, &info, NULL);
+    fclose(fp);
+    return (-1);
+  }
 
   image = gimp_image_new(width, height, image_type);
   if (image == -1)
@@ -575,11 +683,16 @@ load_image(char *filename)	/* I - File to load */
   */
 
   tile_height = gimp_tile_height ();
-  pixel       = g_new(guchar, tile_height * width * bpp);
+
+  /*  A palette image with transparency is stored as index + alpha, two
+   *  bytes to libpng's one.
+   */
+  layer_bpp   = (layer_type == INDEXEDA_IMAGE) ? 2 : bpp;
+  pixel       = g_new(guchar, (gsize) tile_height * width * layer_bpp);
   pixels      = g_new(guchar *, tile_height);
 
   for (i = 0; i < tile_height; i ++)
-    pixels[i] = pixel + width * bpp * i;
+    pixels[i] = pixel + (gsize) width * layer_bpp * i;
 
   for (pass = 0; pass < num_passes; pass ++)
   {
@@ -597,9 +710,16 @@ load_image(char *filename)	/* I - File to load */
       num = end - begin;
 	
       if (pass != 0) /* to handle interlaced PiNGs */
+      {
         gimp_pixel_rgn_get_rect(&pixel_rgn, pixel, 0, begin, drawable->width, num);
+        if (layer_bpp == 2)
+          png_pack_indices(pixel, pixels, num, width);
+      }
 
       png_read_rows(pp, pixels, NULL, num);
+
+      if (layer_bpp == 2)
+        png_add_palette_alpha(pixels, num, width, trans_alpha);
 
       gimp_pixel_rgn_set_rect(&pixel_rgn, pixel, 0, begin, drawable->width, num);
 
@@ -632,6 +752,45 @@ load_image(char *filename)	/* I - File to load */
 
 
 /*
+ * An INDEXEDA image's transparent pixels need a palette entry to point at.
+ * With room in the palette that is a new entry at the end; otherwise it is
+ * an entry no opaque pixel uses, or entry 0 as a last resort.
+ */
+
+static int
+png_find_transparent_index(GPixelRgn *region,	/* I - The drawable's pixels */
+                           GDrawable *drawable,	/* I - The drawable */
+                           gint      *num_colors)	/* I/O - Palette size */
+{
+  gboolean	used[256];
+  guchar	*row;
+  int		x, y, i;
+
+  if (*num_colors < 256)
+    return (*num_colors)++;
+
+  memset(used, 0, sizeof (used));
+  row = g_new(guchar, drawable->width * 2);
+
+  for (y = 0; y < drawable->height; y ++)
+  {
+    gimp_pixel_rgn_get_row(region, row, 0, y, drawable->width);
+    for (x = 0; x < drawable->width; x ++)
+      if (row[x * 2 + 1] >= 128)
+        used[row[x * 2]] = TRUE;
+  }
+
+  g_free(row);
+
+  for (i = 0; i < 256; i ++)
+    if (!used[i])
+      return i;
+
+  return 0;
+}
+
+
+/*
  * 'save_image()' - Save the specified image to a PNG file.
  */
 
@@ -659,10 +818,15 @@ save_image(char   *filename,	/* I - File to save to */
 		* volatile pixel = NULL;	/* Pixel data */
   char		*progress;	/* Title for progress display... */
   gchar		*basename;
-  gdouble	gamma;
   int		color_type;	/* PNG colour type */
-  png_color_8	sig_bit;	/* Significant bits */
+  int		bit_depth = 8;	/* Bits per sample in the file */
   guchar	*cmap = NULL;	/* Colormap of an indexed image */
+  png_color	palette[256];	/* Colormap as written */
+  png_byte	trans[256];	/* Palette transparency (tRNS) */
+  int		num_trans = 0;
+  int		trans_index = -1;	/* Index transparent pixels get */
+  guchar	*row_out = NULL;	/* One indexed row, for INDEXEDA */
+  png_text	text;		/* Software tag */
 
  /*
   * Open the file and initialize the PNG write "engine"...
@@ -715,8 +879,6 @@ save_image(char   *filename,	/* I - File to save to */
 
   png_set_compression_level(pp, pngvals.compression_level);
 
-  gamma = gimp_gamma();
-
   switch (type)
   {
     case RGB_IMAGE :
@@ -739,6 +901,10 @@ save_image(char   *filename,	/* I - File to save to */
         color_type       = PNG_COLOR_TYPE_PALETTE;
         bpp              = 1;
         break;
+    case INDEXEDA_IMAGE :
+        color_type       = PNG_COLOR_TYPE_PALETTE;
+        bpp              = 2;
+        break;
     default :
         g_message("PNG: can't save this image type");
         png_destroy_write_struct(&pp, &info);
@@ -746,26 +912,66 @@ save_image(char   *filename,	/* I - File to save to */
         return (0);
   };
 
-  png_set_IHDR(pp, info, drawable->width, drawable->height, 8, color_type,
+  if (color_type == PNG_COLOR_TYPE_PALETTE)
+  {
+    cmap = gimp_image_get_cmap(image_ID, &num_colors);
+    if (num_colors < 1)
+      num_colors = 1;
+    if (num_colors > 256)
+      num_colors = 256;
+    memset(palette, 0, sizeof (palette));
+    if (cmap)
+      memcpy(palette, cmap, num_colors * 3);
+
+    /*  Transparency becomes a palette entry of its own: a new one when
+     *  the palette has room, otherwise one no opaque pixel uses.
+     */
+    if (type == INDEXEDA_IMAGE)
+    {
+      trans_index = png_find_transparent_index(&pixel_rgn, drawable,
+                                               &num_colors);
+      memset(trans, 255, sizeof (trans));
+      trans[trans_index] = 0;
+      num_trans = trans_index + 1;
+    }
+
+    /*  Small palettes need fewer bits per pixel.  */
+    if (num_colors <= 2)
+      bit_depth = 1;
+    else if (num_colors <= 4)
+      bit_depth = 2;
+    else if (num_colors <= 16)
+      bit_depth = 4;
+  }
+
+  png_set_IHDR(pp, info, drawable->width, drawable->height, bit_depth,
+               color_type,
                pngvals.interlaced ? PNG_INTERLACE_ADAM7 : PNG_INTERLACE_NONE,
                PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
 
-  png_set_gAMA(pp, info, 1.0 / (gamma != 1.00 ? gamma : DEFAULT_GAMMA));
+  /*  The GIMP's pixels are sRGB, which is what everything today assumes;
+   *  say so rather than guess a gamma from the display settings.
+   */
+  png_set_sRGB_gAMA_and_cHRM(pp, info, PNG_sRGB_INTENT_PERCEPTUAL);
 
-  sig_bit.red   = 8;
-  sig_bit.green = 8;
-  sig_bit.blue  = 8;
-  sig_bit.gray  = 8;
-  sig_bit.alpha = 8;
-  png_set_sBIT(pp, info, &sig_bit);
-
-  if (type == INDEXED_IMAGE)
+  if (color_type == PNG_COLOR_TYPE_PALETTE)
   {
-    cmap = gimp_image_get_cmap(image_ID, &num_colors);
-    png_set_PLTE(pp, info, (png_colorp)cmap, num_colors);
+    png_set_PLTE(pp, info, palette, num_colors);
+    if (num_trans > 0)
+      png_set_tRNS(pp, info, trans, num_trans, NULL);
   }
 
+  memset(&text, 0, sizeof (text));
+  text.compression = PNG_TEXT_COMPRESSION_NONE;
+  text.key         = "Software";
+  text.text        = "GIMP42";
+  png_set_text(pp, info, &text, 1);
+
   png_write_info(pp, info);
+
+  /*  Rows go to libpng one byte per index; it packs them to bit_depth.  */
+  if (bit_depth < 8)
+    png_set_packing(pp);
 
  /*
   * Turn on interlace handling...
@@ -781,11 +987,14 @@ save_image(char   *filename,	/* I - File to save to */
   */
 
   tile_height = gimp_tile_height();
-  pixel       = g_new(guchar, tile_height * drawable->width * bpp);
+  pixel       = g_new(guchar, (gsize) tile_height * drawable->width * bpp);
   pixels      = g_new(guchar *, tile_height);
 
   for (i = 0; i < tile_height; i ++)
-    pixels[i]= pixel + drawable->width * bpp * i;
+    pixels[i]= pixel + (gsize) drawable->width * bpp * i;
+
+  if (type == INDEXEDA_IMAGE)
+    row_out = g_new(guchar, drawable->width);
 
   for (pass = 0; pass < num_passes; pass ++)
   {
@@ -804,7 +1013,21 @@ save_image(char   *filename,	/* I - File to save to */
 
       gimp_pixel_rgn_get_rect(&pixel_rgn, pixel, 0, begin, drawable->width, num);
 
-      png_write_rows(pp, pixels, num);
+      if (type == INDEXEDA_IMAGE)
+      {
+        int y, x;
+
+        /*  index + alpha to one index, transparent pixels to trans_index  */
+        for (y = 0; y < num; y ++)
+        {
+          for (x = 0; x < drawable->width; x ++)
+            row_out[x] = (pixels[y][x * 2 + 1] < 128) ? trans_index
+                                                      : pixels[y][x * 2];
+          png_write_row(pp, row_out);
+        }
+      }
+      else
+        png_write_rows(pp, pixels, num);
 
       gimp_progress_update(((double)pass + (double)end / (double)drawable->height) /
                            (double)num_passes);
@@ -817,6 +1040,7 @@ save_image(char   *filename,	/* I - File to save to */
   g_free(pixel);
   g_free(pixels);
   g_free(cmap);
+  g_free(row_out);
 
  /*
   * Done with the file...

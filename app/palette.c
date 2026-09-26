@@ -548,11 +548,11 @@ palette_entries_load (char *filename)
       return;
     }
 
-  while (!feof (fp))
+  /* stop on end of file *or* read error; testing only feof () here
+   * would spin forever on an I/O error
+   */
+  while (fgets (str, sizeof (str), fp))
     {
-      if (!fgets (str, 512, fp))
-	continue;
-
       palette_chomp (str);
 
       if (str[0] != '#' && str[0] != '\0')
@@ -571,7 +571,8 @@ palette_entries_load (char *filename)
 
 	  tok = strtok (NULL, "");
 
-	  palette_add_entry (entries, tok, r, g, b);
+	  palette_add_entry (entries, tok,
+			     CLAMP (r, 0, 255), CLAMP (g, 0, 255), CLAMP (b, 0, 255));
 	} /* if */
     } /* while */
 

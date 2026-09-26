@@ -338,6 +338,16 @@ static char* find_extension (char* filename)
       return ".xcf";  /* we've found it */
     }
     if (0 != strcmp(ext,".bz2")) {
+      /* the extension becomes part of a temp file name: letters and
+	 digits only (no ':' for a Windows stream name and the like) */
+      const char *p;
+
+      for (p = ext + 1; *p; p++)
+	if (!g_ascii_isalnum (*p))
+	  {
+	    g_message ("bz2: can't open bzip2ed file without a sensible extension\n");
+	    return NULL;
+	  }
       return ext;
     } else {
       /* we found ".bz2" so strip it, loop back, and look again */
@@ -507,8 +517,9 @@ bz2_run (const char *flags,
   /*  bzip2 writes to its stdout, which is copied into dest (setting a
    *  subprocess's stdout to a file path only exists on Unix).
    */
+  /*  "--": a file name starting with '-' is not an option  */
   proc = g_subprocess_new (G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error,
-			   bzip2, flags, src, NULL);
+			   bzip2, flags, "--", src, NULL);
   if (proc)
     {
       file = g_file_new_for_path (dest);

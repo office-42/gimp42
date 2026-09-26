@@ -138,6 +138,7 @@ static void subject_callback (GtkWidget * widget, gpointer data);
 static void comment_callback (GtkWidget * widget, gpointer data);
 static void filename_callback (GtkWidget * widget, gpointer data);
 static int valid_file (char *filename);
+static void mail_strip_newlines (char *str);
 static void create_headers (FILE * mailpipe);
 static char *find_extension (char *filename);
 static int to64(FILE *infile, FILE *outfile);
@@ -249,10 +250,14 @@ run (char *name,
 	  if(status == STATUS_SUCCESS)
 	    {
 	      /* this hasnt been tested yet */
-	      g_strlcpy (mail_info.filename, param[3].data.d_string, 256);
-	      g_strlcpy (mail_info.receipt, param[4].data.d_string, 256);
-	      g_strlcpy (mail_info.subject, param[5].data.d_string, 256);
-	      g_strlcpy (mail_info.comment, param[6].data.d_string, 256);
+	      g_strlcpy (mail_info.filename,
+			 param[3].data.d_string ? param[3].data.d_string : "", 256);
+	      g_strlcpy (mail_info.receipt,
+			 param[4].data.d_string ? param[4].data.d_string : "", 256);
+	      g_strlcpy (mail_info.subject,
+			 param[5].data.d_string ? param[5].data.d_string : "", 256);
+	      g_strlcpy (mail_info.comment,
+			 param[6].data.d_string ? param[6].data.d_string : "", 256);
 	      mail_info.encapsulation = param[7].data.d_int32;
 	    }
 	  break;
@@ -265,6 +270,11 @@ run (char *name,
 	}
 
       *nreturn_vals = 1;
+      if (status != STATUS_SUCCESS)
+	{
+	  values[0].data.d_status = status;
+	  return;
+	}
       if (save_image (mail_info.filename,
 		      image_ID,
 		      drawable_ID,
@@ -304,6 +314,37 @@ save_image (char *filename,
 
   if (NULL == (ext = find_extension (filename)))
     return 0;
+
+  /* the extension becomes part of the temp file name: letters and digits
+   * only, so it cannot add path components
+   */
+  {
+    const char *p;
+
+    for (p = ext + 1; *p; p++)
+      if (!g_ascii_isalnum (*p))
+	{
+	  g_message ("mail: invalid file extension \"%s\"\n", ext);
+	  return 0;
+	}
+  }
+
+  /* The header fields end at a line break: one in a value would let it
+   * add headers (Bcc: ...) or body parts of its own.
+   */
+  mail_strip_newlines (mail_info.receipt);
+  mail_strip_newlines (mail_info.subject);
+  mail_strip_newlines (mail_info.filename);
+
+  /* The recipient is a command line argument of sendmail: one that
+   * starts with '-' would be taken as an option (-C config, -X logfile,
+   * ...), not an address.
+   */
+  if (mail_info.receipt[0] == '\0' || mail_info.receipt[0] == '-')
+    {
+      g_message ("mail: invalid recipient \"%s\"\n", mail_info.receipt);
+      return 0;
+    }
 
   /* there has to be a sendmail to hand the message to */
   mailer = find_mailer ();
@@ -416,6 +457,15 @@ save_image (char *filename,
   g_free (mailer);
 
   return ok;
+}
+
+/* Turns line breaks (and other control characters) into spaces.  */
+static void
+mail_strip_newlines (char *str)
+{
+  for (; *str; str++)
+    if ((unsigned char) *str < ' ' || *str == 0x7f)
+      *str = ' ';
 }
 
 /* The sendmail to use: MAILER if it is there, otherwise a "sendmail"

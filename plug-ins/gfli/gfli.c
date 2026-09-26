@@ -377,6 +377,14 @@ gint32 load_image (gchar *filename, gint32 from_frame, gint32 to_frame)
 	fli_read_header(f, &fli_header);
 	fseek(f,128,SEEK_SET);
 
+	if (fli_header.width == 0 || fli_header.height == 0) {
+		g_message ("FLI: invalid frame size");
+		fclose(f);
+		return -1;
+	}
+	memset(cm, 0, sizeof(cm));
+	memset(ocm, 0, sizeof(ocm));
+
 	/*
 	 * Fix parameters
 	 */
@@ -405,8 +413,8 @@ gint32 load_image (gchar *filename, gint32 from_frame, gint32 to_frame)
 	image_id = gimp_image_new (fli_header.width, fli_header.height, INDEXED);
 	gimp_image_set_filename (image_id, filename);
 
-	fb=g_malloc(fli_header.width * fli_header.height);
-	ofb=g_malloc(fli_header.width * fli_header.height);
+	fb=g_malloc0((gsize)fli_header.width * fli_header.height);
+	ofb=g_malloc0((gsize)fli_header.width * fli_header.height);
 
 	/*
 	 * Skip to the beginning of requested frames: 
@@ -546,7 +554,7 @@ int save_image(gchar *filename, gint32 image_id, gint32 from_frame, gint32 to_fr
 	fli_header.width=gimp_image_width(image_id);
 	fli_header.height=gimp_image_height(image_id);
 
-	if ((fli_header.width==320) && (fli_header.height=200)) {
+	if ((fli_header.width==320) && (fli_header.height==200)) {
 		fli_header.magic=HEADER_FLI;
 	} else {
 		fli_header.magic=HEADER_FLC;
@@ -567,15 +575,15 @@ int save_image(gchar *filename, gint32 image_id, gint32 from_frame, gint32 to_fr
 	}
 	fseek(f,128,SEEK_SET);
 
-	fb=g_malloc(fli_header.width * fli_header.height);
-	ofb=g_malloc(fli_header.width * fli_header.height);
+	fb=g_malloc0((gsize)fli_header.width * fli_header.height);
+	ofb=g_malloc0((gsize)fli_header.width * fli_header.height);
 
 	/*
 	 * Now write all frames
 	 */
 	for (cnt=from_frame; cnt<=to_frame; cnt++) {
 		gint offset_x, offset_y, xc, yc;
-		guint rows, cols, rowstride;
+		guint rows, cols, rowstride, bpp;
 		guchar *tmp;
 
 		gimp_progress_update ((double) cnt / (double)(to_frame-from_frame));
@@ -587,11 +595,12 @@ int save_image(gchar *filename, gint32 image_id, gint32 from_frame, gint32 to_fr
 		rows = drawable->height;
 		rowstride = drawable->width;
 		gimp_pixel_rgn_init (&pixel_rgn, drawable, 0, 0, drawable->width, drawable->height, FALSE, FALSE);
-		tmp=malloc(cols * rows);
+		bpp = drawable->bpp;
+		tmp=g_malloc((gsize)cols * rows * bpp);
 		gimp_pixel_rgn_get_rect (&pixel_rgn, tmp, 0, 0, drawable->width, drawable->height);
 
 		/* now paste it into the framebuffer, with the neccessary offset */
-		for (yc=0; yc<cols; yc++) {
+		for (yc=0; yc<rows; yc++) {
 			int yy;
 			yy=yc+offset_y;
 			if ((yy>0) && (yy<fli_header.height)) {
@@ -599,12 +608,12 @@ int save_image(gchar *filename, gint32 image_id, gint32 from_frame, gint32 to_fr
 					int xx;
 					xx=xc+offset_x;
 					if ((xx>0) && (xx<fli_header.width)) {
-						fb[yy*fli_header.width + xx]=tmp[yc*cols+xc];
+						fb[yy*fli_header.width + xx]=tmp[(yc*cols+xc)*bpp];
 					}
 				}
 			}
 		}
-		free(tmp);
+		g_free(tmp);
 
 		/* save the frame */
 		if (cnt>from_frame) {
