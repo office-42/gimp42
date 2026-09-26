@@ -198,5 +198,5 @@ tile_cache_zorch_next ()
 static guint
 tile_cache_hash (Tile *tile)
 {
-  return (gulong) tile;
+  return g_direct_hash (tile);
 }

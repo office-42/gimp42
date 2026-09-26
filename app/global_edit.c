@@ -381,6 +381,137 @@ edit_fill (GImage *gimage,
   return TRUE;
 }
 
+/*  The system clipboard.
+ *
+ *  Cut and Copy still fill the GIMP's own buffer, and also put the image
+ *  on the system clipboard, so it can be pasted into other programs.
+ *  Paste takes an image another program put on the clipboard; when the
+ *  clipboard is the GIMP's own, it pastes its own buffer, which keeps
+ *  the exact pixels (grayscale, alpha) the clipboard's RGBA would lose.
+ */
+
+static GdkClipboard *
+global_edit_clipboard (void)
+{
+  GdkDisplay *display;
+
+  if (no_interface)
+    return NULL;
+
+  display = gdk_display_get_default ();
+
+  return display ? gdk_display_get_clipboard (display) : NULL;
+}
+
+/*  An edit buffer (gray, gray + alpha, RGB or RGBA) as a texture.  */
+static GdkTexture *
+global_edit_buffer_to_texture (TileManager *tiles)
+{
+  PixelRegion srcPR;
+  GdkTexture *texture;
+  GBytes *bytes;
+  guchar *pixels;
+  guchar *row;
+  int width, height, bpp;
+  int x, y;
+
+  width  = tiles->levels[0].width;
+  height = tiles->levels[0].height;
+  bpp    = tiles->levels[0].bpp;
+
+  if (width <= 0 || height <= 0 || bpp < 1 || bpp > 4)
+    return NULL;
+
+  pixels = g_malloc ((gsize) width * height * 4);
+  row = g_malloc (width * bpp);
+
+  pixel_region_init (&srcPR, tiles, 0, 0, width, height, FALSE);
+
+  for (y = 0; y < height; y++)
+    {
+      guchar *d = pixels + (gsize) y * width * 4;
+
+      pixel_region_get_row (&srcPR, 0, y, width, row, 1);
+
+      for (x = 0; x < width; x++, d += 4)
+	{
+	  const guchar *p = row + x * bpp;
+
+	  switch (bpp)
+	    {
+	    case 1: d[0] = d[1] = d[2] = p[0]; d[3] = 255;  break;
+	    case 2: d[0] = d[1] = d[2] = p[0]; d[3] = p[1]; break;
+	    case 3: d[0] = p[0]; d[1] = p[1]; d[2] = p[2]; d[3] = 255;  break;
+	    case 4: d[0] = p[0]; d[1] = p[1]; d[2] = p[2]; d[3] = p[3]; break;
+	    }
+	}
+    }
+
+  g_free (row);
+
+  bytes = g_bytes_new_take (pixels, (gsize) width * height * 4);
+  texture = gdk_memory_texture_new (width, height, GDK_MEMORY_R8G8B8A8,
+				    bytes, width * 4);
+  g_bytes_unref (bytes);
+
+  return texture;
+}
+
+/*  A texture from the clipboard as an RGBA edit buffer.  */
+static TileManager *
+global_edit_texture_to_buffer (GdkTexture *texture)
+{
+  GdkTextureDownloader *downloader;
+  PixelRegion destPR;
+  TileManager *tiles;
+  guchar *pixels;
+  gsize stride;
+  int width, height;
+  int y;
+
+  width  = gdk_texture_get_width (texture);
+  height = gdk_texture_get_height (texture);
+  if (width <= 0 || height <= 0)
+    return NULL;
+
+  stride = (gsize) width * 4;
+  pixels = g_malloc (stride * height);
+
+  downloader = gdk_texture_downloader_new (texture);
+  gdk_texture_downloader_set_format (downloader, GDK_MEMORY_R8G8B8A8);
+  gdk_texture_downloader_download_into (downloader, pixels, stride);
+  gdk_texture_downloader_free (downloader);
+
+  tiles = tile_manager_new (width, height, 4);
+  tiles->x = 0;
+  tiles->y = 0;
+
+  pixel_region_init (&destPR, tiles, 0, 0, width, height, TRUE);
+  for (y = 0; y < height; y++)
+    pixel_region_set_row (&destPR, 0, y, width, pixels + y * stride);
+
+  g_free (pixels);
+
+  return tiles;
+}
+
+static void
+global_edit_export (TileManager *tiles)
+{
+  GdkClipboard *clipboard = global_edit_clipboard ();
+  GdkTexture *texture;
+
+  if (!clipboard || !tiles)
+    return;
+
+  texture = global_edit_buffer_to_texture (tiles);
+  if (texture)
+    {
+      gdk_clipboard_set_texture (clipboard, texture);
+      g_object_unref (texture);
+    }
+}
+
 int
 global_edit_cut (void *gdisp_ptr)
 {
@@ -394,6 +525,8 @@ global_edit_cut (void *gdisp_ptr)
     return FALSE;
   else
     {
+      global_edit_export (global_buf);
+
       /*  flush the display  */
       gdisplays_flush ();
       return TRUE;
@@ -410,7 +543,65 @@ global_edit_copy (void *gdisp_ptr)
   if (!edit_copy (gdisp->gimage, gimage_active_drawable (gdisp->gimage)))
     return FALSE;
   else
-    return TRUE;
+    {
+      global_edit_export (global_buf);
+      return TRUE;
+    }
+}
+
+typedef struct
+{
+  int display_ID;
+  int paste_into;
+} PasteRequest;
+
+static int
+global_edit_paste_buffer (GDisplay *gdisp,
+			  int       paste_into)
+{
+  if (!global_buf ||
+      !edit_paste (gdisp->gimage, gimage_active_drawable (gdisp->gimage),
+		   global_buf, paste_into))
+    return FALSE;
+
+  /*  flush the display  */
+  gdisplays_flush ();
+  return TRUE;
+}
+
+static void
+global_edit_paste_texture_ready (GObject      *source,
+				 GAsyncResult *result,
+				 gpointer      data)
+{
+  PasteRequest *request = data;
+  GdkTexture *texture;
+  GDisplay *gdisp;
+
+  texture = gdk_clipboard_read_texture_finish (GDK_CLIPBOARD (source),
+					       result, NULL);
+  if (texture)
+    {
+      TileManager *tiles = global_edit_texture_to_buffer (texture);
+
+      if (tiles)
+	{
+	  if (global_buf)
+	    tile_manager_destroy (global_buf);
+	  global_buf = tiles;
+	}
+      g_object_unref (texture);
+    }
+
+  /*  The display may have been closed while the clipboard was read.  */
+  gdisp = gdisplay_get_ID (request->display_ID);
+  if (gdisp && gimage_active_drawable (gdisp->gimage))
+    {
+      active_tool_control (HALT, gdisp);
+      global_edit_paste_buffer (gdisp, request->paste_into);
+    }
+
+  g_free (request);
 }
 
 int
@@ -418,19 +609,29 @@ global_edit_paste (void *gdisp_ptr,
 		   int   paste_into)
 {
   GDisplay *gdisp;
+  GdkClipboard *clipboard;
 
   /*  stop any active tool  */
   gdisp = (GDisplay *) gdisp_ptr;
   active_tool_control (HALT, gdisp_ptr);
 
-  if (!edit_paste (gdisp->gimage, gimage_active_drawable (gdisp->gimage), global_buf, paste_into))
-    return FALSE;
-  else
+  clipboard = global_edit_clipboard ();
+
+  /*  Another program's image: read it, then paste.  */
+  if (clipboard && !gdk_clipboard_is_local (clipboard))
     {
-      /*  flush the display  */
-      gdisplays_flush ();
+      PasteRequest *request = g_new0 (PasteRequest, 1);
+
+      request->display_ID = gdisp->ID;
+      request->paste_into = paste_into;
+
+      gdk_clipboard_read_texture_async (clipboard, NULL,
+					global_edit_paste_texture_ready,
+					request);
       return TRUE;
     }
+
+  return global_edit_paste_buffer (gdisp, paste_into);
 }
 
 void

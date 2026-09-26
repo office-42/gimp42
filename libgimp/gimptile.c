@@ -393,5 +393,5 @@ gimp_tile_cache_zorch ()
 static guint
 gimp_tile_hash (GTile *tile)
 {
-  return (gulong) tile;
+  return g_direct_hash (tile);
 }

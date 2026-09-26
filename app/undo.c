@@ -1196,7 +1196,7 @@ undo_push_layer_mod (GImage *gimage,
 
       data[0] = layer_ptr;
       data[1] = (void *) tiles;
-      data[2] = (void *) ((long) GIMP_DRAWABLE(layer)->type);
+      data[2] = GINT_TO_POINTER (GIMP_DRAWABLE(layer)->type);
 
       return TRUE;
     }
@@ -1246,8 +1246,8 @@ undo_pop_layer_mod (GImage *gimage,
   temp = GIMP_DRAWABLE(layer)->tiles;
   temp->x = GIMP_DRAWABLE(layer)->offset_x;
   temp->y = GIMP_DRAWABLE(layer)->offset_y;
-  layer_type = (long) data[2];
-  data[2] = (void *) ((long) GIMP_DRAWABLE(layer)->type);
+  layer_type = GPOINTER_TO_INT (data[2]);
+  data[2] = GINT_TO_POINTER (GIMP_DRAWABLE(layer)->type);
 
   /*  restore the layer's data  */
   GIMP_DRAWABLE(layer)->tiles = tiles;
@@ -1266,7 +1266,7 @@ undo_pop_layer_mod (GImage *gimage,
     }
 
   /*  If the layer type changed, update the gdisplay titles  */
-  if (GIMP_DRAWABLE(layer)->type != (long) data[2])
+  if (GIMP_DRAWABLE(layer)->type != GPOINTER_TO_INT (data[2]))
     gdisplays_update_title (GIMP_DRAWABLE(layer)->gimage_ID);
 
   /*  Set the new tile manager  */
