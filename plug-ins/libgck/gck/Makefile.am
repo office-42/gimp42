@@ -1,0 +1,37 @@
+## Process this file with automake to produce Makefile.in
+
+gckincludedir = $(includedir)/gck
+
+lib_LTLIBRARIES = libgck.la
+
+libgck_la_SOURCES =	gckcolor.c	\
+			gcklistbox.c	\
+			gckmath.c	\
+			gckui.c		\
+			gckvector.c
+
+gckinclude_HEADERS =	gck.h		\
+			gckcolor.h	\
+			gckcommon.h	\
+			gckimage.h	\
+			gcklistbox.h	\
+			gckmath.h	\
+			gcktypes.h	\
+			gckui.h		\
+			gckvector.h
+
+libgck_la_LDFLAGS = -version-info $(GIMP_MAJOR_VERSION):$(GIMP_MINOR_VERSION):0
+
+INCLUDES = \
+	-I..			\
+	-I$(srcdir)/..		\
+	$(X_CFLAGS)		\
+	-I$(top_srcdir)		\
+	-I$(includedir)
+
+.PHONY: files
+
+files:
+	@files=`ls $(DISTFILES) 2> /dev/null `; for p in $$files; do \
+	  echo $$p; \
+	done
