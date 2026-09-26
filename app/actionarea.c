@@ -19,7 +19,7 @@
 #include "actionarea.h"
 
 void
-build_action_area (GtkDialog *      dlg,
+build_action_area (GtkWidget *      dlg,
 		   ActionAreaItem * actions,
 		   int              num_actions,
 		   int              default_action)
@@ -27,22 +27,12 @@ build_action_area (GtkDialog *      dlg,
   GtkWidget *button;
   int i;
 
-  gtk_container_border_width (GTK_CONTAINER (dlg->action_area), 2);
-
   for (i = 0; i < num_actions; i++)
     {
-      button = gtk_button_new_with_label (actions[i].label);
-      GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-      gtk_box_pack_start (GTK_BOX (dlg->action_area), button, TRUE, TRUE, 0);
-
-      if (actions[i].callback)
-	gtk_signal_connect (GTK_OBJECT (button), "clicked",
-			    (GtkSignalFunc) actions[i].callback,
-			    actions[i].user_data);
-
-      if (default_action == i)
-	gtk_widget_grab_default (button);
-      gtk_widget_show (button);
+      button = gimp_dialog_add_button (dlg, actions[i].label,
+				       G_CALLBACK (actions[i].callback),
+				       actions[i].user_data,
+				       default_action == i);
 
       actions[i].widget = button;
     }

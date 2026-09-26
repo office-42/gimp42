@@ -21,7 +21,15 @@
 #ifndef cmap_included
 #define cmap_included
 
+#include <glib.h>
+
 #define cmap_random (-1)
+
+/* A non-negative 31 bit random number, like random () gave on the
+   systems flame was written for.  The C library's rand () is only 15
+   bits on Windows, far too few for random_uniform01 () and friends.
+   The generator is seeded with g_random_set_seed ().  */
+#define flame_random() ((int) (g_random_int () & 0x7fffffff))
 
 
 

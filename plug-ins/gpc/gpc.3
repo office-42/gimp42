@@ -31,7 +31,7 @@ Set tooltip for a widget (if tip is non-null).
 
 .Ss
 void gpc_add_action_button(char *label,
-    GtkSignalFunc callback, GtkWidget *dialog, char *tip);
+    GCallback callback, GtkWidget *dialog, char *tip);
 .Se
 Add action button (with tooltip) to a dialog.
 .Ss
@@ -131,7 +131,7 @@ Usage:
     void
     gpc_add_action_button(
         char *label,            /* text for action button */
-        GtkSignalFunc callback, /* callback function address */
+        GCallback callback, /* callback function address */
         GtkWidget *dialog,      /* dialog widget to contain button */
         char *tip               /* tooltip text */
     )
@@ -144,10 +144,10 @@ Example:
     }
         :
     gpc_add_action_button("OK",
-        (GtkSignalFunc) randomize_ok_callback, dlg,
+        (GCallback) randomize_ok_callback, dlg,
         "Accept settings and apply filter to image");
     gpc_add_action_button("Cancel",
-        (GtkSignalFunc) gpc_cancel_callback, dlg,
+        (GCallback) gpc_cancel_callback, dlg,
         "Close plug-in without making any changes");
 .fi
 

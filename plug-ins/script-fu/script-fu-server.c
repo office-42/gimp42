@@ -16,27 +16,23 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
+/*  The server listens on a TCP port with GIO sockets, which work the same
+ *  on Unix and on Windows (winsock, set up by GIO).  Sockets are watched
+ *  from a main context of the server's own, iterated by
+ *  script_fu_server_listen () where the old code called select ().
+ */
+
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <ctype.h>
-#include <unistd.h>
 #include <time.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 
-#include "config.h"
-
-#ifdef HAVE_SYS_SELECT_H
-#include <sys/select.h>
-#endif /* HAVE_SYS_SELECT_H */
+#include <glib/gstdio.h>
+#include <gio/gio.h>
 
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 #include "gtk/gtk.h"
 #include "siod.h"
 #include "script-fu-server.h"
@@ -47,19 +43,6 @@
 
 #ifdef NO_DIFFTIME
 #define difftime(a,b) (((double)(a)) - ((double)(b)))
-#endif
-
-#ifndef NO_FD_SET
-#  define SELECT_MASK fd_set
-#else
-#  ifndef _AIX
-     typedef long fd_mask;
-#  endif
-#  if defined(_IBMR2)
-#    define SELECT_MASK void
-#  else
-#    define SELECT_MASK int
-#  endif
 #endif
 
 
@@ -90,9 +73,9 @@
 
 typedef struct
 {
-  gchar *command;
-  gint   filedes;
-  gint   request_no;
+  gchar   *command;
+  GSocket *client;
+  gint     request_no;
 } SFCommand;
 
 typedef struct
@@ -110,22 +93,28 @@ typedef struct
  *  Local Functions
  */
 
-static void   server_start       (gint       port,
-				  gchar     *logfile);
-static gint   execute_command    (SFCommand *cmd);
-static gint   read_from_client   (gint       filedes);
-static gint   make_socket        (guint      port);
-static void   server_log         (gchar     *format,
-				     ...);
-static void   server_quit        (void);
+static void     server_start       (gint       port,
+				    gchar     *logfile);
+static gint     execute_command    (SFCommand *cmd);
+static gint     read_from_client   (GSocket   *client);
+static GSocket *make_socket        (guint      port);
+static void     server_log         (gchar     *format,
+				    ...) G_GNUC_PRINTF (1, 2);
+static void     server_quit        (void);
 
-static gint   server_interface   (void);
-static void   ok_callback        (GtkWidget *widget,
-				  gpointer   data);
-static void   cancel_callback    (GtkWidget *widget,
-				  gpointer   data);
+static gboolean server_accept      (GSocket      *socket,
+				    GIOCondition  condition,
+				    gpointer      data);
+static gboolean server_client_input (GSocket      *socket,
+				    GIOCondition  condition,
+				    gpointer      data);
+static gboolean server_timeout     (gpointer   data);
 
-extern char* g_vsprintf (gchar *fmt, va_list *args, va_list *args2);
+static gint     server_interface   (void);
+static void     ok_callback        (GtkWidget *widget,
+				    gpointer   data);
+static void     cancel_callback    (GtkWidget *widget,
+				    gpointer   data);
 
 /*
  *  Global variables
@@ -135,13 +124,13 @@ gint server_mode = FALSE;
 /*
  *  Local variables
  */
-static gint   server_sock;
-static GList *command_queue = NULL;
-static gint   queue_length = 0;
-static gint   request_no = 0;
-static FILE  *server_log_file = NULL;
-static GHashTable *clientname_ht = NULL;
-static SELECT_MASK server_active, server_read;
+static GSocket      *server_sock = NULL;
+static GMainContext *server_context = NULL;
+static GList        *command_queue = NULL;
+static gint          queue_length = 0;
+static gint          request_no = 0;
+static FILE         *server_log_file = NULL;
+static GHashTable   *clientname_ht = NULL;
 
 static ServerInterface sint =
 {
@@ -213,79 +202,96 @@ script_fu_server_run (char     *name,
 void
 script_fu_server_listen (gint timeout)
 {
-  struct sockaddr_in clientname;
-  struct timeval tv;
-  struct timeval *tvp;
-  gint i;
-  size_t size;
+  GSource *timeout_source = NULL;
 
-  /*  Set time struct  */
+  if (server_context == NULL)
+    return;
+
+  /*  Set the timeout  */
   if (timeout)
     {
-      tv.tv_sec = timeout / 1000;
-      tv.tv_usec = timeout % 1000;
-      tvp = &tv;
+      timeout_source = g_timeout_source_new (timeout);
+      g_source_set_callback (timeout_source, server_timeout, NULL, NULL);
+      g_source_attach (timeout_source, server_context);
     }
-  else
-    tvp = NULL;
 
   /* Block until input arrives on one or more active sockets or timeout occurs. */
-  server_read = server_active;
-  if (select (FD_SETSIZE, &server_read, NULL, NULL, tvp) < 0)
-    {
-      perror ("select");
-      return;
-    }
+  g_main_context_iteration (server_context, TRUE);
 
   /* Service all the sockets with input pending. */
-  for (i = 0; i < FD_SETSIZE; ++i)
-    if (FD_ISSET (i, &server_read))
-      {
-	if (i == server_sock)
-	  {
-	    /* Connection request on original socket. */
-	    gint new;
+  while (g_main_context_iteration (server_context, FALSE))
+    ;
 
-	    size = sizeof (clientname);
-	    new = accept (server_sock,
-			  (struct sockaddr *) &clientname,
-			  &size);
-	    if (new < 0)
-	      {
-		perror ("accept");
-		return;
-	      }
+  if (timeout_source)
+    {
+      g_source_destroy (timeout_source);
+      g_source_unref (timeout_source);
+    }
+}
 
-	    /*  Associate the client address with the socket  */
-	    g_hash_table_insert (clientname_ht,
-				 (gpointer) new,
-				 g_strdup (inet_ntoa (clientname.sin_addr)));
-	    /*
-	    server_log ("Server: connect from host %s, port %d.\n",
-			inet_ntoa (clientname.sin_addr),
-			(unsigned int) ntohs (clientname.sin_port));
-			*/
+static gboolean
+server_timeout (gpointer data)
+{
+  return G_SOURCE_CONTINUE;
+}
 
-	    FD_SET (new, &server_active);
-	  }
-	else
-	  {
-	    if (read_from_client (i) < 0)
-	      {
-		/*  Disassociate the client address with the socket  */
-		g_hash_table_remove (clientname_ht, (gpointer) i);
+static gboolean
+server_accept (GSocket      *socket,
+	       GIOCondition  condition,
+	       gpointer      data)
+{
+  /* Connection request on original socket. */
+  GSocket        *client;
+  GSocketAddress *address;
+  GSource        *source;
+  gchar          *clientname = NULL;
+  GError         *error = NULL;
 
-		/*
-		server_log ("Server: disconnect from host %s, port %d.\n",
-			    inet_ntoa (clientname.sin_addr),
-			    (unsigned int) ntohs (clientname.sin_port));
-			    */
+  client = g_socket_accept (server_sock, NULL, &error);
+  if (client == NULL)
+    {
+      g_printerr ("accept: %s\n", error->message);
+      g_error_free (error);
+      return G_SOURCE_CONTINUE;
+    }
 
-		close (i);
-		FD_CLR (i, &server_active);
-	      }
-	  }
-      }
+  g_socket_set_blocking (client, TRUE);
+
+  /*  Associate the client address with the socket  */
+  address = g_socket_get_remote_address (client, NULL);
+  if (address && G_IS_INET_SOCKET_ADDRESS (address))
+    clientname = g_inet_address_to_string
+      (g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (address)));
+  if (address)
+    g_object_unref (address);
+
+  g_hash_table_insert (clientname_ht, client, clientname);
+
+  source = g_socket_create_source (client, G_IO_IN | G_IO_HUP | G_IO_ERR,
+				   NULL);
+  g_source_set_callback (source, (GSourceFunc) server_client_input,
+			 NULL, NULL);
+  g_source_attach (source, server_context);
+  g_source_unref (source);
+
+  return G_SOURCE_CONTINUE;
+}
+
+static gboolean
+server_client_input (GSocket      *socket,
+		     GIOCondition  condition,
+		     gpointer      data)
+{
+  if (read_from_client (socket) < 0)
+    {
+      /*  Disassociate the client address with the socket  */
+      g_socket_close (socket, NULL);
+      g_hash_table_remove (clientname_ht, socket);
+
+      return G_SOURCE_REMOVE;
+    }
+
+  return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -293,13 +299,16 @@ server_start (gint   port,
 	      gchar *logfile)
 {
   SFCommand *cmd;
+  GSource   *source;
+  GError    *error = NULL;
 
-  /*  Set up the clientname hash table  */
-  clientname_ht = g_hash_table_new (g_direct_hash, NULL);
+  /*  Set up the clientname hash table; it owns the client sockets  */
+  clientname_ht = g_hash_table_new_full (g_direct_hash, NULL,
+					 g_object_unref, g_free);
 
   /*  Setup up the server log file  */
-  if (logfile)
-    server_log_file = fopen (logfile, "a");
+  if (logfile && *logfile)
+    server_log_file = g_fopen (logfile, "a");
   else
     server_log_file = NULL;
   if (server_log_file == NULL)
@@ -307,17 +316,23 @@ server_start (gint   port,
 
   /* Create the socket and set it up to accept connections. */
   server_sock = make_socket (port);
-  if (listen (server_sock, 5) < 0)
+  g_socket_set_listen_backlog (server_sock, 5);
+  if (! g_socket_listen (server_sock, &error))
     {
-      perror ("listen");
+      g_printerr ("listen: %s\n", error->message);
+      g_error_free (error);
       return;
     }
 
   server_log ("Script-fu initialized and listening...\n");
 
   /* Initialize the set of active sockets. */
-  FD_ZERO (&server_active);
-  FD_SET (server_sock, &server_active);
+  server_context = g_main_context_new ();
+
+  source = g_socket_create_source (server_sock, G_IO_IN, NULL);
+  g_source_set_callback (source, (GSourceFunc) server_accept, NULL, NULL);
+  g_source_attach (source, server_context);
+  g_source_unref (source);
 
   /*  Loop until the server is finished  */
   while (! script_fu_done)
@@ -338,6 +353,7 @@ server_start (gint   port,
 
 	  /*  Free the request  */
 	  g_free (cmd->command);
+	  g_object_unref (cmd->client);
 	  g_free (cmd);
 	}
     }
@@ -349,6 +365,66 @@ server_start (gint   port,
     fclose (server_log_file);
 }
 
+/*  Writes all of buffer, or returns FALSE.  */
+static gboolean
+server_write (GSocket     *client,
+	      const gchar *buffer,
+	      gsize        length)
+{
+  GError *error = NULL;
+  gssize  n;
+
+  while (length > 0)
+    {
+      n = g_socket_send (client, buffer, length, NULL, &error);
+      if (n < 0)
+	{
+	  /*  Write error  */
+	  g_printerr ("write: %s\n", error->message);
+	  g_error_free (error);
+	  return FALSE;
+	}
+
+      buffer += n;
+      length -= n;
+    }
+
+  return TRUE;
+}
+
+/*  Reads up to length bytes, waiting for them.  Returns the number read,
+ *  which is less than length at end of file, or -1 on a read error.
+ */
+static gssize
+server_read (GSocket *client,
+	     gchar   *buffer,
+	     gsize    length)
+{
+  GError *error = NULL;
+  gsize   total = 0;
+  gssize  n;
+
+  while (total < length)
+    {
+      n = g_socket_receive (client, buffer + total, length - total,
+			    NULL, &error);
+      if (n < 0)
+	{
+	  /* Read error. */
+	  g_printerr ("read: %s\n", error->message);
+	  g_error_free (error);
+	  return -1;
+	}
+      else if (n == 0)
+	/* End-of-file. */
+	break;
+
+      total += n;
+    }
+
+  return total;
+}
+
 static gint
 execute_command (SFCommand *cmd)
 {
@@ -357,7 +433,6 @@ execute_command (SFCommand *cmd)
   time_t clock1, clock2;
   gint response_len;
   gint error;
-  gint i;
 
   /*  Get the client address from the address/socket table  */
   server_log ("Processing request #%d\n", cmd->request_no);
@@ -394,27 +469,17 @@ execute_command (SFCommand *cmd)
   buffer[RSP_LEN_L_BYTE] = (guchar) (response_len & 0xFF);
 
   /*  Write the response to the client  */
-  for (i = 0; i < RESPONSE_HEADER; i++)
-    if (write (cmd->filedes, buffer + i, 1) < 0)
-      {
-	/*  Write error  */
-	perror ("write");
-	return 0;
-      }
+  if (! server_write (cmd->client, (gchar *) buffer, RESPONSE_HEADER))
+    return 0;
 
-  for (i = 0; i < response_len; i++)
-    if (write (cmd->filedes, response + i, 1) < 0)
-      {
-	/*  Write error  */
-	perror ("write");
-	return 0;
-      }
+  if (! server_write (cmd->client, response, response_len))
+    return 0;
 
   return 0;
 }
 
 static gint
-read_from_client (gint filedes)
+read_from_client (GSocket *client)
 {
   SFCommand *cmd;
   guchar buffer[COMMAND_HEADER];
@@ -422,21 +487,14 @@ read_from_client (gint filedes)
   gchar *clientaddr;
   time_t clock;
   gint command_len;
-  gint nbytes;
-  gint i;
+  gssize nbytes;
 
-  for (i = 0; i < COMMAND_HEADER; i++)
-    {
-      if ((nbytes = read (filedes, buffer + i, 1)) < 0)
-	{
-	  /* Read error. */
-	  perror ("read");
-	  return 0;
-	}
-      else if (nbytes == 0)
-	/* End-of-file. */
-	return -1;
-    }
+  nbytes = server_read (client, (gchar *) buffer, COMMAND_HEADER);
+  if (nbytes < 0)
+    return 0;
+  else if (nbytes < COMMAND_HEADER)
+    /* End-of-file. */
+    return -1;
 
   if (buffer[MAGIC_BYTE] != MAGIC)
     {
@@ -446,16 +504,18 @@ read_from_client (gint filedes)
   command_len = (buffer [CMD_LEN_H_BYTE] << 8) | buffer [CMD_LEN_L_BYTE];
   command = g_new (gchar, command_len + 1);
 
-  for (i = 0; i < command_len; i++)
-    if (read (filedes, command + i, 1) == 0)
-      {
-	server_log ("Error reading command.  Read %d out of %d bytes.\n", i, command_len);
-	return -1;
-      }
+  nbytes = server_read (client, command, command_len);
+  if (nbytes < command_len)
+    {
+      server_log ("Error reading command.  Read %d out of %d bytes.\n",
+		  (gint) MAX (nbytes, 0), command_len);
+      g_free (command);
+      return -1;
+    }
 
   command[command_len] = '\0';
   cmd = g_new (SFCommand, 1);
-  cmd->filedes = filedes;
+  cmd->client = g_object_ref (client);
   cmd->command = command;
   cmd->request_no = request_no ++;
 
@@ -464,39 +524,43 @@ read_from_client (gint filedes)
   queue_length ++;
 
   /*  Get the client address from the address/socket table  */
-  clientaddr = g_hash_table_lookup (clientname_ht, (gpointer) cmd->filedes);
+  clientaddr = g_hash_table_lookup (clientname_ht, cmd->client);
   time (&clock);
   server_log ("Received request #%d from IP address %s: %s on %s, [Request queue length: %d]",
-	      cmd->request_no, clientaddr, cmd->command, ctime (&clock), queue_length);
+	      cmd->request_no, clientaddr ? clientaddr : "(unknown)",
+	      cmd->command, ctime (&clock), queue_length);
 
   return 0;
 }
 
-static gint
+static GSocket *
 make_socket (guint port)
 {
-  gint sock;
-  struct sockaddr_in name;
-  gint v = 1;
+  GSocket        *sock;
+  GInetAddress   *any;
+  GSocketAddress *name;
+  GError         *error = NULL;
 
   /* Create the socket. */
-  sock = socket (PF_INET, SOCK_STREAM, 0);
-  if (sock < 0)
+  sock = g_socket_new (G_SOCKET_FAMILY_IPV4, G_SOCKET_TYPE_STREAM,
+		       G_SOCKET_PROTOCOL_TCP, &error);
+  if (sock == NULL)
     {
-      perror ("socket");
+      g_printerr ("socket: %s\n", error->message);
       gimp_quit ();
     }
-  setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &v, sizeof(v));
 
   /* Give the socket a name. */
-  name.sin_family = AF_INET;
-  name.sin_port = htons (port);
-  name.sin_addr.s_addr = htonl (INADDR_ANY);
-  if (bind (sock, (struct sockaddr *) &name, sizeof (name)) < 0)
+  any = g_inet_address_new_any (G_SOCKET_FAMILY_IPV4);
+  name = g_inet_socket_address_new (any, port);
+  g_object_unref (any);
+
+  if (! g_socket_bind (sock, name, TRUE, &error))
     {
-      perror ("bind");
+      g_printerr ("bind: %s\n", error->message);
       gimp_quit ();
     }
+  g_object_unref (name);
 
   return sock;
 }
@@ -514,16 +578,22 @@ server_log (gchar *format, ...)
   fputs (buf, server_log_file);
   if (server_log_file != stdout)
     fflush (server_log_file);
+
+  g_free (buf);
 }
 
 static void
 server_quit (void)
 {
-  int i;
+  GHashTableIter iter;
+  gpointer       client;
 
-  for (i = 0; i < FD_SETSIZE; ++i)
-    if (FD_ISSET (i, &server_active))
-      shutdown (i, 2);
+  g_hash_table_iter_init (&iter, clientname_ht);
+  while (g_hash_table_iter_next (&iter, &client, NULL))
+    g_socket_shutdown (G_SOCKET (client), TRUE, TRUE, NULL);
+
+  g_socket_shutdown (server_sock, TRUE, TRUE, NULL);
+  g_socket_close (server_sock, NULL);
 }
 
 static gint
@@ -533,78 +603,52 @@ server_interface ()
   GtkWidget *button;
   GtkWidget *label;
   GtkWidget *table;
-  gchar **argv;
-  gint argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("script-fu");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Script-Fu Server Options");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) cancel_callback,
-		      NULL);
-  gtk_container_border_width (GTK_CONTAINER (GTK_DIALOG (dlg)->action_area), 2);
+  dlg = gimp_dialog_new ("Script-Fu Server Options");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (cancel_callback),
+		    NULL);
+  gimp_container_set_border_width (gimp_dialog_get_action_area (dlg), 2);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) ok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (ok_callback), dlg, TRUE);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy),
+			    dlg);
 
   /*  The table to hold port & logfile entries  */
-  table = gtk_table_new (2, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 4);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), table, TRUE, TRUE, 0);
+  table = gimp_table_new (2, 2, FALSE);
+  gimp_container_set_border_width (table, 4);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), table, TRUE, TRUE, 0);
 
   /*  The server port  */
   label = gtk_label_new ("Server Port: ");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK, 0, 1);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 0, 1,
+		     GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 0, 1);
 
   sint.port_entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), sint.port_entry, 1, 2, 0, 1,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL, GTK_SHRINK, 1, 1);
-  gtk_entry_set_text (GTK_ENTRY (sint.port_entry), "10008");
-  gtk_widget_show (sint.port_entry);
+  gimp_table_attach (table, sint.port_entry, 1, 2, 0, 1,
+		     GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 1, 1);
+  gtk_editable_set_text (GTK_EDITABLE (sint.port_entry), "10008");
 
   /*  The server logfile  */
   label = gtk_label_new ("Server Logfile: ");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK, 0, 1);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 1, 2,
+		     GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 0, 1);
 
   sint.log_entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), sint.log_entry, 1, 2, 1, 2,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL, GTK_SHRINK, 1, 1);
-  gtk_widget_show (sint.log_entry);
+  gimp_table_attach (table, sint.log_entry, 1, 2, 1, 2,
+		     GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 1, 1);
 
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return sint.run;
 }
@@ -613,16 +657,16 @@ static void
 ok_callback (GtkWidget *widget,
 	     gpointer   data)
 {
-  sint.port = atoi (gtk_entry_get_text (GTK_ENTRY (sint.port_entry)));
-  sint.logfile = g_strdup (gtk_entry_get_text (GTK_ENTRY (sint.log_entry)));
+  sint.port = atoi (gtk_editable_get_text (GTK_EDITABLE (sint.port_entry)));
+  sint.logfile = g_strdup (gtk_editable_get_text (GTK_EDITABLE (sint.log_entry)));
   sint.run = TRUE;
 
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
 cancel_callback (GtkWidget *widget,
 		 gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }

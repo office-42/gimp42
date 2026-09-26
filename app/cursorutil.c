@@ -18,23 +18,44 @@
 #include "appenv.h"
 #include "cursorutil.h"
 
-void
-change_win_cursor (win, cursortype)
-     GdkWindow *win;
-     GdkCursorType cursortype;
+static const char *cursor_names[] =
 {
-  GdkCursor *cursor;
+  "default",       /*  TOP_LEFT_ARROW       */
+  "se-resize",     /*  BOTTOM_RIGHT_CORNER  */
+  "nw-resize",     /*  TOP_LEFT_CORNER      */
+  "crosshair",     /*  CROSS                */
+  "crosshair",     /*  DIAMOND_CROSS        */
+  "crosshair",     /*  TCROSS               */
+  "alias",         /*  EXCHANGE             */
+  "move",          /*  FLEUR                */
+  "pointer",       /*  HAND2                */
+  "copy",          /*  ICON                 */
+  "crosshair",     /*  PENCIL               */
+  "s-resize",      /*  SB_DOWN_ARROW        */
+  "ew-resize",     /*  SB_H_DOUBLE_ARROW    */
+  "ns-resize",     /*  SB_V_DOUBLE_ARROW    */
+  "nwse-resize",   /*  SIZING               */
+  "text",          /*  XTERM                */
+  "not-allowed",   /*  X_CURSOR             */
+  "wait",          /*  WATCH                */
+};
 
-  cursor = gdk_cursor_new (cursortype);
-  gdk_window_set_cursor (win, cursor);
-  gdk_cursor_destroy (cursor);
+void
+change_win_cursor (GtkWidget      *widget,
+		   GimpCursorType  cursortype)
+{
+  if (!widget)
+    return;
+
+  if ((guint) cursortype >= G_N_ELEMENTS (cursor_names))
+    cursortype = GIMP_CURSOR_TOP_LEFT_ARROW;
+
+  gtk_widget_set_cursor_from_name (widget, cursor_names[cursortype]);
 }
 
 void
-unset_win_cursor (win)
-     GdkWindow *win;
+unset_win_cursor (GtkWidget *widget)
 {
-  gdk_window_set_cursor (win, NULL);
+  if (widget)
+    gtk_widget_set_cursor (widget, NULL);
 }
-     
-

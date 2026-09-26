@@ -51,10 +51,10 @@ struct _PosterizeDialog
 
 /*  posterize action functions  */
 
-static void   posterize_button_press   (Tool *, GdkEventButton *, gpointer);
-static void   posterize_button_release (Tool *, GdkEventButton *, gpointer);
-static void   posterize_motion         (Tool *, GdkEventMotion *, gpointer);
-static void   posterize_cursor_update  (Tool *, GdkEventMotion *, gpointer);
+static void   posterize_button_press   (Tool *, GimpButtonEvent *, gpointer);
+static void   posterize_button_release (Tool *, GimpButtonEvent *, gpointer);
+static void   posterize_motion         (Tool *, GimpMotionEvent *, gpointer);
+static void   posterize_cursor_update  (Tool *, GimpMotionEvent *, gpointer);
 static void   posterize_control        (Tool *, int, gpointer);
 
 static PosterizeDialog *  posterize_new_dialog          (void);
@@ -63,7 +63,7 @@ static void               posterize_ok_callback         (GtkWidget *, gpointer);
 static void               posterize_cancel_callback     (GtkWidget *, gpointer);
 static void               posterize_preview_update      (GtkWidget *, gpointer);
 static void               posterize_levels_text_update  (GtkWidget *, gpointer);
-static gint               posterize_delete_callback     (GtkWidget *, GdkEvent *, gpointer);
+static gint               posterize_delete_callback     (GtkWidget *, gpointer);
 
 static void *posterize_options = NULL;
 static PosterizeDialog *posterize_dialog = NULL;
@@ -128,7 +128,7 @@ posterize (PixelRegion *srcPR,
 
 static void
 posterize_button_press (Tool           *tool,
-			GdkEventButton *bevent,
+			GimpButtonEvent *bevent,
 			gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -139,27 +139,27 @@ posterize_button_press (Tool           *tool,
 
 static void
 posterize_button_release (Tool           *tool,
-			  GdkEventButton *bevent,
+			  GimpButtonEvent *bevent,
 			  gpointer        gdisp_ptr)
 {
 }
 
 static void
 posterize_motion (Tool           *tool,
-		  GdkEventMotion *mevent,
+		  GimpMotionEvent *mevent,
 		  gpointer        gdisp_ptr)
 {
 }
 
 static void
 posterize_cursor_update (Tool           *tool,
-			 GdkEventMotion *mevent,
+			 GimpMotionEvent *mevent,
 			 gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
 
   gdisp = (GDisplay *) gdisp_ptr;
-  gdisplay_install_tool_cursor (gdisp, GDK_TOP_LEFT_ARROW);
+  gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TOP_LEFT_ARROW);
 }
 
 static void
@@ -204,8 +204,8 @@ tools_new_posterize ()
   if (!posterize_dialog)
     posterize_dialog = posterize_new_dialog ();
   else
-    if (!GTK_WIDGET_VISIBLE (posterize_dialog->shell))
-      gtk_widget_show (posterize_dialog->shell);
+    if (!gtk_widget_get_visible (posterize_dialog->shell))
+      gtk_window_present (GTK_WINDOW (posterize_dialog->shell));
 
   tool = (Tool *) g_malloc (sizeof (Tool));
   private = (Posterize *) g_malloc (sizeof (Posterize));
@@ -259,8 +259,8 @@ posterize_initialize (void *gdisp_ptr)
   if (!posterize_dialog)
     posterize_dialog = posterize_new_dialog ();
   else
-    if (!GTK_WIDGET_VISIBLE (posterize_dialog->shell))
-      gtk_widget_show (posterize_dialog->shell);
+    if (!gtk_widget_get_visible (posterize_dialog->shell))
+      gtk_window_present (GTK_WINDOW (posterize_dialog->shell));
   posterize_dialog->drawable = gimage_active_drawable (gdisp->gimage);
   posterize_dialog->image_map = image_map_create (gdisp_ptr, posterize_dialog->drawable);
   if (posterize_dialog->preview)
@@ -293,61 +293,56 @@ posterize_new_dialog ()
   pd->levels = 3;
 
   /*  The shell and main vbox  */
-  pd->shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (pd->shell), "posterize", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (pd->shell), "Posterize");
+  pd->shell = gimp_dialog_new ("Posterize");
 
-  gtk_signal_connect (GTK_OBJECT (pd->shell), "delete_event",
-		      GTK_SIGNAL_FUNC (posterize_delete_callback),
+  g_signal_connect (pd->shell, "close-request", G_CALLBACK (posterize_delete_callback),
 		      pd);
 
-  vbox = gtk_vbox_new (FALSE, 2);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 2);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (pd->shell)->vbox), vbox, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 2);
+  gimp_container_set_border_width (vbox, 2);
+  gimp_box_pack_start (gimp_dialog_get_vbox (pd->shell), vbox, TRUE, TRUE, 0);
 
   /*  Horizontal box for levels text widget  */
-  hbox = gtk_hbox_new (TRUE, 2);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (TRUE, 2);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
 
   label = gtk_label_new ("Posterize Levels: ");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (hbox), label, TRUE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_box_pack_start (hbox, label, TRUE, FALSE, 0);
 
   /*  levels text  */
   pd->levels_text = gtk_entry_new ();
-  gtk_entry_set_text (GTK_ENTRY (pd->levels_text), "3");
-  gtk_widget_set_usize (pd->levels_text, TEXT_WIDTH, 25);
-  gtk_box_pack_start (GTK_BOX (hbox), pd->levels_text, TRUE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (pd->levels_text), "changed",
-		      (GtkSignalFunc) posterize_levels_text_update,
+  gtk_editable_set_text (GTK_EDITABLE (pd->levels_text), "3");
+  gtk_widget_set_size_request (pd->levels_text, TEXT_WIDTH, 25);
+  gimp_box_pack_start (hbox, pd->levels_text, TRUE, FALSE, 0);
+  g_signal_connect (pd->levels_text, "changed", G_CALLBACK (posterize_levels_text_update),
 		      pd);
-  gtk_widget_show (pd->levels_text);
-  gtk_widget_show (hbox);
 
   /*  Horizontal box for preview  */
-  hbox = gtk_hbox_new (TRUE, 2);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (TRUE, 2);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
 
   /*  The preview toggle  */
   toggle = gtk_check_button_new_with_label ("Preview");
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), pd->preview);
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) posterize_preview_update,
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), pd->preview);
+  gimp_box_pack_start (hbox, toggle, TRUE, FALSE, 0);
+  g_signal_connect (toggle, "toggled", G_CALLBACK (posterize_preview_update),
 		      pd);
 
-  gtk_widget_show (label);
-  gtk_widget_show (toggle);
-  gtk_widget_show (hbox);
 
   /*  The action area  */
   action_items[0].user_data = pd;
   action_items[1].user_data = pd;
-  build_action_area (GTK_DIALOG (pd->shell), action_items, 2, 0);
+  {
+    int n;
 
-  gtk_widget_show (vbox);
-  gtk_widget_show (pd->shell);
+    for (n = 0; n < 2; n++)
+      gimp_dialog_add_button (pd->shell, action_items[n].label,
+			      G_CALLBACK (action_items[n].callback),
+			      action_items[n].user_data, n == 0);
+  }
+
+  gtk_window_present (GTK_WINDOW (pd->shell));
 
   return pd;
 }
@@ -370,8 +365,8 @@ posterize_ok_callback (GtkWidget *widget,
 
   pd = (PosterizeDialog *) client_data;
 
-  if (GTK_WIDGET_VISIBLE (pd->shell))
-    gtk_widget_hide (pd->shell);
+  if (gtk_widget_get_visible (pd->shell))
+    gtk_widget_set_visible (pd->shell, FALSE);
 
   active_tool->preserve = TRUE;
 
@@ -387,7 +382,7 @@ posterize_ok_callback (GtkWidget *widget,
 }
 
 static gint 
-posterize_delete_callback (GtkWidget *w, GdkEvent *e, gpointer data)
+posterize_delete_callback (GtkWidget *w, gpointer data)
 {
   posterize_cancel_callback (w, data);
 
@@ -401,8 +396,8 @@ posterize_cancel_callback (GtkWidget *widget,
   PosterizeDialog *pd;
 
   pd = (PosterizeDialog *) client_data;
-  if (GTK_WIDGET_VISIBLE (pd->shell))
-    gtk_widget_hide (pd->shell);
+  if (gtk_widget_get_visible (pd->shell))
+    gtk_widget_set_visible (pd->shell, FALSE);
 
   if (pd->image_map)
     {
@@ -423,7 +418,7 @@ posterize_preview_update (GtkWidget *w,
 
   pd = (PosterizeDialog *) data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     {
       pd->preview = TRUE;
       posterize_preview (pd);
@@ -437,11 +432,11 @@ posterize_levels_text_update (GtkWidget *w,
 			      gpointer   data)
 {
   PosterizeDialog *pd;
-  char *str;
+  const char *str;
   int value;
 
   pd = (PosterizeDialog *) data;
-  str = gtk_entry_get_text (GTK_ENTRY (w));
+  str = gtk_editable_get_text (GTK_EDITABLE (w));
   value = BOUNDS (((int) atof (str)), 2, 256);
 
   if (value != pd->levels)

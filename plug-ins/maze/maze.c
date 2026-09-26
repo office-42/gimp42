@@ -45,6 +45,7 @@
 
 #include <time.h>  /* For random seeding */
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 #include "maze.h"
 
 extern gint      maze_dialog (void);

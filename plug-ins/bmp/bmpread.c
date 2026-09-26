@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <libgimp/gimp.h>
-#include <gtk/gtk.h>
+#include <glib/gstdio.h>
 #include "bmp.h"
 
 gint32 ReadBMP (name)
@@ -28,7 +28,7 @@ gint32 ReadBMP (name)
     }
 
   filename = name;
-  fd = fopen (filename, "rb");
+  fd = g_fopen (filename, "rb");
   
   /* Is this a valid File? Should never be used because gimp tests it. */
   

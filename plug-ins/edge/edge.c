@@ -46,7 +46,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
 #include "libgimp/gimpui.h"
 
@@ -621,150 +621,108 @@ edge_dialog(GDrawable *drawable)
   GtkWidget *toggle;
   GtkWidget *label;
   GtkWidget *scale;
-  GtkObject *scale_data;
+  GtkAdjustment *scale_data;
   GtkWidget *entry;
   gchar	    buffer[256];
-  GSList    *group = NULL;
-  gchar	    **argv;
-  gint	    argc;
   gint	    use_wrap = (evals.wrapmode == WRAP);
   gint	    use_smear = (evals.wrapmode == SMEAR);
   gint	    use_black = (evals.wrapmode == BLACK);
   gdouble   init_val;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("edge");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Edge Detection");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) edge_close_callback,
-		      NULL);
+  dlg = gimp_dialog_new ("Edge Detection");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (edge_close_callback),
+		    NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) edge_ok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (edge_ok_callback),
+			  dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Edge Detection Options");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
 
-  table = gtk_table_new (2, 3, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 5);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  table = gimp_table_new (2, 3, FALSE);
+  gimp_container_set_border_width (table, 5);
+  gtk_frame_set_child (GTK_FRAME (frame), table);
 
   /*
     Label, scale, entry for	evals.amount
    */
 
   label = gtk_label_new ("Amount:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
 
   /* This prevents annoying change of adjustment */
   init_val = evals.amount < 1.0 ? 1.0 :
 	     evals.amount > 10.0 ? 10.0 : evals.amount;
   scale_data = gtk_adjustment_new (init_val, 1.0, 10.0, 0.1, 0.1, 0.0);
 
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
+  scale = gtk_scale_new (GTK_ORIENTATION_HORIZONTAL, scale_data);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
   gtk_scale_set_draw_value (GTK_SCALE (scale), FALSE);
-#if 0
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_scale_set_digits (GTK_SCALE (scale), 1);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-#endif
 
   entry = gtk_entry_new ();
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
 
-  gtk_widget_show (scale);
-  gtk_widget_show (entry);
+  gimp_table_attach (table, label, 0, 1, 0, 1,
+		     GIMP_FILL, 0, 5, 0);
+  gimp_table_attach (table, scale, 2, 3, 0, 1,
+		     GIMP_EXPAND | GIMP_FILL, 0, 5, 0);
+  gimp_table_attach (table, entry, 1, 2, 0, 1,
+		     GIMP_FILL, 0, 0, 0);
 
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1,
-		    GTK_FILL, 0, 5, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, 2, 3, 0, 1,
-		    GTK_EXPAND | GTK_FILL, 0, 5, 0);
-  gtk_table_attach (GTK_TABLE (table), entry, 1, 2, 0, 1,
-		    GTK_FILL, 0, 0, 0);
-
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) edge_scale_update,
-		      &evals.amount);
+  g_signal_connect (scale_data, "value-changed",
+		    G_CALLBACK (edge_scale_update),
+		    &evals.amount);
   sprintf (buffer, "%0.1f", evals.amount);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) edge_entry_update,
-		      &evals.amount);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (edge_entry_update),
+		    &evals.amount);
 
-  gtk_object_set_user_data (GTK_OBJECT (entry), scale_data);
-  gtk_object_set_user_data (scale_data, entry);
-  
+  g_object_set_data (G_OBJECT (entry), "user_data", scale_data);
+  g_object_set_data (G_OBJECT (scale_data), "user_data", entry);
 
   /*
     Radio buttons WRAP, SMEAR, BLACK ...
    */
 
-  hbox = gtk_hbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 5);
-  gtk_table_attach (GTK_TABLE (table), hbox, 0, 3, 1, 2,
-		    GTK_FILL, GTK_FILL, 0, 0);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_container_set_border_width (hbox, 5);
+  gimp_table_attach (table, hbox, 0, 3, 1, 2,
+		     GIMP_FILL, GIMP_FILL, 0, 0);
 
-  toggle = gtk_radio_button_new_with_label (group, "Wrap");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) edge_toggle_update,
-		      &use_wrap);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_wrap);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (NULL, "Wrap");
+  gimp_box_pack_start (hbox, toggle, TRUE, TRUE, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_wrap);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (edge_toggle_update),
+		    &use_wrap);
 
-  toggle = gtk_radio_button_new_with_label (group, "Smear");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) edge_toggle_update,
-		      &use_smear);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_smear);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (toggle, "Smear");
+  gimp_box_pack_start (hbox, toggle, TRUE, TRUE, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_smear);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (edge_toggle_update),
+		    &use_smear);
 
-  toggle = gtk_radio_button_new_with_label (group, "Black");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) edge_toggle_update,
-		      &use_black);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_black);
-  gtk_widget_show (toggle);
-  gtk_widget_show (hbox);
+  toggle = gimp_radio_button_new (toggle, "Black");
+  gimp_box_pack_start (hbox, toggle, TRUE, TRUE, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_black);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (edge_toggle_update),
+		    &use_black);
 
-  gtk_widget_show (table);
-  gtk_widget_show (frame);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   if (use_wrap)
     evals.wrapmode = WRAP;
@@ -784,7 +742,7 @@ static void
 edge_close_callback (GtkWidget *widget,
 			 gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -792,7 +750,7 @@ edge_ok_callback (GtkWidget *widget,
 		      gpointer   data)
 {
   eint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -803,7 +761,7 @@ edge_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -816,17 +774,19 @@ edge_scale_update (GtkAdjustment *adjustment,
   GtkWidget	*entry;
   gdouble *ptr = (gdouble *) data;
 
-  *ptr = adjustment->value;
+  *ptr = gtk_adjustment_get_value (adjustment);
 
-  entry = gtk_object_get_user_data (GTK_OBJECT (adjustment));
+  entry = g_object_get_data (G_OBJECT (adjustment), "user_data");
   if (entry)
     {
       gchar	buffer[256];
 
       sprintf (buffer, "%0.1f", *ptr);
-      gtk_signal_handler_block_by_data (GTK_OBJECT (entry), data);
-      gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-      gtk_signal_handler_unblock_by_data (GTK_OBJECT (entry), data);
+      g_signal_handlers_block_matched (entry, G_SIGNAL_MATCH_DATA,
+				       0, 0, NULL, NULL, data);
+      gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+      g_signal_handlers_unblock_matched (entry, G_SIGNAL_MATCH_DATA,
+					 0, 0, NULL, NULL, data);
     }
 }
 
@@ -838,16 +798,19 @@ edge_entry_update (GtkWidget *entry,
   gdouble		*ptr = (gdouble *) data;
   gdouble		new_val;
 
-  *ptr = atof (gtk_entry_get_text (GTK_ENTRY (entry)));
-  
-  adjustment = gtk_object_get_user_data (GTK_OBJECT (entry));
+  *ptr = atof (gtk_editable_get_text (GTK_EDITABLE (entry)));
+
+  adjustment = g_object_get_data (G_OBJECT (entry), "user_data");
   if (adjustment)
     {
-      new_val = *ptr < adjustment->lower ? adjustment->lower :
-		*ptr > adjustment->upper ? adjustment->upper : *ptr;
-      adjustment->value = new_val;
-      gtk_signal_handler_block_by_data (GTK_OBJECT (adjustment), data);
-      gtk_signal_emit_by_name (GTK_OBJECT (adjustment), "value_changed");
-      gtk_signal_handler_unblock_by_data (GTK_OBJECT (adjustment), data);
+      new_val = *ptr < gtk_adjustment_get_lower (adjustment) ?
+		gtk_adjustment_get_lower (adjustment) :
+		*ptr > gtk_adjustment_get_upper (adjustment) ?
+		gtk_adjustment_get_upper (adjustment) : *ptr;
+      g_signal_handlers_block_matched (adjustment, G_SIGNAL_MATCH_DATA,
+				       0, 0, NULL, NULL, data);
+      gtk_adjustment_set_value (adjustment, new_val);
+      g_signal_handlers_unblock_matched (adjustment, G_SIGNAL_MATCH_DATA,
+					 0, 0, NULL, NULL, data);
     }
 }

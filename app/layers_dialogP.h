@@ -23,7 +23,12 @@
 GtkWidget *  layers_dialog_create    (void);
 GtkWidget *  channels_dialog_create  (void);
 
-GtkWidget *  create_image_menu       (int *, int *, MenuItemCallback);
+/*  Fills option_menu (a gimp_option_menu, created when NULL) with one
+ *  item per image and returns it.  Each item calls callback with the
+ *  option menu and GINT_TO_POINTER (image ID).
+ */
+GtkWidget *  create_image_menu       (GtkWidget *option_menu,
+				      int *, int *, MenuItemCallback);
 
 void         layers_dialog_update    (int);
 void         channels_dialog_update  (int);
@@ -34,8 +39,29 @@ void         channels_dialog_clear   (void);
 void         layers_dialog_free      (void);
 void         channels_dialog_free    (void);
 
-void         render_fs_preview       (GtkWidget *, GdkPixmap *);
+/*  Draws the floating selection icon into a w x h area of cr.  */
+void         render_fs_preview       (GtkWidget *, cairo_t *, int, int);
+
+/*  Renders preview_buf into the GimpPreview preview_widget, which is
+ *  used as a scratch buffer; render_preview_surface () then copies its
+ *  top-left width x height pixels into a new RGB24 cairo surface.
+ */
 void         render_preview          (TempBuf *, GtkWidget *, int, int, int);
+cairo_surface_t * render_preview_surface (GtkWidget *, int, int);
+
+/*  The right-click menus of the layers and channels lists: a popover
+ *  of buttons, one per item (items[i].widget is set to its button),
+ *  parented to parent.  The items' accelerators work in the window
+ *  holding parent while parent is mapped.
+ */
+GtkWidget *  lc_ops_menu_new         (MenuItem *, GtkWidget *parent);
+void         lc_ops_menu_popup       (GtkWidget *menu, GtkWidget *widget,
+				      double x, double y);
+
+/*  Draws an XBM bitmap at x, y in widget's foreground color.  */
+void         lc_draw_bitmap          (GtkWidget *widget, cairo_t *cr,
+				      const unsigned char *bits,
+				      int width, int height, int x, int y);
 
 /*  Main dialog widget  */
 extern GtkWidget *lc_shell;

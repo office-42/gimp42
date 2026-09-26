@@ -53,7 +53,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <time.h>  /* For random seeding */
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
 #include "libgimp/gimpui.h"
 
@@ -263,104 +263,80 @@ plasma_dialog()
   GtkWidget *seed_hbox;
   GtkWidget *time_button;
   GtkWidget *scale;
-  GtkObject *scale_data;
-  gchar **argv;
-  gint  argc;
+  GtkAdjustment *scale_data;
   guchar buffer[32];
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("plasma");
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Plasma");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) plasma_close_callback,
+  dlg = gimp_dialog_new ("Plasma");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (plasma_close_callback),
 		      NULL);
 
   /*  Action area  */
   button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) plasma_ok_callback,
+  g_signal_connect (button, "clicked",
+                      G_CALLBACK (plasma_ok_callback),
                       dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
+  gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
   button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  g_signal_connect_swapped (button, "clicked",
+			     G_CALLBACK (gtk_window_destroy),
+			     dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Plasma Options");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  table = gtk_table_new (2, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  table = gimp_table_new (2, 2, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (frame, table);
 
   label = gtk_label_new ("Seed");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1, GTK_FILL, 0, 5, 0 );
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_FILL, 0, 5, 0 );
 
-  seed_hbox = gtk_hbox_new(FALSE, 2);
-  gtk_table_attach (GTK_TABLE (table), seed_hbox, 1, 2, 0, 1, 
-		    GTK_FILL, GTK_FILL, 0, 0 );
-  gtk_widget_show (seed_hbox);
+  seed_hbox = gimp_hbox_new(FALSE, 2);
+  gimp_table_attach (table, seed_hbox, 1, 2, 0, 1, 
+		    GIMP_FILL, GIMP_FILL, 0, 0 );
   
   entry = gtk_entry_new ();
-  gtk_box_pack_start(GTK_BOX(seed_hbox), entry, TRUE, TRUE, 0);
-  gtk_widget_set_usize( entry, ENTRY_WIDTH, 0 );
+  gimp_box_pack_start (seed_hbox, entry, TRUE, TRUE, 0);
+  gtk_widget_set_size_request ( entry, ENTRY_WIDTH, -1);
   sprintf( (char *)buffer, "%d", pvals.seed );
-  gtk_entry_set_text (GTK_ENTRY (entry), (gchar *)buffer );
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) plasma_entry_callback,
+  gtk_editable_set_text (GTK_EDITABLE (entry), (gchar *)buffer );
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (plasma_entry_callback),
 		      &pvals.seed);
-  gtk_widget_show (entry);
 
   time_button = gtk_toggle_button_new_with_label ("Time");
-  gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(time_button),pvals.timeseed);
-  gtk_signal_connect (GTK_OBJECT (time_button), "clicked",
-		      (GtkSignalFunc) toggle_callback,
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(time_button),pvals.timeseed);
+  g_signal_connect (time_button, "clicked",
+		      G_CALLBACK (toggle_callback),
 		      &pvals.timeseed);
-  gtk_box_pack_end (GTK_BOX (seed_hbox), time_button, FALSE, FALSE, 0);
-  gtk_widget_show (time_button);
-  gtk_widget_show (seed_hbox);
+  gimp_box_pack_end (seed_hbox, time_button, FALSE, FALSE, 0);
 
   label = gtk_label_new ("Turbulence");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2, GTK_FILL, 0, 5, 0);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 1, 2, GIMP_FILL, 0, 5, 0);
 
   scale_data = gtk_adjustment_new (pvals.turbulence, 0.1, 7.0, 0.1, 0.1, 0.0);
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 1, 2, GTK_FILL, 0, 0, 0);
+  scale = gimp_hscale_new (GTK_ADJUSTMENT (scale_data), 0);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+  gimp_table_attach (table, scale, 1, 2, 1, 2, GIMP_FILL, 0, 0, 0);
   gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
   gtk_scale_set_digits (GTK_SCALE (scale), 1);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) plasma_scale_update,
+  g_signal_connect (scale_data, "value-changed",
+		      G_CALLBACK (plasma_scale_update),
 			  &pvals.turbulence);
-  gtk_widget_show (scale);
 
-  gtk_widget_show (frame);
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return pint.run;
 
@@ -373,7 +349,7 @@ static void
 plasma_close_callback (GtkWidget *widget,
 			 gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -381,7 +357,7 @@ plasma_ok_callback (GtkWidget *widget,
 		      gpointer   data)
 {
   pint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -392,7 +368,7 @@ plasma_entry_callback (GtkWidget *widget,
 
   text_val = (gint *) data;
 
-  *text_val = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+  *text_val = atoi (gtk_editable_get_text (GTK_EDITABLE (widget)));
 }
 
 
@@ -401,13 +377,13 @@ plasma_scale_update (GtkAdjustment *adjustment,
 		       gpointer      data)
 {
   gdouble *dptr = (gdouble*) data;
-  *dptr = adjustment->value;
+  *dptr = gtk_adjustment_get_value (adjustment);
 }
 
 static void 
 toggle_callback (GtkWidget *widget, gboolean *data)
 {
-    *data = GTK_TOGGLE_BUTTON (widget)->active;
+    *data = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (widget));
 }
 
 #define AVE(n, v1, v2) n[0] = ((gint)v1[0] + (gint)v2[0]) / 2;\

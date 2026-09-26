@@ -25,7 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
 #include "libgimp/gimpui.h"
 
@@ -121,7 +121,7 @@ void   DepthMerge_executeRegion(          DepthMerge *dm,
 gint32 DepthMerge_dialog(                 DepthMerge *dm);
 DepthMergeValueEdit *
        DepthMerge_createValueEdit(        DepthMerge *dm,
-                                          char *title, GtkTable *table,
+                                          char *title, GtkWidget *table,
                                           int row, int startCol,
        		                          float *value,
                                           float min, float max, float step);
@@ -568,209 +568,142 @@ gint32 DepthMerge_dialog(DepthMerge *dm) {
   GtkWidget *sourceTable;
   GtkWidget   *tempLabel;
   GtkWidget   *tempOptionMenu;
-  GtkWidget   *tempMenu;
   GtkWidget *numericParameterTable;
-  GtkWidget *tempButton;
-  gint      argc;
-  gchar     **argv;
-  guchar    *color_cube;
 
   dm->interface = (DepthMergeInterface *)g_malloc(sizeof(DepthMergeInterface));
   dm->interface->active = FALSE;
   dm->interface->run = FALSE;
 
-  argc = 1;
-  argv = g_new(gchar *, 1);
-  argv[0] = g_strdup(PLUG_IN_NAME);
+  gtk_init();
 
-  gtk_init(&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
-
-  gdk_set_use_xshm(gimp_use_xshm());
-
-  gtk_preview_set_gamma(gimp_gamma());
-  gtk_preview_set_install_cmap(gimp_install_cmap());
-  color_cube = gimp_color_cube();
-  gtk_preview_set_color_cube(color_cube[0],
-			     color_cube[1],
-			     color_cube[2],
-			     color_cube[3]);
-
-  gtk_widget_set_default_visual(gtk_preview_get_visual());
-  gtk_widget_set_default_colormap(gtk_preview_get_cmap());
-
-  dm->interface->dialog = gtk_dialog_new();
-  gtk_window_set_title(GTK_WINDOW(dm->interface->dialog), PLUG_IN_TITLE);
-  gtk_window_position(GTK_WINDOW(dm->interface->dialog), GTK_WIN_POS_MOUSE);
-  gtk_container_border_width(GTK_CONTAINER(dm->interface->dialog), 0);
-  gtk_signal_connect(GTK_OBJECT(dm->interface->dialog), "destroy",
-		     (GtkSignalFunc)dialogCloseCallback, NULL);
+  dm->interface->dialog = gimp_dialog_new(PLUG_IN_TITLE);
+  g_signal_connect(dm->interface->dialog, "destroy",
+		   G_CALLBACK(dialogCloseCallback), NULL);
 
   /* topTable */
-  topTable = gtk_table_new(3, 3, FALSE);
-  gtk_container_border_width(GTK_CONTAINER(topTable), 6);
-  gtk_table_set_row_spacings(GTK_TABLE(topTable), 4);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dm->interface->dialog)->vbox), topTable,
-		     FALSE, FALSE, 0);
-  gtk_widget_show(topTable);
+  topTable = gimp_table_new(3, 3, FALSE);
+  gimp_container_set_border_width(topTable, 6);
+  gtk_grid_set_row_spacing(GTK_GRID(topTable), 4);
+  gimp_box_pack_start(gimp_dialog_get_vbox(dm->interface->dialog), topTable,
+		      FALSE, FALSE, 0);
 
   /* Preview */
   previewFrame = gtk_frame_new(NULL);
-  gtk_frame_set_shadow_type(GTK_FRAME(previewFrame), GTK_SHADOW_IN);
-  gtk_table_attach(GTK_TABLE(topTable), previewFrame, 1, 2, 0, 1, 0, 0, 0, 0);
-  gtk_widget_show(previewFrame);
+  gimp_table_attach(topTable, previewFrame, 1, 2, 0, 1, 0, 0, 0, 0);
 
   dm->interface->previewWidth  = MIN(dm->selectionWidth,  PREVIEW_SIZE);
   dm->interface->previewHeight = MIN(dm->selectionHeight, PREVIEW_SIZE);
-  dm->interface->preview = gtk_preview_new(GTK_PREVIEW_COLOR);
-  gtk_preview_size(GTK_PREVIEW(dm->interface->preview),
-		   dm->interface->previewWidth,
-		   dm->interface->previewHeight);
-  gtk_container_add(GTK_CONTAINER(previewFrame), dm->interface->preview);
-  gtk_widget_show(dm->interface->preview);
+  dm->interface->preview = gimp_preview_new(GIMP_PREVIEW_COLOR);
+  gimp_preview_size(GIMP_PREVIEW(dm->interface->preview),
+		    dm->interface->previewWidth,
+		    dm->interface->previewHeight);
+  gtk_frame_set_child(GTK_FRAME(previewFrame), dm->interface->preview);
 
   DepthMerge_buildPreviewSourceImage(dm);
 
   /* Source and Depth Map selection */
-  sourceTable = gtk_table_new(2, 4, FALSE);
-  gtk_container_border_width(GTK_CONTAINER(sourceTable), 2);
-  gtk_table_attach(GTK_TABLE(topTable), sourceTable, 0, 3, 1, 2,
-		   GTK_FILL | GTK_EXPAND, GTK_FILL | GTK_EXPAND, 0, 0);
-  gtk_widget_show(sourceTable);
+  sourceTable = gimp_table_new(2, 4, FALSE);
+  gimp_container_set_border_width(sourceTable, 2);
+  gimp_table_attach(topTable, sourceTable, 0, 3, 1, 2,
+		    GIMP_FILL | GIMP_EXPAND, GIMP_FILL | GIMP_EXPAND, 0, 0);
 
   tempLabel = gtk_label_new("Source 1");
-  gtk_misc_set_alignment(GTK_MISC(tempLabel), 0.0, 0.5);
-  gtk_table_attach(GTK_TABLE(sourceTable), tempLabel, 0, 1, 0, 1,
-		   GTK_FILL, GTK_FILL, 4, 0);
-  gtk_widget_show(tempLabel);
-  tempOptionMenu = gtk_option_menu_new();
-  gtk_table_attach(GTK_TABLE(sourceTable), tempOptionMenu, 1, 2, 0, 1,
-		   GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_show(tempOptionMenu);
-  tempMenu = gimp_drawable_menu_new(
-				    constraintResultSizeAndResultColorOrGray,
-				    dialogSource1ChangedCallback,
-				    dm,
-				    dm->params.source1);
-  gtk_option_menu_set_menu(GTK_OPTION_MENU(tempOptionMenu), tempMenu);
-  gtk_widget_show(tempOptionMenu);
+  gtk_label_set_xalign(GTK_LABEL(tempLabel), 0.0);
+  gimp_table_attach(sourceTable, tempLabel, 0, 1, 0, 1,
+		    GIMP_FILL, GIMP_FILL, 4, 0);
+  tempOptionMenu = gimp_drawable_menu_new(
+					  constraintResultSizeAndResultColorOrGray,
+					  dialogSource1ChangedCallback,
+					  dm,
+					  dm->params.source1);
+  gimp_table_attach(sourceTable, tempOptionMenu, 1, 2, 0, 1,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
   tempLabel = gtk_label_new("Depth Map");
-  gtk_misc_set_alignment(GTK_MISC(tempLabel), 0.0, 0.5);
-  gtk_table_attach(GTK_TABLE(sourceTable), tempLabel, 2, 3, 0, 1,
-		   GTK_FILL, GTK_FILL, 4, 0);
-  gtk_widget_show(tempLabel);
-  tempOptionMenu = gtk_option_menu_new();
-  gtk_table_attach(GTK_TABLE(sourceTable), tempOptionMenu, 3, 4, 0, 1,
-		   GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_show(tempOptionMenu);
-  tempMenu = gimp_drawable_menu_new(
-				    constraintResultSizeAndResultColorOrGray,
-	        		    dialogDepthMap1ChangedCallback,
-				    dm,
-				    dm->params.depthMap1);
-  gtk_option_menu_set_menu(GTK_OPTION_MENU(tempOptionMenu), tempMenu);
-  gtk_widget_show(tempOptionMenu);
+  gtk_label_set_xalign(GTK_LABEL(tempLabel), 0.0);
+  gimp_table_attach(sourceTable, tempLabel, 2, 3, 0, 1,
+		    GIMP_FILL, GIMP_FILL, 4, 0);
+  tempOptionMenu = gimp_drawable_menu_new(
+					  constraintResultSizeAndResultColorOrGray,
+					  dialogDepthMap1ChangedCallback,
+					  dm,
+					  dm->params.depthMap1);
+  gimp_table_attach(sourceTable, tempOptionMenu, 3, 4, 0, 1,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
   tempLabel = gtk_label_new("Source 2");
-  gtk_misc_set_alignment(GTK_MISC(tempLabel), 0.0, 0.5);
-  gtk_table_attach(GTK_TABLE(sourceTable), tempLabel, 0, 1, 1, 2,
-		   GTK_FILL, GTK_FILL, 4, 0);
-  gtk_widget_show(tempLabel);
-  tempOptionMenu = gtk_option_menu_new();
-  gtk_table_attach(GTK_TABLE(sourceTable), tempOptionMenu, 1, 2, 1, 2,
-		   GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_show(tempOptionMenu);
-  tempMenu = gimp_drawable_menu_new(
-				    constraintResultSizeAndResultColorOrGray,
-				    dialogSource2ChangedCallback,
-				    dm,
-				    dm->params.source2);
-  gtk_option_menu_set_menu(GTK_OPTION_MENU(tempOptionMenu), tempMenu);
-  gtk_widget_show(tempOptionMenu);
+  gtk_label_set_xalign(GTK_LABEL(tempLabel), 0.0);
+  gimp_table_attach(sourceTable, tempLabel, 0, 1, 1, 2,
+		    GIMP_FILL, GIMP_FILL, 4, 0);
+  tempOptionMenu = gimp_drawable_menu_new(
+					  constraintResultSizeAndResultColorOrGray,
+					  dialogSource2ChangedCallback,
+					  dm,
+					  dm->params.source2);
+  gimp_table_attach(sourceTable, tempOptionMenu, 1, 2, 1, 2,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
   tempLabel = gtk_label_new("Depth Map");
-  gtk_misc_set_alignment(GTK_MISC(tempLabel), 0.0, 0.5);
-  gtk_table_attach(GTK_TABLE(sourceTable), tempLabel, 2, 3, 1, 2,
-		   GTK_FILL, GTK_FILL, 4, 0);
-  gtk_widget_show(tempLabel);
-  tempOptionMenu = gtk_option_menu_new();
-  gtk_table_attach(GTK_TABLE(sourceTable), tempOptionMenu, 3, 4, 1, 2,
-		   GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_show(tempOptionMenu);
-  tempMenu = gimp_drawable_menu_new(
-				    constraintResultSizeAndResultColorOrGray,
-	        		    dialogDepthMap2ChangedCallback,
-				    dm,
-				    dm->params.depthMap2);
-  gtk_option_menu_set_menu(GTK_OPTION_MENU(tempOptionMenu), tempMenu);
-  gtk_widget_show(tempOptionMenu);
+  gtk_label_set_xalign(GTK_LABEL(tempLabel), 0.0);
+  gimp_table_attach(sourceTable, tempLabel, 2, 3, 1, 2,
+		    GIMP_FILL, GIMP_FILL, 4, 0);
+  tempOptionMenu = gimp_drawable_menu_new(
+					  constraintResultSizeAndResultColorOrGray,
+					  dialogDepthMap2ChangedCallback,
+					  dm,
+					  dm->params.depthMap2);
+  gimp_table_attach(sourceTable, tempOptionMenu, 3, 4, 1, 2,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
   /* Numeric parameters */
-  numericParameterTable = gtk_table_new(4, 3, FALSE);
-  gtk_container_border_width(GTK_CONTAINER(numericParameterTable), 2);
-  gtk_table_attach(GTK_TABLE(topTable), numericParameterTable, 0, 3, 2, 3,
-		   GTK_FILL | GTK_EXPAND, GTK_FILL | GTK_EXPAND, 0, 0);
-  gtk_widget_show(numericParameterTable);
+  numericParameterTable = gimp_table_new(4, 3, FALSE);
+  gimp_container_set_border_width(numericParameterTable, 2);
+  gimp_table_attach(topTable, numericParameterTable, 0, 3, 2, 3,
+		    GIMP_FILL | GIMP_EXPAND, GIMP_FILL | GIMP_EXPAND, 0, 0);
 
   dm->interface->overlapValueEdit =
     DepthMerge_createValueEdit(dm, "Overlap",
-			       GTK_TABLE(numericParameterTable), 0, 0,
+			       numericParameterTable, 0, 0,
 			       &(dm->params.overlap),
 			       0, 2, 0.001);
   dm->interface->offsetValueEdit =
     DepthMerge_createValueEdit(dm, "Offset",
-			       GTK_TABLE(numericParameterTable), 1, 0,
+			       numericParameterTable, 1, 0,
 			       &(dm->params.offset),
 			       -1, 1, 0.001);
   dm->interface->scale1ValueEdit =
     DepthMerge_createValueEdit(dm, "Scale 1",
-			       GTK_TABLE(numericParameterTable), 2, 0,
+			       numericParameterTable, 2, 0,
 			       &(dm->params.scale1),
 			       -1, 1, 0.001);
   dm->interface->scale2ValueEdit =
     DepthMerge_createValueEdit(dm, "Scale 2",
-			       GTK_TABLE(numericParameterTable), 3, 0,
+			       numericParameterTable, 3, 0,
 			       &(dm->params.scale2),
 			       -1, 1, 0.001);
 
   /* Buttons */
 
-  gtk_container_border_width(GTK_CONTAINER(GTK_DIALOG(dm->interface->dialog)->action_area), 6);
-  tempButton = gtk_button_new_with_label("OK");
-  GTK_WIDGET_SET_FLAGS(tempButton, GTK_CAN_DEFAULT);
-  gtk_signal_connect(GTK_OBJECT(tempButton), "clicked",
-		     (GtkSignalFunc)dialogOkCallback,
-		     dm);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dm->interface->dialog)->action_area),
-		     tempButton, TRUE, TRUE, 0);
-  gtk_widget_grab_default(tempButton);
-  gtk_widget_show(tempButton);
-
-  tempButton = gtk_button_new_with_label("Cancel");
-  GTK_WIDGET_SET_FLAGS(tempButton, GTK_CAN_DEFAULT);
-  gtk_signal_connect(GTK_OBJECT(tempButton), "clicked",
-		     (GtkSignalFunc)dialogCancelCallback,
-		     dm);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dm->interface->dialog)->action_area),
-		     tempButton, TRUE, TRUE, 0);
-  gtk_widget_show(tempButton);
+  gimp_container_set_border_width(gimp_dialog_get_action_area(dm->interface->dialog), 6);
+  gimp_dialog_add_button(dm->interface->dialog, "OK",
+			 G_CALLBACK(dialogOkCallback), dm, TRUE);
+  gimp_dialog_add_button(dm->interface->dialog, "Cancel",
+			 G_CALLBACK(dialogCancelCallback), dm, FALSE);
 
   /* Done */
 
   dm->interface->active = TRUE;
-  gtk_widget_show(dm->interface->dialog);
+  gtk_window_present(GTK_WINDOW(dm->interface->dialog));
   DepthMerge_updatePreview(dm);
 
-  gtk_main();
-  gdk_flush();
+  gimp_main_loop_run();
 
   return(dm->interface->run);
 }
 
 
 DepthMergeValueEdit *DepthMerge_createValueEdit(DepthMerge *dm,
-						char *title, GtkTable *table,
+						char *title, GtkWidget *table,
 						int row, int startCol,
 						float *value,
 						float min, float max,
@@ -778,7 +711,7 @@ DepthMergeValueEdit *DepthMerge_createValueEdit(DepthMerge *dm,
   GtkWidget           *label;
   GtkWidget           *scale;
   GtkWidget           *entry;
-  GtkObject           *scaleData;
+  GtkAdjustment       *scaleData;
   DepthMergeValueEdit *valueEdit;
   char                buf[256];
 
@@ -789,39 +722,36 @@ DepthMergeValueEdit *DepthMerge_createValueEdit(DepthMerge *dm,
   *(valueEdit->value) = CLAMP(*(valueEdit->value), min, max);
 
   label = gtk_label_new(title);
-  gtk_misc_set_alignment(GTK_MISC(label), 0.0, 1.0);
-  gtk_table_attach(table, label, startCol, startCol+1, row, row+1,
-		   GTK_FILL, GTK_FILL, 4, 0);
-  gtk_widget_show(label);
+  gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+  gtk_label_set_yalign(GTK_LABEL(label), 1.0);
+  gimp_table_attach(table, label, startCol, startCol+1, row, row+1,
+		    GIMP_FILL, GIMP_FILL, 4, 0);
 
   scaleData = gtk_adjustment_new(*value,
                                  min, max,
                                  step, step,
                                  0.0);
-  gtk_signal_connect(GTK_OBJECT(scaleData), "value_changed",
-		     (GtkSignalFunc)dialogValueScaleUpdateCallback,
-		     valueEdit);
-  scale = gtk_hscale_new(GTK_ADJUSTMENT(scaleData));
-  gtk_widget_set_usize(scale, SCALE_WIDTH, 0);
-  gtk_table_attach(table, scale, startCol+1, startCol+2, row, row+1,
-		   GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0);
+  g_signal_connect(scaleData, "value-changed",
+		   G_CALLBACK(dialogValueScaleUpdateCallback),
+		   valueEdit);
+  scale = gtk_scale_new(GTK_ORIENTATION_HORIZONTAL, scaleData);
+  gtk_widget_set_size_request(scale, SCALE_WIDTH, -1);
+  gimp_table_attach(table, scale, startCol+1, startCol+2, row, row+1,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0);
   gtk_scale_set_draw_value(GTK_SCALE(scale), FALSE);
   gtk_scale_set_digits(GTK_SCALE(scale), 3);
-  gtk_range_set_update_policy(GTK_RANGE(scale), GTK_UPDATE_CONTINUOUS);
-  gtk_widget_show(scale);
 
   entry = gtk_entry_new();
-  gtk_widget_set_usize(entry, ENTRY_WIDTH, 0);
+  gtk_widget_set_size_request(entry, ENTRY_WIDTH, -1);
   sprintf(buf, "%0.3f", (float)*value);
-  gtk_entry_set_text(GTK_ENTRY(entry), buf);
-  gtk_signal_connect(GTK_OBJECT(entry), "changed",
-		     (GtkSignalFunc) dialogValueEntryUpdateCallback,
-		     valueEdit);
-  gtk_table_attach(GTK_TABLE(table), entry, startCol+2, startCol+3, row, row+1,
-		   GTK_FILL, GTK_FILL, 4, 0);
-  gtk_widget_show(entry);
+  gtk_editable_set_text(GTK_EDITABLE(entry), buf);
+  g_signal_connect(entry, "changed",
+		   G_CALLBACK(dialogValueEntryUpdateCallback),
+		   valueEdit);
+  gimp_table_attach(table, entry, startCol+2, startCol+3, row, row+1,
+		    GIMP_FILL, GIMP_FILL, 4, 0);
 
-  valueEdit->scaleData = GTK_ADJUSTMENT(scaleData);
+  valueEdit->scaleData = scaleData;
   valueEdit->entry     = entry;
   valueEdit->min       = min;
   valueEdit->max       = max;
@@ -930,15 +860,12 @@ void DepthMerge_updatePreview(DepthMerge *dm) {
            (int)(255 - resultRowRGBA[x*4+3])*(int)checkRow[x]          );
       resultRow[x*3+2] = DIV255(i);
     }
-    gtk_preview_draw_row(GTK_PREVIEW(dm->interface->preview), resultRow, 0, y,
-			 dm->interface->previewWidth);
+    gimp_preview_draw_row(GIMP_PREVIEW(dm->interface->preview), resultRow, 0, y,
+			  dm->interface->previewWidth);
   }
 
   g_free(resultRowRGBA);
   g_free(resultRow);
-
-  gtk_widget_draw(dm->interface->preview, NULL);
-  gdk_flush();
 }
 
 
@@ -974,17 +901,17 @@ gint constraintResultSizeAndGray(gint32 imageId,
 void dialogOkCallback(GtkWidget *widget, gpointer data) {
   DepthMerge *dm = (DepthMerge *)data;
   dm->interface->run = TRUE;
-  gtk_widget_destroy(dm->interface->dialog);
+  gtk_window_destroy(GTK_WINDOW(dm->interface->dialog));
 }
 
 void dialogCancelCallback(GtkWidget *widget, gpointer data) {
   DepthMerge *dm = (DepthMerge *)data;
   dm->interface->run = FALSE;
-  gtk_widget_destroy(dm->interface->dialog);
+  gtk_window_destroy(GTK_WINDOW(dm->interface->dialog));
 }
 
 void dialogCloseCallback(GtkWidget *widget, gpointer data) {
-  gtk_main_quit();
+  gimp_main_loop_quit();
 }
 
 
@@ -1069,14 +996,16 @@ void dialogValueScaleUpdateCallback(GtkAdjustment *adjustment, gpointer data) {
   DepthMergeValueEdit *valueEdit = (DepthMergeValueEdit *)data;
   char buf[256];
 
-  if (*(valueEdit->value) != adjustment->value) {
-    *(valueEdit->value) = adjustment->value;
+  if (*(valueEdit->value) != gtk_adjustment_get_value(adjustment)) {
+    *(valueEdit->value) = gtk_adjustment_get_value(adjustment);
 
-    sprintf(buf, "%0.3f", (float)(adjustment->value));
+    sprintf(buf, "%0.3f", (float)(gtk_adjustment_get_value(adjustment)));
 
-    gtk_signal_handler_block_by_data(GTK_OBJECT(valueEdit->entry), data);
-    gtk_entry_set_text(GTK_ENTRY(valueEdit->entry), buf);
-    gtk_signal_handler_unblock_by_data(GTK_OBJECT(valueEdit->entry), data);
+    g_signal_handlers_block_matched(valueEdit->entry, G_SIGNAL_MATCH_DATA,
+				    0, 0, NULL, NULL, data);
+    gtk_editable_set_text(GTK_EDITABLE(valueEdit->entry), buf);
+    g_signal_handlers_unblock_matched(valueEdit->entry, G_SIGNAL_MATCH_DATA,
+				      0, 0, NULL, NULL, data);
 
     DepthMerge_updatePreview(valueEdit->dm);
   }
@@ -1086,15 +1015,12 @@ void dialogValueEntryUpdateCallback(GtkWidget *widget, gpointer data) {
   DepthMergeValueEdit *valueEdit = (DepthMergeValueEdit *)data;
   float newValue;
 
-  newValue = atof(gtk_entry_get_text(GTK_ENTRY(widget)));
+  newValue = atof(gtk_editable_get_text(GTK_EDITABLE(widget)));
 
   if ((*(valueEdit->value) != newValue) &&
       (newValue >= valueEdit->min)   &&
       (newValue <= valueEdit->max)) {
-    valueEdit->scaleData->value = newValue;
-
-    gtk_signal_emit_by_name(GTK_OBJECT(valueEdit->scaleData),
-			    "value_changed");
+    gtk_adjustment_set_value(valueEdit->scaleData, newValue);
 
     DepthMerge_updatePreview(valueEdit->dm);
   }

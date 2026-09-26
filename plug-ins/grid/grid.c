@@ -13,8 +13,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include "libgimp/gimpui.h"
 
 /* Declare local functions. */
 static void query (void);
@@ -23,7 +24,7 @@ static void run (char *name,
 		 GParam * param,
 		 int *nreturn_vals,
 		 GParam ** return_vals);
-static gint dialog ();
+static gint dialog (void);
 
 static void doit (GDrawable * drawable);
 
@@ -55,7 +56,8 @@ config my_config =
 
 MAIN ()
 
-     static void query ()
+static void
+query (void)
 {
   static GParamDef args[] =
   {
@@ -247,167 +249,105 @@ doit (GDrawable * drawable)
 static void
 close_callback (GtkWidget * widget, gpointer data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
 ok_callback (GtkWidget * widget, gpointer data)
 {
   run_flag = 1;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
 entry_callback (GtkWidget * widget, gpointer data)
 {
+  const gchar *text = gtk_editable_get_text (GTK_EDITABLE (widget));
+
   if (data == &my_config.width)
-    my_config.width = atof (gtk_entry_get_text (GTK_ENTRY (widget)));
+    my_config.width = atof (text);
   else if (data == &my_config.height)
-    my_config.height = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+    my_config.height = atoi (text);
   else if (data == &my_config.x_offset)
-    my_config.x_offset = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+    my_config.x_offset = atoi (text);
   else if (data == &my_config.y_offset)
-    my_config.y_offset = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+    my_config.y_offset = atoi (text);
+}
+
+static void
+dialog_label (GtkWidget *table, const gchar *text,
+	      gint left, gint top)
+{
+  GtkWidget *label;
+
+  label = gtk_label_new (text);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, left, left + 1, top, top + 1,
+		     GIMP_FILL, GIMP_FILL, 0, 0);
+}
+
+static void
+dialog_entry (GtkWidget *table, gint *value,
+	      gint left, gint top)
+{
+  GtkWidget *entry;
+  gchar buffer[12];
+
+  entry = gtk_entry_new ();
+  gimp_table_attach (table, entry, left, left + 1, top, top + 1,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
+  gtk_widget_set_size_request (entry, 50, -1);
+  g_snprintf (buffer, sizeof (buffer), "%i", *value);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (entry_callback), value);
 }
 
 static gint
-dialog ()
+dialog (void)
 {
   GtkWidget *dlg;
   GtkWidget *button;
-  GtkWidget *label;
-  GtkWidget *entry;
   GtkWidget *table;
-  gchar buffer[12];
-  gchar **argv;
-  gint argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("plasma");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Grid");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) close_callback, NULL);
+  dlg = gimp_dialog_new ("Grid");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (close_callback), NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-		      (GtkSignalFunc) ok_callback,
-		      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (ok_callback), dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /* The main table */
   /* Set its size (y, x) */
-  table = gtk_table_new (4, 3, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show (table);
+  table = gimp_table_new (4, 3, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), table, TRUE, TRUE, 0);
 
-  gtk_table_set_row_spacings (GTK_TABLE (table), 10);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 10);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 10);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 10);
 
-	/**********************
-	 * The X/Y labels *
-	 **********************/
-  label = gtk_label_new ("X");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 1, 2, 1, 2, GTK_FILL, GTK_FILL, 0,
-		    0);
-  gtk_widget_show (label);
+  /* The X/Y labels */
+  dialog_label (table, "X", 1, 1);
+  dialog_label (table, "Y", 2, 1);
 
-  label = gtk_label_new ("Y");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 2, 3, 1, 2, GTK_FILL, GTK_FILL, 0,
-		    0);
-  gtk_widget_show (label);
+  /* The width and height entries */
+  dialog_label (table, "Size:", 0, 2);
+  dialog_entry (table, &my_config.width, 1, 2);
+  dialog_entry (table, &my_config.height, 2, 2);
 
-	/************************
-	 * The width entry: *
-	 ************************/
-  label = gtk_label_new ("Size:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 2, 3, GTK_FILL, GTK_FILL, 0,
-		    0);
-  gtk_widget_show (label);
+  /* The x_offset and y_offset entries */
+  dialog_label (table, "Offset:", 0, 3);
+  dialog_entry (table, &my_config.x_offset, 1, 3);
+  dialog_entry (table, &my_config.y_offset, 2, 3);
 
-  entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry, 1, 2, 2, 3, GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_set_usize (entry, 50, 0);
-  sprintf (buffer, "%i", my_config.width);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) entry_callback, &my_config.width);
-  gtk_widget_show (entry);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-	/************************
-	 * The height entry: *
-	 ************************/
-  entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry, 2, 3, 2, 3, GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_set_usize (entry, 50, 0);
-  sprintf (buffer, "%i", my_config.height);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) entry_callback, &my_config.height);
-  gtk_widget_show (entry);
-
-  gtk_widget_show (dlg);
-
-	/************************
-	 * The x_offset entry: *
-	 ************************/
-  label = gtk_label_new ("Offset:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 3, 4, GTK_FILL, GTK_FILL, 0,
-		    0);
-  gtk_widget_show (label);
-
-  entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry, 1, 2, 3, 4, GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_set_usize (entry, 50, 0);
-  sprintf (buffer, "%i", my_config.x_offset);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) entry_callback, &my_config.x_offset);
-  gtk_widget_show (entry);
-
-	/************************
-	 * The y_offset entry: *
-	 ************************/
-  entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry, 2, 3, 3, 4, GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_set_usize (entry, 50, 0);
-  sprintf (buffer, "%i", my_config.y_offset);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) entry_callback, &my_config.y_offset);
-  gtk_widget_show (entry);
-
-  gtk_widget_show (dlg);
-
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return run_flag;
 }

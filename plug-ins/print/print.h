@@ -96,7 +96,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <unistd.h>
 
 #include <gtk/gtk.h>
 #include <libgimp/gimp.h>
@@ -198,6 +197,19 @@ extern void	ps_print(int model, char *ppd_file, char *resolution,
 		         int output_type, int orientation, float scaling,
 		         int left, int top, int copies, FILE *prn,
 		         GDrawable *drawable, guchar *lut, guchar *cmap);
+
+/*
+ * The system printers, through GtkPrintOperation (print-gtk.c).  The
+ * image is rendered with cairo instead of a printer language; media_width
+ * and media_length (points) pick the default paper, which the system
+ * print dialog may change.  Returns TRUE when the job was sent.
+ */
+
+extern int	gtkprint_print(char *media_size, int media_width,
+		               int media_length, int output_type,
+		               int orientation, float scaling, int left,
+		               int top, int show_dialog, GDrawable *drawable,
+		               guchar *lut, guchar *cmap);
 
 
 /*

@@ -17,16 +17,12 @@
  */
 #include <stdlib.h>
 #include "appenv.h"
+#include "gdisplay_ops.h"
 #include "scale.h"
 #include "scroll.h"
 #include "cursorutil.h"
 #include "tools.h"
 
-
-/*  This is the delay before dithering begins
- *  for example, after an operation such as scrolling
- */
-#define DITHER_DELAY 250  /*  milliseconds  */
 
 /*  Locally defined functions  */
 static int scroll_display (GDisplay *, int, int);
@@ -43,7 +39,7 @@ scrollbar_vert_update (GtkAdjustment *adjustment,
 
   gdisp = (GDisplay *) data;
 
-  scroll_display (gdisp, 0, (adjustment->value - gdisp->offset_y));
+  scroll_display (gdisp, 0, (gtk_adjustment_get_value (adjustment) - gdisp->offset_y));
 
   return FALSE;
 }
@@ -57,41 +53,33 @@ scrollbar_horz_update (GtkAdjustment *adjustment,
 
   gdisp = (GDisplay *) data;
 
-  scroll_display (gdisp, (adjustment->value - gdisp->offset_x), 0);
+  scroll_display (gdisp, (gtk_adjustment_get_value (adjustment) - gdisp->offset_x), 0);
 
   return FALSE;
 }
 
 void
-start_grab_and_scroll (GDisplay       *gdisp,
-		       GdkEventButton *bevent)
+start_grab_and_scroll (GDisplay        *gdisp,
+		       GimpButtonEvent *bevent)
 {
-  GdkCursor *cursor;
-
   startx = bevent->x + gdisp->offset_x;
   starty = bevent->y + gdisp->offset_y;
 
-  cursor = gdk_cursor_new (GDK_FLEUR);
-  gdk_window_set_cursor (gdisp->canvas->window, cursor);
-  gdk_cursor_destroy (cursor);
+  change_win_cursor (gdisp->canvas, GIMP_CURSOR_FLEUR);
 }
 
 
 void
-end_grab_and_scroll (GDisplay       *gdisp,
-		     GdkEventButton *bevent)
+end_grab_and_scroll (GDisplay        *gdisp,
+		     GimpButtonEvent *bevent)
 {
-  GdkCursor *cursor;
-
-  cursor = gdk_cursor_new (gdisp->current_cursor);
-  gdk_window_set_cursor (gdisp->canvas->window, cursor);
-  gdk_cursor_destroy (cursor);
+  change_win_cursor (gdisp->canvas, gdisp->current_cursor);
 }
 
 
 void
-grab_and_scroll (GDisplay       *gdisp,
-		 GdkEventMotion *mevent)
+grab_and_scroll (GDisplay        *gdisp,
+		 GimpMotionEvent *mevent)
 {
   scroll_display (gdisp, (startx - mevent->x - gdisp->offset_x),
 		  (starty - mevent->y - gdisp->offset_y));
@@ -99,10 +87,9 @@ grab_and_scroll (GDisplay       *gdisp,
 
 
 void
-scroll_to_pointer_position (GDisplay       *gdisp,
-			    GdkEventMotion *mevent)
+scroll_to_pointer_position (GDisplay        *gdisp,
+			    GimpMotionEvent *mevent)
 {
-  int child_x, child_y;
   int off_x, off_y;
 
   off_x = off_y = 0;
@@ -117,14 +104,36 @@ scroll_to_pointer_position (GDisplay       *gdisp,
   else if (mevent->y > gdisp->disp_height)
     off_y = mevent->y - gdisp->disp_height;
 
-  if (scroll_display (gdisp, off_x, off_y))
-    {
-      gdk_window_get_pointer (gdisp->canvas->window, &child_x, &child_y, NULL);
+  scroll_display (gdisp, off_x, off_y);
+}
 
-      if (child_x == mevent->x && child_y == mevent->y)
-	/*  Put this event back on the queue -- so it keeps scrolling */
-	gdk_event_put ((GdkEvent *) mevent);
-    }
+
+/*  Moves what is already rendered in the backing surface along with the
+ *  scroll, so that only the strips that come into view need rendering.
+ */
+static void
+scroll_backing (GDisplay *gdisp,
+		int       x_offset,
+		int       y_offset)
+{
+  cairo_surface_t *copy;
+  cairo_t *cr;
+
+  if (!gdisp->backing)
+    return;
+
+  copy = cairo_surface_create_similar_image (gdisp->backing,
+					     CAIRO_FORMAT_RGB24,
+					     cairo_image_surface_get_width (gdisp->backing),
+					     cairo_image_surface_get_height (gdisp->backing));
+  cr = cairo_create (copy);
+  cairo_set_source_surface (cr, gdisp->backing, -x_offset, -y_offset);
+  cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
+  cairo_paint (cr);
+  cairo_destroy (cr);
+
+  cairo_surface_destroy (gdisp->backing);
+  gdisp->backing = copy;
 }
 
 
@@ -135,8 +144,6 @@ scroll_display (GDisplay *gdisp,
 {
   int old_x, old_y;
   int src_x, src_y;
-  int dest_x, dest_y;
-  GdkEvent *event;
 
   old_x = gdisp->offset_x;
   old_y = gdisp->offset_y;
@@ -154,11 +161,6 @@ scroll_display (GDisplay *gdisp,
     {
       setup_scale (gdisp);
 
-      src_x = (x_offset < 0) ? 0 : x_offset;
-      src_y = (y_offset < 0) ? 0 : y_offset;
-      dest_x = (x_offset < 0) ? -x_offset : 0;
-      dest_y = (y_offset < 0) ? -y_offset : 0;
-
       /*  reset the old values so that the tool can accurately redraw  */
       gdisp->offset_x = old_x;
       gdisp->offset_y = old_y;
@@ -170,13 +172,7 @@ scroll_display (GDisplay *gdisp,
       gdisp->offset_x += x_offset;
       gdisp->offset_y += y_offset;
 
-      gdk_draw_pixmap (gdisp->canvas->window,
-		       gdisp->scroll_gc,
-		       gdisp->canvas->window,
-		       src_x, src_y,
-		       dest_x, dest_y,
-		       (gdisp->disp_width - abs (x_offset)),
-		       (gdisp->disp_height - abs (y_offset)));
+      scroll_backing (gdisp, x_offset, y_offset);
 
       /*  resume the currently active tool  */
       active_tool_control (RESUME, (void *) gdisp);
@@ -199,24 +195,7 @@ scroll_display (GDisplay *gdisp,
 				gdisp->disp_width, abs (y_offset));
 	}
 
-      if (x_offset || y_offset)
-	gdisplays_flush ();
-
-
-      /* Make sure graphics expose events are processed before scrolling
-       * again */
-      
-      while ((event = gdk_event_get_graphics_expose (gdisp->canvas->window)) 
-           != NULL)
-      {
-        gtk_widget_event (gdisp->canvas, event);
-        if (event->expose.count == 0)
-          {
-            gdk_event_free (event);
-            break;
-          }
-        gdk_event_free (event);
-      }
+      gdisplays_flush ();
 
       return 1;
     }

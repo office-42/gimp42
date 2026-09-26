@@ -18,18 +18,19 @@
 #ifndef __DRAWABLE_H__
 #define __DRAWABLE_H__
 
-#include <gtk/gtkdata.h>
+#include <glib-object.h>
 #include "tile_manager.h"
 #include "temp_buf.h"
 
-#define GIMP_DRAWABLE(obj)         GTK_CHECK_CAST (obj, gimp_drawable_get_type (), GimpDrawable)
-#define GIMP_DRAWABLE_CLASS(klass) GTK_CHECK_CLASS_CAST (klass, gimp_drawable_get_type(), GimpDrawableClass)
-#define GIMP_IS_DRAWABLE(obj)      GTK_CHECK_TYPE (obj, gimp_drawable_get_type())
+#define GIMP_TYPE_DRAWABLE         (gimp_drawable_get_type ())
+#define GIMP_DRAWABLE(obj)         G_TYPE_CHECK_INSTANCE_CAST (obj, gimp_drawable_get_type (), GimpDrawable)
+#define GIMP_DRAWABLE_CLASS(klass) G_TYPE_CHECK_CLASS_CAST (klass, gimp_drawable_get_type (), GimpDrawableClass)
+#define GIMP_IS_DRAWABLE(obj)      G_TYPE_CHECK_INSTANCE_TYPE (obj, gimp_drawable_get_type ())
 
 typedef struct _GimpDrawable      GimpDrawable;
 typedef struct _GimpDrawableClass GimpDrawableClass;
 
-guint gimp_drawable_get_type (void);
+GType gimp_drawable_get_type (void);
 
 /*  drawable access functions  */
 int		 drawable_ID		     (GimpDrawable *);

@@ -62,7 +62,7 @@ Layer * active_tool_layer = NULL;
 /* Local Data */
 
 static GtkWidget *options_shell = NULL;
-static GtkWidget *options_vbox = NULL;
+static GtkWidget *options_stack = NULL;
 static ToolType active_tool_type = -1;
 
 static int global_tool_ID = 0;
@@ -111,22 +111,31 @@ ToolInfo tool_info[] =
 /*  Local function declarations  */
 
 static void tools_options_dialog_callback (GtkWidget *, gpointer);
-static gint tools_options_delete_callback (GtkWidget *, GdkEvent *, gpointer);
+static gboolean tools_options_delete_callback (GtkWidget *, gpointer);
+static void tools_options_show_active (void);
 
 
 /* Function definitions */
 
+/*  Shows the active tool's page in the Tool Options dialog.  */
+static void
+tools_options_show_active (void)
+{
+  GtkWidget *options;
+
+  if (! active_tool || ! options_stack)
+    return;
+
+  options = tool_info[(int) active_tool->type].tool_options;
+  if (options && gtk_widget_get_parent (options) == options_stack)
+    gtk_stack_set_visible_child (GTK_STACK (options_stack), options);
+}
+
 static void
 active_tool_free (void)
 {
-    /*
-  gtk_container_disable_resize (GTK_CONTAINER (options_shell));
-    */
   if (!active_tool)
     return;
-
-  if (tool_info[(int) active_tool->type].tool_options)
-    gtk_widget_hide (tool_info[(int) active_tool->type].tool_options);
 
   switch (active_tool->type)
     {
@@ -358,12 +367,7 @@ tools_select (ToolType type)
 
   /*  Show the options for the active tool
    */
-  if (tool_info[(int) active_tool->type].tool_options)
-    gtk_widget_show (tool_info[(int) active_tool->type].tool_options);
-
-  /*
-    gtk_container_enable_resize (GTK_CONTAINER (options_shell));
-  */
+  tools_options_show_active ();
 
   /*  Set the paused count variable to 0
    */
@@ -540,12 +544,9 @@ tools_initialize (ToolType type, GDisplay *gdisp_ptr)
 
   /*  Show the options for the active tool
    */
-  if (tool_info[(int) active_tool->type].tool_options)
-    gtk_widget_show (tool_info[(int) active_tool->type].tool_options);
-
-  /*
-  gtk_container_enable_resize (GTK_CONTAINER (options_shell));
-  */
+  if (! active_tool)
+    return;
+  tools_options_show_active ();
 
   /*  Set the paused count variable to 0
    */
@@ -558,6 +559,10 @@ tools_initialize (ToolType type, GDisplay *gdisp_ptr)
   active_tool_type = active_tool->type;
 }
 
+/*  The Tool Options dialog shows one tool's options at a time: every
+ *  registered options widget is a page of options_stack, and selecting
+ *  a tool makes its page the visible one.
+ */
 void
 tools_options_dialog_new ()
 {
@@ -565,27 +570,35 @@ tools_options_dialog_new ()
   {
     { "Close", tools_options_dialog_callback, NULL, NULL }
   };
+  guint i;
 
   /*  The shell and main vbox  */
-  options_shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (options_shell), "tool_options", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (options_shell), "Tool Options");
-  gtk_window_set_policy (GTK_WINDOW (options_shell), FALSE, TRUE, TRUE);
-  gtk_widget_set_uposition (options_shell, tool_options_x, tool_options_y);
+  options_shell = gimp_dialog_new ("Tool Options");
+  gtk_window_set_resizable (GTK_WINDOW (options_shell), TRUE);
+  gtk_window_set_hide_on_close (GTK_WINDOW (options_shell), TRUE);
 
-  options_vbox = gtk_vbox_new (FALSE, 2);
-  gtk_container_border_width (GTK_CONTAINER (options_vbox), 2);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (options_shell)->vbox), options_vbox, TRUE, TRUE, 0);
+  options_stack = gtk_stack_new ();
+  gtk_stack_set_hhomogeneous (GTK_STACK (options_stack), FALSE);
+  gtk_stack_set_vhomogeneous (GTK_STACK (options_stack), FALSE);
+  gimp_container_set_border_width (options_stack, 2);
+  gimp_box_pack_start (gimp_dialog_get_vbox (options_shell), options_stack,
+		       TRUE, TRUE, 0);
+
+  /*  options registered before the dialog existed  */
+  for (i = 0; i < sizeof (tool_info) / sizeof (tool_info[0]); i++)
+    if (tool_info[i].tool_options &&
+	gtk_widget_get_parent (tool_info[i].tool_options) == NULL)
+      gtk_stack_add_child (GTK_STACK (options_stack),
+			   tool_info[i].tool_options);
+  tools_options_show_active ();
 
   /* handle the window manager trying to close the window */
-  gtk_signal_connect (GTK_OBJECT (options_shell), "delete_event",
-		      GTK_SIGNAL_FUNC (tools_options_delete_callback),
-		      options_shell);
+  g_signal_connect (options_shell, "close-request",
+		    G_CALLBACK (tools_options_delete_callback),
+		    options_shell);
 
   action_items[0].user_data = options_shell;
-  build_action_area (GTK_DIALOG (options_shell), action_items, 1, 0);
-
-  gtk_widget_show (options_vbox);
+  build_action_area (options_shell, action_items, 1, 0);
 }
 
 
@@ -597,21 +610,16 @@ tools_options_dialog_show ()
      switching tools, the dialog will be empty.  recreate the active
      tool here if necessary to avoid this behavior */
 
-  if (!GTK_WIDGET_VISIBLE(options_shell))
-    {
-      gtk_widget_show (options_shell);
-    }
-  else
-    {
-      gdk_window_raise (options_shell->window);
-    }
+  gtk_window_present (GTK_WINDOW (options_shell));
 }
 
 
 void
 tools_options_dialog_free ()
 {
-  gtk_widget_destroy (options_shell);
+  gtk_window_destroy (GTK_WINDOW (options_shell));
+  options_shell = NULL;
+  options_stack = NULL;
 }
 
 
@@ -619,14 +627,13 @@ void
 tools_register_options (ToolType   type,
 			GtkWidget *options)
 {
-  /*  need to check whether the widget is visible...this can happen
-   *  because some tools share options such as the transformation tools
+  /*  need to check whether the widget is already a page...this can
+   *  happen because some tools share options such as the
+   *  transformation tools
    */
-  if (! GTK_WIDGET_VISIBLE (options))
-    {
-      gtk_box_pack_start (GTK_BOX (options_vbox), options, TRUE, TRUE, 0);
-      gtk_widget_show (options);
-    }
+  if (options_stack && gtk_widget_get_parent (options) == NULL)
+    gtk_stack_add_child (GTK_STACK (options_stack), options);
+
   tool_info [(int) type].tool_options = options;
 }
 
@@ -638,22 +645,20 @@ tools_register_no_options (ToolType  tool_type,
   GtkWidget *label;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
+  vbox = gimp_vbox_new (FALSE, 1);
 
   /*  the main label  */
   label = gtk_label_new (tool_title);
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (vbox), label);
 
   /*  this tool has no special options  */
   label = gtk_label_new ("This tool has no options.");
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (vbox), label);
 
   /*  Register this selection options widget with the main tools options dialog  */
   tools_register_options (tool_type, vbox);
 
-  return (void *) 1;
+  return GINT_TO_POINTER (1);
 }
 
 void
@@ -695,7 +700,8 @@ active_tool_control (int   action,
 	      break;
 	    case DESTROY :
               active_tool_free();
-              gtk_widget_hide (options_shell);
+              if (options_shell)
+                gtk_widget_set_visible (options_shell, FALSE);
               break;
 	    }
 	}
@@ -707,14 +713,13 @@ active_tool_control (int   action,
 
 void
 standard_arrow_keys_func (Tool        *tool,
-			  GdkEventKey *kevent,
+			  GimpKeyEvent *kevent,
 			  gpointer     gdisp_ptr)
 {
 }
 
-static gint
+static gboolean
 tools_options_delete_callback (GtkWidget *w,
-			       GdkEvent *e,
 			       gpointer   client_data)
 {
   tools_options_dialog_callback (w, client_data);
@@ -729,5 +734,5 @@ tools_options_dialog_callback (GtkWidget *w,
   GtkWidget *shell;
 
   shell = (GtkWidget *) client_data;
-  gtk_widget_hide (shell);
+  gtk_widget_set_visible (shell, FALSE);
 }

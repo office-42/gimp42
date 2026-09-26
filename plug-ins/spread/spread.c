@@ -26,8 +26,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 /* Some useful macros */
 #ifndef M_PI
@@ -357,136 +358,112 @@ spread_dialog ()
   GtkWidget *hbox;
   GtkWidget *entry;
   GtkWidget *table;
-  GtkObject *x_scale_data;
-  GtkObject *y_scale_data;
-  gchar **argv;
+  GtkAdjustment *x_scale_data;
+  GtkAdjustment *y_scale_data;
   gchar buffer[32];
-  gint argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("spread");
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Spread");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) spread_close_callback,
+  dlg = gimp_dialog_new ("Spread");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (spread_close_callback),
 		      NULL);
 
   /*  Action area  */
   button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) spread_ok_callback,
+  g_signal_connect (button, "clicked",
+                      G_CALLBACK (spread_ok_callback),
                       dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
+  gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
   button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  g_signal_connect_swapped (button, "clicked",
+			     G_CALLBACK (gtk_window_destroy),
+			     dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Parameter Settings");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  table = gtk_table_new (2, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  table = gimp_table_new (2, 2, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (frame, table);
 
 
 
 
 /* Horizontal Amount */
   label = gtk_label_new ("Horizontal Spread Amount");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1, GTK_FILL | GTK_EXPAND, GTK_FILL, 10, 5);
-   gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 10, 5);
 
-  hbox = gtk_hbox_new (FALSE, 5);
-  gtk_table_attach (GTK_TABLE (table), hbox, 1, 2, 0, 1,
-		    GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_show (hbox);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_table_attach (table, hbox, 1, 2, 0, 1,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
   x_scale_data = gtk_adjustment_new (spvals.spread_amount_x, 0, 200, 1, 1, 0.0);
-  gtk_signal_connect (GTK_OBJECT (x_scale_data), "value_changed",
-		      (GtkSignalFunc) spread_fscale_callback,
+  g_signal_connect (x_scale_data, "value-changed",
+		      G_CALLBACK (spread_fscale_callback),
 		      &spvals.spread_amount_x);
 
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (x_scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
+  scale = gimp_hscale_new (GTK_ADJUSTMENT (x_scale_data), 0);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
   gtk_scale_set_digits (GTK_SCALE (scale), 2);
   gtk_scale_set_draw_value (GTK_SCALE (scale), FALSE);
-  gtk_box_pack_start (GTK_BOX (hbox), scale, TRUE, TRUE, 0);
-  gtk_widget_show (scale);
+  gimp_box_pack_start (hbox, scale, TRUE, TRUE, 0);
 
   entry = gtk_entry_new ();
-  gtk_object_set_user_data (GTK_OBJECT (entry), x_scale_data);
-  gtk_object_set_user_data (x_scale_data, entry);
-  gtk_box_pack_start (GTK_BOX (hbox), entry, FALSE, TRUE, 0);
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
+  g_object_set_data (G_OBJECT (entry), "user_data", x_scale_data);
+  g_object_set_data (G_OBJECT (x_scale_data), "user_data", entry);
+  gimp_box_pack_start (hbox, entry, FALSE, TRUE, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
   sprintf (buffer, "%0.2f", spvals.spread_amount_x);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) spread_fentry_callback,
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (spread_fentry_callback),
 		      &spvals.spread_amount_x);
-  gtk_widget_show (entry);
 
 
 
 /* Vertical Amount */
   label = gtk_label_new ("Vertical Spread Amount");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2, GTK_FILL | GTK_EXPAND, GTK_FILL, 10, 5);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 1, 2, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 10, 5);
 
-  hbox = gtk_hbox_new (FALSE, 5);
-  gtk_table_attach (GTK_TABLE (table), hbox, 1, 2, 1, 2,
-		    GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_show (hbox);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_table_attach (table, hbox, 1, 2, 1, 2,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
   y_scale_data = gtk_adjustment_new (spvals.spread_amount_y, 0, 200, 1, 1, 0.0);
-  gtk_signal_connect (GTK_OBJECT (y_scale_data), "value_changed",
-		      (GtkSignalFunc) spread_fscale_callback,
+  g_signal_connect (y_scale_data, "value-changed",
+		      G_CALLBACK (spread_fscale_callback),
 		      &spvals.spread_amount_y);
 
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (y_scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
+  scale = gimp_hscale_new (GTK_ADJUSTMENT (y_scale_data), 0);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
   gtk_scale_set_digits (GTK_SCALE (scale), 2);
   gtk_scale_set_draw_value (GTK_SCALE (scale), FALSE);
-  gtk_box_pack_start (GTK_BOX (hbox), scale, TRUE, TRUE, 0);
-  gtk_widget_show (scale);
+  gimp_box_pack_start (hbox, scale, TRUE, TRUE, 0);
 
   entry = gtk_entry_new ();
-  gtk_object_set_user_data (GTK_OBJECT (entry), y_scale_data);
-  gtk_object_set_user_data (y_scale_data, entry);
-  gtk_box_pack_start (GTK_BOX (hbox), entry, FALSE, TRUE, 0);
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
+  g_object_set_data (G_OBJECT (entry), "user_data", y_scale_data);
+  g_object_set_data (G_OBJECT (y_scale_data), "user_data", entry);
+  gimp_box_pack_start (hbox, entry, FALSE, TRUE, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
   sprintf (buffer, "%0.2f", spvals.spread_amount_y);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) spread_fentry_callback,
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (spread_fentry_callback),
 		      &spvals.spread_amount_y);
-  gtk_widget_show (entry);
 
 
 
-  gtk_widget_show (frame);
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return pint.run;
 }
@@ -542,7 +519,7 @@ static void
 spread_close_callback (GtkWidget *widget,
 		      gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -550,7 +527,7 @@ spread_ok_callback (GtkWidget *widget,
 		   gpointer   data)
 {
   pint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -562,15 +539,15 @@ spread_fscale_callback (GtkAdjustment *adjustment,
   double *val;
 
   val = data;
-  if (*val != adjustment->value)
+  if (*val != gtk_adjustment_get_value (adjustment))
     {
-      *val = adjustment->value;
-      entry = gtk_object_get_user_data (GTK_OBJECT (adjustment));
-      sprintf (buffer, "%0.2f", adjustment->value);
+      *val = gtk_adjustment_get_value (adjustment);
+      entry = g_object_get_data (G_OBJECT (adjustment), "user_data");
+      sprintf (buffer, "%0.2f", gtk_adjustment_get_value (adjustment));
 
-      gtk_signal_handler_block_by_data (GTK_OBJECT (entry), data);
-      gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-      gtk_signal_handler_unblock_by_data (GTK_OBJECT (entry), data);
+      g_signal_handlers_block_matched (entry, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, data);
+      gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+      g_signal_handlers_unblock_matched (entry, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, data);
     }
 }
 
@@ -583,18 +560,17 @@ spread_fentry_callback (GtkWidget *widget,
   double *val;
 
   val = data;
-  new_val = atof (gtk_entry_get_text (GTK_ENTRY (widget)));
+  new_val = atof (gtk_editable_get_text (GTK_EDITABLE (widget)));
 
   if (*val != new_val)
     {
-      adjustment = gtk_object_get_user_data (GTK_OBJECT (widget));
+      adjustment = g_object_get_data (G_OBJECT (widget), "user_data");
 
-      if ((new_val >= adjustment->lower) &&
-	  (new_val <= adjustment->upper))
+      if ((new_val >= gtk_adjustment_get_lower (adjustment)) &&
+	  (new_val <= gtk_adjustment_get_upper (adjustment)))
 	{
 	  *val = new_val;
-	  adjustment->value = new_val;
-	  gtk_signal_emit_by_name (GTK_OBJECT (adjustment), "value_changed");
+	  gtk_adjustment_set_value (adjustment, new_val);
 	}
     }
 }

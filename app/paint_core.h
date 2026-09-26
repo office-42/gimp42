@@ -77,10 +77,10 @@ struct _paint_undo
 };
 
 /*  paint tool action functions  */
-void          paint_core_button_press      (Tool *, GdkEventButton *, gpointer);
-void          paint_core_button_release    (Tool *, GdkEventButton *, gpointer);
-void          paint_core_motion            (Tool *, GdkEventMotion *, gpointer);
-void          paint_core_cursor_update     (Tool *, GdkEventMotion *, gpointer);
+void          paint_core_button_press      (Tool *, GimpButtonEvent *, gpointer);
+void          paint_core_button_release    (Tool *, GimpButtonEvent *, gpointer);
+void          paint_core_motion            (Tool *, GimpMotionEvent *, gpointer);
+void          paint_core_cursor_update     (Tool *, GimpMotionEvent *, gpointer);
 void          paint_core_control           (Tool *, int, gpointer);
 
 /*  paint tool functions  */

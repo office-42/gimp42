@@ -34,10 +34,10 @@ SelectionOptions *create_selection_options  (ToolType);
 
 /*  rect select action functions  */
 
-void          rect_select_button_press      (Tool *, GdkEventButton *, gpointer);
-void          rect_select_button_release    (Tool *, GdkEventButton *, gpointer);
-void          rect_select_motion            (Tool *, GdkEventMotion *, gpointer);
-void          rect_select_cursor_update     (Tool *, GdkEventMotion *, gpointer);
+void          rect_select_button_press      (Tool *, GimpButtonEvent *, gpointer);
+void          rect_select_button_release    (Tool *, GimpButtonEvent *, gpointer);
+void          rect_select_motion            (Tool *, GimpMotionEvent *, gpointer);
+void          rect_select_cursor_update     (Tool *, GimpMotionEvent *, gpointer);
 void          rect_select_control           (Tool *, int, gpointer);
 
 

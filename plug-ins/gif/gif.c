@@ -243,8 +243,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 
 /* Wear your GIMP with pride! */
@@ -287,7 +288,7 @@ badbounds_dialog ( void );
 static void
 cropok_callback (GtkWidget *widget,
 		 gpointer   data);
-static void
+static gboolean
 cropclose_callback (GtkWidget *widget,
 		    gpointer   data);
 static void
@@ -302,7 +303,7 @@ static void   save_ok_callback     (GtkWidget *widget,
 				    gpointer   data);
 static void   save_cancel_callback     (GtkWidget *widget,
 					gpointer   data);
-static void   save_windelete_callback     (GtkWidget *widget,
+static gboolean save_windelete_callback     (GtkWidget *widget,
 					   gpointer   data);
 static void   save_toggle_update   (GtkWidget *widget,
 				    gpointer   data);
@@ -419,8 +420,6 @@ run (char    *name,
   GStatusType status = STATUS_SUCCESS;
   GRunModeType run_mode;
   gint32 image_ID;
-  gchar **argv;
-  gint argc;
 
   run_mode = param[0].data.d_int32;
 
@@ -462,12 +461,8 @@ run (char    *name,
     }
   else if (strcmp (name, "file_gif_save") == 0)
     {
-      argc = 1;
-      argv = g_new (gchar *, 1);
-      argv[0] = g_strdup ("gif");
       
-      gtk_init (&argc, &argv);
-      gtk_rc_parse (gimp_gtkrc ());
+      gtk_init ();
  
 
       if (boundscheck(param[1].data.d_int32))
@@ -1909,7 +1904,6 @@ static gboolean
 badbounds_dialog ( void )
 {
   GtkWidget *dlg;
-  GtkWidget *button;
   GtkWidget *label;
   GtkWidget *frame;
   GtkWidget *vbox;
@@ -1918,49 +1912,27 @@ badbounds_dialog ( void )
   can_crop = FALSE;
 
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "GIF Warning");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) cropclose_callback,
-		      dlg);
-  gtk_signal_connect (GTK_OBJECT (dlg), "delete_event",
-		      (GtkSignalFunc) cropclose_callback,
-		      dlg);
+  dlg = gimp_dialog_new ("GIF Warning");
+  g_signal_connect (dlg, "close-request",
+		    G_CALLBACK (cropclose_callback),
+		    dlg);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("Crop");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) cropok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) cropcancel_callback,
-                      dlg);
-  /*  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-			     */
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "Crop", G_CALLBACK (cropok_callback),
+			  dlg, TRUE);
+  gimp_dialog_add_button (dlg, "Cancel", G_CALLBACK (cropcancel_callback),
+			  dlg, FALSE);
 
 
   /*  the warning message  */
   frame = gtk_frame_new (NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 5);
+  gtk_frame_set_child (GTK_FRAME (frame), vbox);
 
-  
+
   label= gtk_label_new(
 		       "The image which you are trying to save as a GIF\n"
 		       "contains layers which extend beyond the actual\n"
@@ -1969,21 +1941,14 @@ badbounds_dialog ( void )
 		       "You may choose whether to crop all of the layers to\n"
 		       "the image borders, or cancel this save."
 		       );
-  gtk_box_pack_start (GTK_BOX (vbox), label, TRUE, TRUE, 0);
-  gtk_widget_show(label);
+  gimp_box_pack_start (vbox, label, TRUE, TRUE, 0);
 
-  gtk_widget_show(vbox);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_widget_show(frame);
 
-  gtk_widget_show(dlg);
-  
+  gimp_main_loop_run ();
 
-  gtk_main ();
-
-  gtk_widget_destroy (GTK_WIDGET(dlg));
-
-  gdk_flush ();
+  gtk_window_destroy (GTK_WINDOW (dlg));
 
   return can_crop;
 }
@@ -1993,7 +1958,6 @@ static gint
 save_dialog ( gint32 image_ID )
 {
   GtkWidget *dlg;
-  GtkWidget *button;
   GtkWidget *toggle;
   GtkWidget *label;
   GtkWidget *entry;
@@ -2002,7 +1966,6 @@ save_dialog ( gint32 image_ID )
   GtkWidget *hbox;
   GtkWidget *innerframe;
   GtkWidget *innervbox;
-  GSList *group = NULL;
 
   gchar buffer[10];
   gint32 nlayers;
@@ -2011,186 +1974,135 @@ save_dialog ( gint32 image_ID )
   gimp_image_get_layers (image_ID, &nlayers);
 
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Save as GIF");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) save_close_callback,
-		      NULL);
-  gtk_signal_connect (GTK_OBJECT (dlg), "delete_event",
-		      (GtkSignalFunc) save_windelete_callback,
-		      dlg);
+  dlg = gimp_dialog_new ("Save as GIF");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (save_close_callback),
+		    NULL);
+  g_signal_connect (dlg, "close-request",
+		    G_CALLBACK (save_windelete_callback),
+		    dlg);
 
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) save_ok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  /*  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg)); */
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) save_cancel_callback,
-                      dlg);
-			     
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (save_ok_callback),
+			  dlg, TRUE);
+  gimp_dialog_add_button (dlg, "Cancel",
+			  G_CALLBACK (save_cancel_callback),
+			  dlg, FALSE);
 
 
   /*  regular gif parameter settings  */
   frame = gtk_frame_new ("GIF Options");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 5);
+  gtk_frame_set_child (GTK_FRAME (frame), vbox);
 
   toggle = gtk_check_button_new_with_label ("Interlace");
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) save_toggle_update,
-		      &gsvals.interlace);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), gsvals.interlace);
-  gtk_widget_show (toggle);
+  gimp_box_pack_start (vbox, toggle, TRUE, TRUE, 0);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (save_toggle_update),
+		    &gsvals.interlace);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), gsvals.interlace);
 
-  hbox = gtk_hbox_new(FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 0);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, TRUE, TRUE, 0);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_box_pack_start (vbox, hbox, TRUE, TRUE, 0);
 
   toggle = gtk_check_button_new_with_label ("GIF Comment: ");
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) save_toggle_update,
-		      &globalusecomment);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), 1);
-  gtk_widget_show (toggle);
+  gtk_box_append (GTK_BOX (hbox), toggle);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (save_toggle_update),
+		    &globalusecomment);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), TRUE);
 
   entry = gtk_entry_new ();
-  gtk_box_pack_start (GTK_BOX (hbox), entry, TRUE, TRUE, 0);
-  gtk_widget_set_usize (entry, 240, 0);
+  gimp_box_pack_start (hbox, entry, TRUE, TRUE, 0);
+  gtk_widget_set_size_request (entry, 240, -1);
   if (globalcomment!=NULL) g_free(globalcomment);
   globalcomment = g_malloc(1+strlen(DEFAULT_COMMENT));
   strcpy(globalcomment, DEFAULT_COMMENT);
-  gtk_entry_set_text (GTK_ENTRY (entry), globalcomment);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                      (GtkSignalFunc) comment_entry_callback,
-                      NULL);
-  gtk_widget_show (entry);
-
-  gtk_widget_show (hbox);
-
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
+  gtk_editable_set_text (GTK_EDITABLE (entry), globalcomment);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (comment_entry_callback),
+		    NULL);
 
 
   /*  additional animated gif parameter settings  */
   frame = gtk_frame_new ("Animated GIF Options");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 5);
+  gtk_frame_set_child (GTK_FRAME (frame), vbox);
 
   toggle = gtk_check_button_new_with_label ("Loop");
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) save_toggle_update,
-		      &gsvals.loop);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), gsvals.loop);
-  gtk_widget_show (toggle);
+  gimp_box_pack_start (vbox, toggle, TRUE, TRUE, 0);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (save_toggle_update),
+		    &gsvals.loop);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), gsvals.loop);
 
 
   /* default_delay entry field */
-  hbox = gtk_hbox_new (FALSE, 5);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, TRUE, FALSE, 0);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_box_pack_start (vbox, hbox, TRUE, FALSE, 0);
 
   label = gtk_label_new ("Default delay between frames where unspecified: ");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (hbox), label);
 
   entry = gtk_entry_new ();
-  gtk_box_pack_start (GTK_BOX (hbox), entry, FALSE, FALSE, 0);
-  gtk_widget_set_usize (entry, 80, 0);
+  gtk_box_append (GTK_BOX (hbox), entry);
+  gtk_widget_set_size_request (entry, 80, -1);
   sprintf (buffer, "%d", gsvals.default_delay);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                      (GtkSignalFunc) save_entry_callback,
-                      NULL);
-  gtk_widget_show (entry);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (save_entry_callback),
+		    NULL);
 
   label = gtk_label_new (" milliseconds");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
-
-  gtk_widget_show (hbox);
+  gtk_box_append (GTK_BOX (hbox), label);
 
 
   /* Disposal selector */
   innerframe = gtk_frame_new ("Default disposal where unspecified");
-  gtk_frame_set_shadow_type (GTK_FRAME (innerframe), GTK_SHADOW_IN);
-  gtk_container_border_width (GTK_CONTAINER (innerframe), 10);
-  gtk_box_pack_start (GTK_BOX (vbox), innerframe, TRUE, TRUE, 0);
-  innervbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (innervbox), 5);
-  gtk_container_add (GTK_CONTAINER (innerframe), innervbox);
+  gimp_container_set_border_width (innerframe, 10);
+  gimp_box_pack_start (vbox, innerframe, TRUE, TRUE, 0);
+  innervbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (innervbox, 5);
+  gtk_frame_set_child (GTK_FRAME (innerframe), innervbox);
 
-  toggle = gtk_radio_button_new_with_label (group,"Don't care");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (innervbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                      (GtkSignalFunc) save_toggle_update,
-                      &radio_pressed[0]);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), radio_pressed[0]);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (NULL, "Don't care");
+  gimp_box_pack_start (innervbox, toggle, TRUE, TRUE, 0);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (save_toggle_update),
+		    &radio_pressed[0]);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), radio_pressed[0]);
 
-  toggle = gtk_radio_button_new_with_label (group,"One frame per layer (replace)");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (innervbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                      (GtkSignalFunc) save_toggle_update,
-                      &radio_pressed[2]);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), radio_pressed[2]);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (toggle, "One frame per layer (replace)");
+  gimp_box_pack_start (innervbox, toggle, TRUE, TRUE, 0);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (save_toggle_update),
+		    &radio_pressed[2]);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), radio_pressed[2]);
 
-  toggle = gtk_radio_button_new_with_label (group,"Make frame from cumulative layers (combine)");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (innervbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                      (GtkSignalFunc) save_toggle_update,
-                      &radio_pressed[1]);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), radio_pressed[1]);
-  gtk_widget_show (toggle);
-  
-  gtk_widget_show (innervbox);
-  gtk_widget_show (innerframe);
+  toggle = gimp_radio_button_new (toggle, "Make frame from cumulative layers (combine)");
+  gimp_box_pack_start (innervbox, toggle, TRUE, TRUE, 0);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (save_toggle_update),
+		    &radio_pressed[1]);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), radio_pressed[1]);
 
-
-
-  gtk_widget_show (vbox);
 
   /* If the image has only one layer it can't be animated, so
      desensitize the animation options. */
 
   if (nlayers == 1) gtk_widget_set_sensitive (frame, FALSE);
 
-  gtk_widget_show (frame);
 
+  gtk_window_present (GTK_WINDOW (dlg));
 
-
-  gtk_widget_show (dlg);
-
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return gsint.run;
 }
@@ -3231,7 +3143,7 @@ cropok_callback (GtkWidget *widget,
 		 gpointer   data)
 {
   can_crop = TRUE;
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -3239,14 +3151,17 @@ cropcancel_callback (GtkWidget *widget,
 		     gpointer   data)
 {
   can_crop = FALSE;
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
-static void
+static gboolean
 cropclose_callback (GtkWidget *widget,
 		     gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
+
+  /* badbounds_dialog () destroys the window itself */
+  return TRUE;
 }
 
 
@@ -3256,7 +3171,7 @@ static void
 save_close_callback (GtkWidget *widget,
 		     gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -3264,7 +3179,7 @@ save_ok_callback (GtkWidget *widget,
 		  gpointer   data)
 {
   gsint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -3272,14 +3187,16 @@ save_cancel_callback (GtkWidget *widget,
 		      gpointer   data)
 {
   gsint.run = FALSE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
-static void
+static gboolean
 save_windelete_callback (GtkWidget *widget,
 			 gpointer   data)
 {
   gsint.run = FALSE;
+
+  return FALSE;
 }
 
 static void
@@ -3290,7 +3207,7 @@ save_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -3300,7 +3217,7 @@ static void
 save_entry_callback (GtkWidget *widget,
 		     gpointer   data)
 {
-  gsvals.default_delay = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+  gsvals.default_delay = atoi (gtk_editable_get_text (GTK_EDITABLE (widget)));
 
   if (gsvals.default_delay < 0)
     gsvals.default_delay = 0;
@@ -3315,7 +3232,7 @@ comment_entry_callback (GtkWidget *widget,
 {
   gint ssize;
 
-  ssize = strlen(gtk_entry_get_text (GTK_ENTRY (widget)));
+  ssize = strlen(gtk_editable_get_text (GTK_EDITABLE (widget)));
 
   /* Temporary kludge for overlength strings - just return */
   if (ssize>240)
@@ -3327,7 +3244,7 @@ comment_entry_callback (GtkWidget *widget,
   if (globalcomment!=NULL) g_free(globalcomment);
   globalcomment = g_malloc(ssize+1);
 
-  strcpy(globalcomment, gtk_entry_get_text (GTK_ENTRY (widget)));
+  strcpy(globalcomment, gtk_editable_get_text (GTK_EDITABLE (widget)));
 
   /* g_print ("COMMENT: %s\n",globalcomment); */
 }

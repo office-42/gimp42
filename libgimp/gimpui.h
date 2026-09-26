@@ -22,6 +22,7 @@
 
 #include <gtk/gtk.h>
 #include <libgimp/gimpmenu.h>
+#include <libgimp/gimpwidgets.h>
 
 
 #endif /* __GIMP_UI_H__ */

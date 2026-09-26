@@ -28,63 +28,52 @@
 #include "ops_buttons.h"
 
 
+static GtkWidget *
+ops_button_image (gchar **xpm_data)
+{
+  GdkPixbuf *pixbuf;
+  GdkTexture *texture;
+  GtkWidget *image;
+
+  pixbuf = gdk_pixbuf_new_from_xpm_data ((const char **) xpm_data);
+  if (!pixbuf)
+    return gtk_image_new ();
+
+  texture = gdk_texture_new_for_pixbuf (pixbuf);
+  image = gtk_image_new_from_paintable (GDK_PAINTABLE (texture));
+  gtk_image_set_pixel_size (GTK_IMAGE (image),
+			    MAX (gdk_pixbuf_get_width (pixbuf),
+				 gdk_pixbuf_get_height (pixbuf)));
+
+  g_object_unref (texture);
+  g_object_unref (pixbuf);
+
+  return image;
+}
+
 GtkWidget *ops_button_box_new (GtkWidget   *parent,
-			       GtkTooltips *tool_tips,
 			       OpsButton   *ops_buttons)
-			   
 {
   GtkWidget *button;
   GtkWidget *button_box;
-  GtkWidget *box;
-  GtkWidget *pixmapwid;
-  GdkPixmap *pixmap;
-  GdkBitmap *mask;
-  GdkPixmap *is_pixmap;
-  GdkBitmap *is_mask;
-  GtkStyle *style;
 
-  gtk_widget_realize(parent);
-  style = gtk_widget_get_style(parent);
-
-  button_box = gtk_hbox_new (FALSE, 1);
+  button_box = gimp_hbox_new (FALSE, 1);
 
   while (ops_buttons->xpm_data)
     {
-      box = gtk_hbox_new (FALSE, 0);
-      gtk_container_border_width (GTK_CONTAINER (box), 0);
-      
-      pixmap = gdk_pixmap_create_from_xpm_d (parent->window,
-					     &mask,
-					     &style->bg[GTK_STATE_NORMAL],
-					     ops_buttons->xpm_data);
-      is_pixmap = gdk_pixmap_create_from_xpm_d (parent->window,
-						&is_mask,
-						&style->bg[GTK_STATE_NORMAL],
-						ops_buttons->xpm_is_data);
-      
-      pixmapwid =  gtk_pixmap_new (pixmap, mask);
-      gtk_box_pack_start (GTK_BOX (box), pixmapwid, TRUE, TRUE, 3);
-      gtk_widget_show(pixmapwid);
-      gtk_widget_show(box);
-
       button = gtk_button_new ();
-      gtk_container_add (GTK_CONTAINER (button), box);
-      gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-				 (GtkSignalFunc) ops_buttons->callback,
-				 GTK_OBJECT (parent));
+      gtk_button_set_child (GTK_BUTTON (button),
+			    ops_button_image (ops_buttons->xpm_data));
+      g_signal_connect_swapped (button, "clicked",
+				G_CALLBACK (ops_buttons->callback),
+				parent);
 
-      if (tool_tips != NULL)
-	gtk_tooltips_set_tip (tool_tips, button, ops_buttons->tooltip, NULL);
+      if (ops_buttons->tooltip)
+	gtk_widget_set_tooltip_text (button, ops_buttons->tooltip);
 
-      gtk_box_pack_start (GTK_BOX(button_box), button, TRUE, TRUE, 0);
-      gtk_widget_show (button);
+      gimp_box_pack_start (button_box, button, TRUE, TRUE, 0);
 
-      ops_buttons->pixmap    = pixmap;
-      ops_buttons->mask      = mask;
-      ops_buttons->is_pixmap = is_pixmap;
-      ops_buttons->is_mask   = is_mask;
-      ops_buttons->pixmapwid = pixmapwid;
-      ops_buttons->widget    = button;
+      ops_buttons->widget = button;
 
       ops_buttons++;
     }
@@ -93,7 +82,7 @@ GtkWidget *ops_button_box_new (GtkWidget   *parent,
 
 
 void
-ops_button_box_set_insensitive(OpsButton *ops_buttons)
+ops_button_box_set_insensitive (OpsButton *ops_buttons)
 {
   while (ops_buttons->widget)
     {
@@ -104,22 +93,9 @@ ops_button_box_set_insensitive(OpsButton *ops_buttons)
 
 
 void
-ops_button_set_sensitive(OpsButton ops_button, 
-			 gint      sensitive)
+ops_button_set_sensitive (OpsButton ops_button,
+			  gint      sensitive)
 {
-  sensitive = (sensitive != FALSE);
-  if (sensitive == (GTK_WIDGET_SENSITIVE (ops_button.widget) != FALSE))
-    return;
-
-  if (sensitive)
-    gtk_pixmap_set (GTK_PIXMAP(ops_button.pixmapwid), 
-		    ops_button.pixmap, 
-		    ops_button.mask);
-  else
-    gtk_pixmap_set (GTK_PIXMAP(ops_button.pixmapwid), 
-		    ops_button.is_pixmap, 
-		    ops_button.is_mask);
-
-  gtk_widget_set_sensitive (ops_button.widget, sensitive);
+  if (ops_button.widget)
+    gtk_widget_set_sensitive (ops_button.widget, sensitive != FALSE);
 }
-

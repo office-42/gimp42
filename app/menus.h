@@ -18,26 +18,53 @@
 #ifndef __MENUS_H__
 #define __MENUS_H__
 
+#include <gtk/gtk.h>
 
-#include "gtk/gtk.h"
+/*  Menus are addressed by path, as they were with GTK 1's item
+ *  factories: "<Toolbox>/File/New", "<Image>/Filters/Blur/Blur".  Behind
+ *  them are GMenu models and one action group; windows show them as a
+ *  menu bar (the toolbox) or a popover (the image popup), and get the
+ *  accelerators through menus_install ().
+ */
 
+/*  Called with the widget that was activated (always NULL now), the
+ *  entry's callback_data and its callback_action.  Callbacks that only
+ *  take the first two arguments may be used as well.
+ */
+typedef void (* MenuCallback) (GtkWidget *widget,
+			       gpointer   callback_data,
+			       guint      callback_action);
 
-void menus_get_toolbox_menubar (GtkWidget           **menubar,
-				GtkAccelGroup       **accel_group);
-void menus_get_image_menu      (GtkWidget           **menu,
-				GtkAccelGroup       **accel_group);
-void menus_get_load_menu       (GtkWidget           **menu,
-				GtkAccelGroup       **accel_group);
-void menus_get_save_menu       (GtkWidget           **menu,
-				GtkAccelGroup       **accel_group);
-void menus_create              (GtkMenuEntry         *entries,
-				int                   nmenu_entries);
-void menus_set_sensitive       (char                 *path,
-				int                   sensitive);
-void menus_set_state           (char                 *path,
-				int                   state);
-void menus_destroy             (char                 *path);
-void menus_quit                (void);
+typedef struct _MenuEntry MenuEntry;
 
+struct _MenuEntry
+{
+  char         *path;             /*  "<Image>/File/Save"                   */
+  char         *accelerator;      /*  "<control>S", "equal", NULL           */
+  MenuCallback  callback;
+  guint         callback_action;
+  char         *item_type;        /*  NULL, "<Separator>", "<ToggleItem>"   */
+  gpointer      callback_data;
+};
+
+void          menus_create         (MenuEntry   *entries,
+				    int          nmenu_entries);
+void          menus_set_sensitive  (char        *path,
+				    int          sensitive);
+void          menus_set_state      (char        *path,
+				    int          state);
+int           menus_get_state      (char        *path);
+void          menus_destroy        (char        *path);
+void          menus_quit           (void);
+
+/*  The menu models, for a GtkPopoverMenuBar or GtkPopoverMenu.  */
+GMenuModel *  menus_get_toolbox_model (void);
+GMenuModel *  menus_get_image_model   (void);
+
+/*  Gives window the menu actions and the accelerators of factory
+ *  ("<Toolbox>" or "<Image>").
+ */
+void          menus_install        (GtkWidget   *window,
+				    const char  *factory);
 
 #endif /* MENUS_H */

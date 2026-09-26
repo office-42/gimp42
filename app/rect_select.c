@@ -45,7 +45,7 @@ selection_toggle_update (GtkWidget *w,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -55,7 +55,7 @@ static void
 selection_scale_update (GtkAdjustment *adjustment,
 			double        *scale_val)
 {
-  *scale_val = adjustment->value;
+  *scale_val = gtk_adjustment_get_value (adjustment);
 }
 
 SelectionOptions *
@@ -69,7 +69,7 @@ create_selection_options (ToolType tool_type)
   GtkWidget *feather_toggle;
   GtkWidget *feather_scale;
   GtkWidget *sample_merged_toggle;
-  GtkObject *feather_scale_data;
+  GtkAdjustment *feather_scale_data;
 
   label = NULL;
 
@@ -81,7 +81,7 @@ create_selection_options (ToolType tool_type)
   options->sample_merged = FALSE;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
+  vbox = gimp_vbox_new (FALSE, 1);
 
   /*  the main label  */
   switch (tool_type)
@@ -111,8 +111,7 @@ create_selection_options (ToolType tool_type)
       break;
     }
 
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_box_pack_start (vbox, label, FALSE, FALSE, 0);
 
   /*  the sample merged option  */
   switch (tool_type)
@@ -126,12 +125,11 @@ create_selection_options (ToolType tool_type)
     case ISCISSORS:
     case BY_COLOR_SELECT:
       sample_merged_toggle = gtk_check_button_new_with_label ("Sample Merged");
-      gtk_box_pack_start (GTK_BOX (vbox), sample_merged_toggle, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (sample_merged_toggle), "toggled",
-			  (GtkSignalFunc) selection_toggle_update,
+      gimp_box_pack_start (vbox, sample_merged_toggle, FALSE, FALSE, 0);
+      g_signal_connect (sample_merged_toggle, "toggled",
+			  G_CALLBACK (selection_toggle_update),
 			  &options->sample_merged);
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (sample_merged_toggle), options->sample_merged);
-      gtk_widget_show (sample_merged_toggle);
+      gtk_check_button_set_active (GTK_CHECK_BUTTON (sample_merged_toggle), options->sample_merged);
       break;
     default:
       break;
@@ -141,41 +139,34 @@ create_selection_options (ToolType tool_type)
   if (tool_type != RECT_SELECT)
     {
       antialias_toggle = gtk_check_button_new_with_label ("Antialiasing");
-      gtk_box_pack_start (GTK_BOX (vbox), antialias_toggle, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (antialias_toggle), "toggled",
-			  (GtkSignalFunc) selection_toggle_update,
+      gimp_box_pack_start (vbox, antialias_toggle, FALSE, FALSE, 0);
+      g_signal_connect (antialias_toggle, "toggled",
+			  G_CALLBACK (selection_toggle_update),
 			  &options->antialias);
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (antialias_toggle), options->antialias);
-      gtk_widget_show (antialias_toggle);
+      gtk_check_button_set_active (GTK_CHECK_BUTTON (antialias_toggle), options->antialias);
     }
 
   /*  the feather toggle button  */
   feather_toggle = gtk_check_button_new_with_label ("Feather");
-  gtk_box_pack_start (GTK_BOX (vbox), feather_toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (feather_toggle), "toggled",
-		      (GtkSignalFunc) selection_toggle_update,
+  gimp_box_pack_start (vbox, feather_toggle, FALSE, FALSE, 0);
+  g_signal_connect (feather_toggle, "toggled",
+		      G_CALLBACK (selection_toggle_update),
 		      &options->feather);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (feather_toggle), options->feather);
-  gtk_widget_show (feather_toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (feather_toggle), options->feather);
 
   /*  the feather radius scale  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (FALSE, 1);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
 
   label = gtk_label_new ("Feather Radius");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_box_pack_start (hbox, label, FALSE, FALSE, 0);
 
   feather_scale_data = gtk_adjustment_new (options->feather_radius, 0.0, 100.0, 1.0, 1.0, 0.0);
-  feather_scale = gtk_hscale_new (GTK_ADJUSTMENT (feather_scale_data));
-  gtk_box_pack_start (GTK_BOX (hbox), feather_scale, TRUE, TRUE, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (feather_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (feather_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (feather_scale_data), "value_changed",
-		      (GtkSignalFunc) selection_scale_update,
+  feather_scale = gimp_hscale_new (feather_scale_data, 1);
+  gimp_box_pack_start (hbox, feather_scale, TRUE, TRUE, 0);
+  g_signal_connect (feather_scale_data, "value-changed",
+		      G_CALLBACK (selection_scale_update),
 		      &options->feather_radius);
-  gtk_widget_show (feather_scale);
-  gtk_widget_show (hbox);
 
   /*  Register this selection options widget with the main tools options dialog  */
   tools_register_options (tool_type, vbox);
@@ -229,7 +220,7 @@ rect_select (GImage *gimage,
 
 void
 rect_select_button_press (Tool           *tool,
-			  GdkEventButton *bevent,
+			  GimpButtonEvent *bevent,
 			  gpointer        gdisp_ptr)
 {
   GDisplay * gdisp;
@@ -248,14 +239,10 @@ rect_select_button_press (Tool           *tool,
 
   rect_sel->center = FALSE;
 
-  gdk_pointer_grab (gdisp->canvas->window, FALSE,
-		    GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-		    NULL, NULL, bevent->time);
-
   tool->state = ACTIVE;
   tool->gdisp_ptr = gdisp_ptr;
 
-  if (bevent->state & GDK_MOD1_MASK)
+  if (bevent->state & GDK_ALT_MASK)
     {
       init_edit_selection (tool, gdisp_ptr, bevent, MaskTranslate);
       return;
@@ -277,12 +264,12 @@ rect_select_button_press (Tool           *tool,
       rect_sel->op = REPLACE;
     }
 
-  draw_core_start (rect_sel->core, gdisp->canvas->window, tool);
+  draw_core_start (rect_sel->core, gdisp->canvas, tool);
 }
 
 void
 rect_select_button_release (Tool           *tool,
-			    GdkEventButton *bevent,
+			    GimpButtonEvent *bevent,
 			    gpointer        gdisp_ptr)
 {
   RectSelect * rect_sel;
@@ -292,8 +279,6 @@ rect_select_button_release (Tool           *tool,
   gdisp = (GDisplay *) gdisp_ptr;
   rect_sel = (RectSelect *) tool->private;
 
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
 
   draw_core_stop (rect_sel->core, tool);
   tool->state = INACTIVE;
@@ -352,7 +337,7 @@ rect_select_button_release (Tool           *tool,
 
 void
 rect_select_motion (Tool           *tool,
-		    GdkEventMotion *mevent,
+		    GimpMotionEvent *mevent,
 		    gpointer        gdisp_ptr)
 {
   RectSelect * rect_sel;
@@ -447,15 +432,14 @@ rect_select_draw (Tool *tool)
   gdisplay_transform_coords (gdisp, x1, y1, &x1, &y1, 0);
   gdisplay_transform_coords (gdisp, x2, y2, &x2, &y2, 0);
 
-  gdk_draw_rectangle (rect_sel->core->win,
-		      rect_sel->core->gc, 0,
+  draw_core_rectangle (rect_sel->core, FALSE,
 		      x1, y1, (x2 - x1), (y2 - y1));
 }
 
 
 void
 rect_select_cursor_update (Tool           *tool,
-			   GdkEventMotion *mevent,
+			   GimpMotionEvent *mevent,
 			   gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -465,8 +449,8 @@ rect_select_cursor_update (Tool           *tool,
   active = (active_tool->state == ACTIVE);
 
   /*  if alt key is depressed, use the diamond cursor  */
-  if (mevent->state & GDK_MOD1_MASK && !active)
-    gdisplay_install_tool_cursor (gdisp, GDK_DIAMOND_CROSS);
+  if (mevent->state & GDK_ALT_MASK && !active)
+    gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_DIAMOND_CROSS);
   /*  if the cursor is over the selected region, but no modifiers
    *  are depressed, use a fleur cursor--for cutting and moving the selection
    */
@@ -474,9 +458,9 @@ rect_select_cursor_update (Tool           *tool,
 	   ! (layer_is_floating_sel (gimage_get_active_layer (gdisp->gimage))) &&
 	   ! (mevent->state & (GDK_SHIFT_MASK | GDK_CONTROL_MASK)) &&
 	   ! active)
-    gdisplay_install_tool_cursor (gdisp, GDK_FLEUR);
+    gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_FLEUR);
   else
-    gdisplay_install_tool_cursor (gdisp, GDK_TCROSS);
+    gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TCROSS);
 }
 
 

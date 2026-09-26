@@ -30,7 +30,11 @@ typedef struct {
 } Aff3;
 
 typedef struct {
-  GdkPoint *points;
+  gint x, y;
+} IPoint;
+
+typedef struct {
+  IPoint *points;
   gint npoints;
 } IPolygon;
 
@@ -122,9 +126,10 @@ void  aff_element_compute_boundary(AffElement *elem, gint width,
 				   int num_elements);
 void aff_element_draw(AffElement *elem, gint selected,
 		      gint width, gint height,
-		      GdkDrawable *win,
-		      GdkGC *normal_gc,GdkGC *selected_gc,
-		      GdkFont *font);
+		      cairo_t *cr,
+		      const GdkRGBA *normal_color,
+		      const GdkRGBA *selected_color,
+		      PangoLayout *layout);
 
 void ifs_render(AffElement **elements, gint num_elements,
 		gint width, gint height, gint nsteps,

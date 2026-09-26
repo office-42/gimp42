@@ -26,8 +26,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 
 /* Some useful macros */
@@ -111,7 +112,7 @@ static ShiftInterface shint =
 MAIN ()
 
 static void
-query ()
+query (void)
 {
   static GParamDef args[] =
   {
@@ -355,7 +356,7 @@ shift (GDrawable *drawable)
 
 
 static gint
-shift_dialog ()
+shift_dialog (void)
 {
   GtkWidget *amount_label;
   GtkWidget *amount;
@@ -366,114 +367,75 @@ shift_dialog ()
   GtkWidget *vbox;
   GtkWidget *hbox;
   GtkWidget *entry;
-  GtkObject *amount_data;
-  GSList *group = NULL;
-  gchar **argv;
+  GtkAdjustment *amount_data;
   gchar buffer[32];
-  gint argc;
   gint do_horizontal = (shvals.orientation == HORIZONTAL);
   gint do_vertical = (shvals.orientation == VERTICAL);
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("shift");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Shift");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) shift_close_callback,
-		      NULL);
+  dlg = gimp_dialog_new ("Shift");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (shift_close_callback), NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) shift_ok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (shift_ok_callback),
+			  dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Parameter Settings");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 10);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 10);
+  gtk_frame_set_child (GTK_FRAME (frame), vbox);
 
-  toggle = gtk_radio_button_new_with_label (group, "Shift Horizontally");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) shift_toggle_update,
-		      &do_horizontal);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), do_horizontal);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (NULL, "Shift Horizontally");
+  gimp_box_pack_start (vbox, toggle, TRUE, TRUE, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), do_horizontal);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (shift_toggle_update), &do_horizontal);
 
-  toggle = gtk_radio_button_new_with_label (group, "Shift Vertically");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) shift_toggle_update,
-		      &do_vertical);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), do_vertical);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (toggle, "Shift Vertically");
+  gimp_box_pack_start (vbox, toggle, TRUE, TRUE, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), do_vertical);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (shift_toggle_update), &do_vertical);
 
-
-  hbox = gtk_hbox_new (FALSE, 5);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, TRUE, TRUE, 0);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_box_pack_start (vbox, hbox, TRUE, TRUE, 0);
 
   amount_label = gtk_label_new ("Shift Amount:");
-  gtk_misc_set_alignment (GTK_MISC (amount_label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (hbox), amount_label, TRUE, TRUE, 0);
-  gtk_widget_show (amount_label);
-
-  gtk_widget_show (hbox);
+  gtk_label_set_xalign (GTK_LABEL (amount_label), 0.0);
+  gimp_box_pack_start (hbox, amount_label, TRUE, TRUE, 0);
 
   amount_data = gtk_adjustment_new (shvals.shift_amount, 0, 200, 1, 1, 0.0);
-  gtk_signal_connect (GTK_OBJECT (amount_data), "value_changed",
-		      (GtkSignalFunc) shift_iscale_callback,
-		      &shvals.shift_amount);
+  g_signal_connect (amount_data, "value-changed",
+		    G_CALLBACK (shift_iscale_callback), &shvals.shift_amount);
 
-  amount = gtk_hscale_new (GTK_ADJUSTMENT (amount_data));
-  gtk_widget_set_usize (amount, SCALE_WIDTH, 0);
+  amount = gtk_scale_new (GTK_ORIENTATION_HORIZONTAL, amount_data);
+  gtk_widget_set_size_request (amount, SCALE_WIDTH, -1);
   gtk_scale_set_digits (GTK_SCALE (amount), 0);
   gtk_scale_set_draw_value (GTK_SCALE (amount), FALSE);
-  gtk_box_pack_start (GTK_BOX (hbox), amount, TRUE, TRUE, 0);
-  gtk_widget_show (amount);
+  gimp_box_pack_start (hbox, amount, TRUE, TRUE, 0);
 
   entry = gtk_entry_new ();
-  gtk_object_set_user_data (GTK_OBJECT (entry), amount_data);
-  gtk_object_set_user_data (amount_data, entry);
-  gtk_box_pack_start (GTK_BOX (hbox), entry, FALSE, TRUE, 0);
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
-  sprintf (buffer, "%d", shvals.shift_amount);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) shift_ientry_callback,
-		      &shvals.shift_amount);
-  gtk_widget_show (entry);
+  g_object_set_data (G_OBJECT (entry), "user_data", amount_data);
+  g_object_set_data (G_OBJECT (amount_data), "user_data", entry);
+  gimp_box_pack_start (hbox, entry, FALSE, TRUE, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
+  gtk_editable_set_width_chars (GTK_EDITABLE (entry), 4);
+  g_snprintf (buffer, sizeof (buffer), "%d", shvals.shift_amount);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (shift_ientry_callback), &shvals.shift_amount);
 
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   if (do_horizontal)
       shvals.orientation = HORIZONTAL;
@@ -534,7 +496,7 @@ static void
 shift_close_callback (GtkWidget *widget,
 		      gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -542,18 +504,18 @@ shift_ok_callback (GtkWidget *widget,
 		   gpointer   data)
 {
   shint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
 shift_toggle_update (GtkWidget *widget,
-			gpointer   data)
+		     gpointer   data)
 {
   int *toggle_val;
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -561,43 +523,44 @@ shift_toggle_update (GtkWidget *widget,
 
 static void
 shift_ientry_callback (GtkWidget *widget,
-			  gpointer   data)
+		       gpointer   data)
 {
   GtkAdjustment *adjustment;
   int new_val;
   int *val;
 
   val = data;
-  new_val = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+  new_val = atoi (gtk_editable_get_text (GTK_EDITABLE (widget)));
 
   if (*val != new_val)
     {
-      adjustment = gtk_object_get_user_data (GTK_OBJECT (widget));
+      adjustment = g_object_get_data (G_OBJECT (widget), "user_data");
 
-      if ((new_val >= adjustment->lower) &&
-	  (new_val <= adjustment->upper))
+      if ((new_val >= gtk_adjustment_get_lower (adjustment)) &&
+	  (new_val <= gtk_adjustment_get_upper (adjustment)))
 	{
 	  *val = new_val;
-	  adjustment->value = new_val;
-	  gtk_signal_emit_by_name (GTK_OBJECT (adjustment), "value_change");
+	  gtk_adjustment_set_value (adjustment, new_val);
 	}
     }
 }
 
 static void
 shift_iscale_callback (GtkAdjustment *adjustment,
-			  gpointer       data)
+		       gpointer       data)
 {
   GtkWidget *entry;
   gchar buffer[32];
   int *val;
+  gint value;
 
   val = data;
-  if (*val != (int) adjustment->value)
+  value = (int) gtk_adjustment_get_value (adjustment);
+  if (*val != value)
     {
-      *val = adjustment->value;
-      entry = gtk_object_get_user_data (GTK_OBJECT (adjustment));
-      sprintf (buffer, "%d", (int) adjustment->value);
-      gtk_entry_set_text (GTK_ENTRY (entry), buffer);
+      *val = value;
+      entry = g_object_get_data (G_OBJECT (adjustment), "user_data");
+      g_snprintf (buffer, sizeof (buffer), "%d", value);
+      gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
     }
 }

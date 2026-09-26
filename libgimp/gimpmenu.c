@@ -1,32 +1,95 @@
-/* LIBGIMP - The GIMP Library                                                   
- * Copyright (C) 1995-1997 Peter Mattis and Spencer Kimball                
+/* LIBGIMP - The GIMP Library
+ * Copyright (C) 1995-1997 Peter Mattis and Spencer Kimball
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
  * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.             
- *                                                                              
- * This library is distributed in the hope that it will be useful,              
- * but WITHOUT ANY WARRANTY; without even the implied warranty of               
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU            
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Library General Public License for more details.
  *
  * You should have received a copy of the GNU Library General Public
  * License along with this library; if not, write to the
  * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
  * Boston, MA 02111-1307, USA.
- */                                                                             
+ */
 #include <stdio.h>
 #include <string.h>
 
 #include "gimp.h"
 #include "gimpui.h"
 
+/*  The menus are option menus (see gimpwidgets.h): each item's data is the
+ *  ID it stands for, and choosing one calls the GimpMenuCallback given at
+ *  creation with that ID.
+ */
 
-static char* gimp_base_name     (char *str);
-static void  gimp_menu_callback (GtkWidget *w,
-				 gint32    *id);
+typedef struct
+{
+  GimpMenuCallback callback;
+  gpointer         data;
+} MenuInfo;
 
+#define MENU_INFO_KEY "gimp-menu-info"
+
+static const char* gimp_base_name     (const char *str);
+static void        gimp_menu_callback (GtkWidget  *option_menu,
+				       gpointer    id);
+
+static GtkWidget *
+gimp_menu_start (GimpMenuCallback callback,
+		 gpointer         data)
+{
+  GtkWidget *option_menu;
+  MenuInfo  *info;
+
+  option_menu = gimp_option_menu_new ();
+
+  info = g_new0 (MenuInfo, 1);
+  info->callback = callback;
+  info->data     = data;
+  g_object_set_data_full (G_OBJECT (option_menu), MENU_INFO_KEY, info, g_free);
+
+  return option_menu;
+}
+
+static void
+gimp_menu_add (GtkWidget  *option_menu,
+	       const char *label,
+	       gint32      id)
+{
+  gimp_option_menu_append (option_menu, label,
+			   G_CALLBACK (gimp_menu_callback),
+			   GINT_TO_POINTER (id));
+}
+
+static void
+gimp_menu_finish (GtkWidget *option_menu,
+		  int        n_items)
+{
+  if (n_items == 0)
+    {
+      gimp_option_menu_append (option_menu, "none", NULL, NULL);
+      gimp_option_menu_set_item_sensitive (option_menu, 0, FALSE);
+      gtk_widget_set_sensitive (option_menu, FALSE);
+    }
+}
+
+static char *
+gimp_image_label (gint32 image_ID)
+{
+  char *filename;
+  char *label;
+
+  filename = gimp_image_get_filename (image_ID);
+  label = g_strdup_printf ("%s-%d", gimp_base_name (filename), image_ID);
+  g_free (filename);
+
+  return label;
+}
 
 GtkWidget*
 gimp_image_menu_new (GimpConstraintFunc constraint,
@@ -35,48 +98,28 @@ gimp_image_menu_new (GimpConstraintFunc constraint,
 		     gint32             active_image)
 {
   GtkWidget *menu;
-  GtkWidget *menuitem;
-  char *filename;
   char *label;
   gint32 *images;
   int nimages;
   int i, k;
 
-  menu = gtk_menu_new ();
-  gtk_object_set_user_data (GTK_OBJECT (menu), (gpointer) callback);
-  gtk_object_set_data (GTK_OBJECT (menu), "gimp_callback_data", data);
+  menu = gimp_menu_start (callback, data);
 
   images = gimp_query_images (&nimages);
   for (i = 0, k = 0; i < nimages; i++)
     if (!constraint || (* constraint) (images[i], -1, data))
       {
-	filename = gimp_image_get_filename (images[i]);
-	label = g_new (char, strlen (filename) + 16);
-	sprintf (label, "%s-%d", gimp_base_name (filename), images[i]);
-	g_free (filename);
-
-	menuitem = gtk_menu_item_new_with_label (label);
-	gtk_signal_connect (GTK_OBJECT (menuitem), "activate",
-			    (GtkSignalFunc) gimp_menu_callback,
-			    &images[i]);
-	gtk_menu_append (GTK_MENU (menu), menuitem);
-	gtk_widget_show (menuitem);
-
+	label = gimp_image_label (images[i]);
+	gimp_menu_add (menu, label, images[i]);
 	g_free (label);
 
 	if (images[i] == active_image)
-	  gtk_menu_set_active (GTK_MENU (menu), k);
+	  gimp_option_menu_set_history (menu, k);
 
 	k += 1;
       }
 
-  if (k == 0)
-    {
-      menuitem = gtk_menu_item_new_with_label ("none");
-      gtk_widget_set_sensitive (menuitem, FALSE);
-      gtk_menu_append (GTK_MENU (menu), menuitem);
-      gtk_widget_show (menuitem);
-    }
+  gimp_menu_finish (menu, k);
 
   if (images)
     {
@@ -84,6 +127,7 @@ gimp_image_menu_new (GimpConstraintFunc constraint,
 	active_image = images[0];
       (* callback) (active_image, data);
     }
+  g_free (images);
 
   return menu;
 }
@@ -95,7 +139,6 @@ gimp_layer_menu_new (GimpConstraintFunc constraint,
 		     gint32             active_layer)
 {
   GtkWidget *menu;
-  GtkWidget *menuitem;
   char *name;
   char *image_label;
   char *label;
@@ -106,9 +149,7 @@ gimp_layer_menu_new (GimpConstraintFunc constraint,
   int nlayers;
   int i, j, k;
 
-  menu = gtk_menu_new ();
-  gtk_object_set_user_data (GTK_OBJECT (menu), (gpointer) callback);
-  gtk_object_set_data (GTK_OBJECT (menu), "gimp_callback_data", data);
+  menu = gimp_menu_start (callback, data);
 
   layer = -1;
 
@@ -116,51 +157,36 @@ gimp_layer_menu_new (GimpConstraintFunc constraint,
   for (i = 0, k = 0; i < nimages; i++)
     if (!constraint || (* constraint) (images[i], -1, data))
       {
-	name = gimp_image_get_filename (images[i]);
-	image_label = g_new (char, strlen (name) + 16);
-	sprintf (image_label, "%s-%d", gimp_base_name (name), images[i]);
-	g_free (name);
+	image_label = gimp_image_label (images[i]);
 
 	layers = gimp_image_get_layers (images[i], &nlayers);
 	for (j = 0; j < nlayers; j++)
 	  if (!constraint || (* constraint) (images[i], layers[j], data))
 	    {
 	      name = gimp_layer_get_name (layers[j]);
-	      label = g_new (char, strlen (image_label) + strlen (name) + 2);
-	      sprintf (label, "%s/%s", image_label, name);
+	      label = g_strdup_printf ("%s/%s", image_label, name);
 	      g_free (name);
 
-	      menuitem = gtk_menu_item_new_with_label (label);
-	      gtk_signal_connect (GTK_OBJECT (menuitem), "activate",
-				  (GtkSignalFunc) gimp_menu_callback,
-				  &layers[j]);
-	      gtk_menu_append (GTK_MENU (menu), menuitem);
-	      gtk_widget_show (menuitem);
-
+	      gimp_menu_add (menu, label, layers[j]);
 	      g_free (label);
 
 	      if (layers[j] == active_layer)
 		{
 		  layer = active_layer;
-		  gtk_menu_set_active (GTK_MENU (menu), k);
+		  gimp_option_menu_set_history (menu, k);
 		}
 	      else if (layer == -1)
 		layer = layers[j];
 
 	      k += 1;
 	    }
+	g_free (layers);
 
 	g_free (image_label);
       }
   g_free (images);
 
-  if (k == 0)
-    {
-      menuitem = gtk_menu_item_new_with_label ("none");
-      gtk_widget_set_sensitive (menuitem, FALSE);
-      gtk_menu_append (GTK_MENU (menu), menuitem);
-      gtk_widget_show (menuitem);
-    }
+  gimp_menu_finish (menu, k);
 
   if (layer != -1)
     (* callback) (layer, data);
@@ -175,7 +201,6 @@ gimp_channel_menu_new (GimpConstraintFunc constraint,
 		       gint32             active_channel)
 {
   GtkWidget *menu;
-  GtkWidget *menuitem;
   char *name;
   char *image_label;
   char *label;
@@ -186,9 +211,7 @@ gimp_channel_menu_new (GimpConstraintFunc constraint,
   int nchannels;
   int i, j, k;
 
-  menu = gtk_menu_new ();
-  gtk_object_set_user_data (GTK_OBJECT (menu), (gpointer) callback);
-  gtk_object_set_data (GTK_OBJECT (menu), "gimp_callback_data", data);
+  menu = gimp_menu_start (callback, data);
 
   channel = -1;
 
@@ -196,51 +219,36 @@ gimp_channel_menu_new (GimpConstraintFunc constraint,
   for (i = 0, k = 0; i < nimages; i++)
     if (!constraint || (* constraint) (images[i], -1, data))
       {
-	name = gimp_image_get_filename (images[i]);
-	image_label = g_new (char, strlen (name) + 16);
-	sprintf (image_label, "%s-%d", gimp_base_name (name), images[i]);
-	g_free (name);
+	image_label = gimp_image_label (images[i]);
 
 	channels = gimp_image_get_channels (images[i], &nchannels);
 	for (j = 0; j < nchannels; j++)
 	  if (!constraint || (* constraint) (images[i], channels[j], data))
 	    {
 	      name = gimp_channel_get_name (channels[j]);
-	      label = g_new (char, strlen (image_label) + strlen (name) + 2);
-	      sprintf (label, "%s/%s", image_label, name);
+	      label = g_strdup_printf ("%s/%s", image_label, name);
 	      g_free (name);
 
-	      menuitem = gtk_menu_item_new_with_label (label);
-	      gtk_signal_connect (GTK_OBJECT (menuitem), "activate",
-				  (GtkSignalFunc) gimp_menu_callback,
-				  &channels[j]);
-	      gtk_menu_append (GTK_MENU (menu), menuitem);
-	      gtk_widget_show (menuitem);
-
+	      gimp_menu_add (menu, label, channels[j]);
 	      g_free (label);
 
 	      if (channels[j] == active_channel)
 		{
 		  channel = active_channel;
-		  gtk_menu_set_active (GTK_MENU (menu), k);
+		  gimp_option_menu_set_history (menu, k);
 		}
 	      else if (channel == -1)
 		channel = channels[j];
 
 	      k += 1;
 	    }
+	g_free (channels);
 
 	g_free (image_label);
       }
   g_free (images);
 
-  if (k == 0)
-    {
-      menuitem = gtk_menu_item_new_with_label ("none");
-      gtk_widget_set_sensitive (menuitem, FALSE);
-      gtk_menu_append (GTK_MENU (menu), menuitem);
-      gtk_widget_show (menuitem);
-    }
+  gimp_menu_finish (menu, k);
 
   if (channel != -1)
     (* callback) (channel, data);
@@ -255,7 +263,6 @@ gimp_drawable_menu_new (GimpConstraintFunc constraint,
 			gint32             active_drawable)
 {
   GtkWidget *menu;
-  GtkWidget *menuitem;
   char *name;
   char *image_label;
   char *label;
@@ -268,9 +275,7 @@ gimp_drawable_menu_new (GimpConstraintFunc constraint,
   int nchannels;
   int i, j, k;
 
-  menu = gtk_menu_new ();
-  gtk_object_set_user_data (GTK_OBJECT (menu), (gpointer) callback);
-  gtk_object_set_data (GTK_OBJECT (menu), "gimp_callback_data", data);
+  menu = gimp_menu_start (callback, data);
 
   drawable = -1;
 
@@ -278,80 +283,59 @@ gimp_drawable_menu_new (GimpConstraintFunc constraint,
   for (i = 0, k = 0; i < nimages; i++)
     if (!constraint || (* constraint) (images[i], -1, data))
       {
-	name = gimp_image_get_filename (images[i]);
-	image_label = g_new (char, strlen (name) + 16);
-	sprintf (image_label, "%s-%d", gimp_base_name (name), images[i]);
-	g_free (name);
+	image_label = gimp_image_label (images[i]);
 
 	layers = gimp_image_get_layers (images[i], &nlayers);
 	for (j = 0; j < nlayers; j++)
 	  if (!constraint || (* constraint) (images[i], layers[j], data))
 	    {
 	      name = gimp_layer_get_name (layers[j]);
-	      label = g_new (char, strlen (image_label) + strlen (name) + 2);
-	      sprintf (label, "%s/%s", image_label, name);
+	      label = g_strdup_printf ("%s/%s", image_label, name);
 	      g_free (name);
 
-	      menuitem = gtk_menu_item_new_with_label (label);
-	      gtk_signal_connect (GTK_OBJECT (menuitem), "activate",
-				  (GtkSignalFunc) gimp_menu_callback,
-				  &layers[j]);
-	      gtk_menu_append (GTK_MENU (menu), menuitem);
-	      gtk_widget_show (menuitem);
-
+	      gimp_menu_add (menu, label, layers[j]);
 	      g_free (label);
 
 	      if (layers[j] == active_drawable)
 		{
 		  drawable = active_drawable;
-		  gtk_menu_set_active (GTK_MENU (menu), k);
+		  gimp_option_menu_set_history (menu, k);
 		}
 	      else if (drawable == -1)
 		drawable = layers[j];
 
 	      k += 1;
 	    }
+	g_free (layers);
 
 	channels = gimp_image_get_channels (images[i], &nchannels);
 	for (j = 0; j < nchannels; j++)
 	  if (!constraint || (* constraint) (images[i], channels[j], data))
 	    {
 	      name = gimp_channel_get_name (channels[j]);
-	      label = g_new (char, strlen (image_label) + strlen (name) + 2);
-	      sprintf (label, "%s/%s", image_label, name);
+	      label = g_strdup_printf ("%s/%s", image_label, name);
 	      g_free (name);
 
-	      menuitem = gtk_menu_item_new_with_label (label);
-	      gtk_signal_connect (GTK_OBJECT (menuitem), "activate",
-				  (GtkSignalFunc) gimp_menu_callback,
-				  &channels[j]);
-	      gtk_menu_append (GTK_MENU (menu), menuitem);
-	      gtk_widget_show (menuitem);
-
+	      gimp_menu_add (menu, label, channels[j]);
 	      g_free (label);
 
 	      if (channels[j] == active_drawable)
 		{
 		  drawable = active_drawable;
-		  gtk_menu_set_active (GTK_MENU (menu), k);
+		  gimp_option_menu_set_history (menu, k);
 		}
 	      else if (drawable == -1)
 		drawable = channels[j];
 
 	      k += 1;
 	    }
+	g_free (channels);
 
 	g_free (image_label);
       }
   g_free (images);
 
-  if (k == 0)
-    {
-      menuitem = gtk_menu_item_new_with_label ("none");
-      gtk_widget_set_sensitive (menuitem, FALSE);
-      gtk_menu_append (GTK_MENU (menu), menuitem);
-      gtk_widget_show (menuitem);
-    }
+  gimp_menu_finish (menu, k);
 
   if (drawable != -1)
     (* callback) (drawable, data);
@@ -360,26 +344,29 @@ gimp_drawable_menu_new (GimpConstraintFunc constraint,
 }
 
 
-static char*
-gimp_base_name (char *str)
+static const char*
+gimp_base_name (const char *str)
 {
-  char *t;
+  const char *t;
+  const char *b;
 
   t = strrchr (str, '/');
+  b = strrchr (str, '\\');
+  if (b > t)
+    t = b;
   if (!t)
     return str;
   return t+1;
 }
 
 static void
-gimp_menu_callback (GtkWidget *w,
-		    gint32    *id)
+gimp_menu_callback (GtkWidget *option_menu,
+		    gpointer   id)
 {
-  GimpMenuCallback callback;
-  gpointer callback_data;
+  MenuInfo *info;
 
-  callback = (GimpMenuCallback) gtk_object_get_user_data (GTK_OBJECT (w->parent));
-  callback_data = gtk_object_get_data (GTK_OBJECT (w->parent), "gimp_callback_data");
+  info = g_object_get_data (G_OBJECT (option_menu), MENU_INFO_KEY);
 
-  (* callback) (*id, callback_data);
+  if (info && info->callback)
+    (* info->callback) (GPOINTER_TO_INT (id), info->data);
 }

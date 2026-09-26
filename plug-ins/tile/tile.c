@@ -22,8 +22,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #define ENTRY_WIDTH     60
 #define ENTRY_HEIGHT    25
@@ -99,7 +100,7 @@ static TileInterface tint =
 MAIN ()
 
 static void
-query ()
+query (void)
 {
   static GParamDef args[] =
   {
@@ -366,115 +367,91 @@ tile_dialog (gint width, gint height)
   GtkWidget *frame;
   GtkWidget *table;
   char buffer[12];
-  gchar **argv;
-  gint argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("tile");
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
   tint.orig_width = width;
   tint.orig_height = height;
   tvals.new_width = width;
   tvals.new_height = height;
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Tile");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) tile_close_callback,
+  dlg = gimp_dialog_new ("Tile");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (tile_close_callback),
 		      NULL);
 
   /*  Action area  */
   button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) tile_ok_callback,
+  g_signal_connect (button, "clicked",
+                      G_CALLBACK (tile_ok_callback),
                       dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
+  gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
   button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  g_signal_connect_swapped (button, "clicked", G_CALLBACK (gtk_window_destroy), dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Tile to New Size:");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
 
-  table = gtk_table_new (4, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
-  gtk_table_set_row_spacing (GTK_TABLE (table), 0, 5);
-  gtk_table_set_row_spacing (GTK_TABLE (table), 1, 5);
-  gtk_table_set_col_spacing (GTK_TABLE (table), 0, 5);
+  table = gimp_table_new (4, 2, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (frame, table);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 5);
 
   label = gtk_label_new ("Width: ");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1, GTK_FILL, GTK_FILL, 0, 0);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_FILL, GIMP_FILL, 0, 0);
 
   tint.width_entry = gtk_entry_new ();
-  gtk_widget_set_usize (tint.width_entry, ENTRY_WIDTH, ENTRY_HEIGHT);
+  gtk_widget_set_size_request (tint.width_entry, ENTRY_WIDTH, ENTRY_HEIGHT);
   sprintf (buffer, "%d", width);
-  gtk_entry_set_text (GTK_ENTRY (tint.width_entry), buffer);
-  gtk_table_attach (GTK_TABLE (table), tint.width_entry,
-		    1, 2, 0, 1, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0);
-  gtk_signal_connect (GTK_OBJECT (tint.width_entry), "changed",
-		      (GtkSignalFunc) tile_entry_update,
+  gtk_editable_set_text (GTK_EDITABLE (tint.width_entry), buffer);
+  gimp_table_attach (table, tint.width_entry,
+		    1, 2, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0);
+  g_signal_connect (tint.width_entry, "changed",
+		      G_CALLBACK (tile_entry_update),
 		      &tvals.new_width);
-  gtk_widget_show (tint.width_entry);
 
   label = gtk_label_new ("Height: ");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2, GTK_FILL, GTK_FILL, 0, 0);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 1, 2, GIMP_FILL, GIMP_FILL, 0, 0);
 
   tint.height_entry = gtk_entry_new ();
-  gtk_widget_set_usize (tint.height_entry, ENTRY_WIDTH, ENTRY_HEIGHT);
+  gtk_widget_set_size_request (tint.height_entry, ENTRY_WIDTH, ENTRY_HEIGHT);
   sprintf (buffer, "%d", height);
-  gtk_entry_set_text (GTK_ENTRY (tint.height_entry), buffer);
-  gtk_table_attach (GTK_TABLE (table), tint.height_entry,
-		    1, 2, 1, 2, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0);
-  gtk_signal_connect (GTK_OBJECT (tint.height_entry), "changed",
-		      (GtkSignalFunc) tile_entry_update,
+  gtk_editable_set_text (GTK_EDITABLE (tint.height_entry), buffer);
+  gimp_table_attach (table, tint.height_entry,
+		    1, 2, 1, 2, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0);
+  g_signal_connect (tint.height_entry, "changed",
+		      G_CALLBACK (tile_entry_update),
 		      &tvals.new_height);
-  gtk_widget_show (tint.height_entry);
 
   toggle = gtk_check_button_new_with_label ("Constrain Ratio");
-  gtk_table_attach (GTK_TABLE (table), toggle,
-		    0, 2, 2, 3, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) tile_toggle_update,
+  gimp_table_attach (table, toggle,
+		    0, 2, 2, 3, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (tile_toggle_update),
 		      &tvals.constrain);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), tvals.constrain);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), tvals.constrain);
 
   toggle = gtk_check_button_new_with_label ("New Image");
-  gtk_table_attach (GTK_TABLE (table), toggle,
-		    0, 2, 3, 4, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) tile_toggle_update,
+  gimp_table_attach (table, toggle,
+		    0, 2, 3, 4, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (tile_toggle_update),
 		      &tvals.new_image);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), tvals.new_image);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), tvals.new_image);
 
-  gtk_widget_show (table);
-  gtk_widget_show (frame);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return tint.run;
 }
@@ -486,7 +463,7 @@ static void
 tile_close_callback (GtkWidget *widget,
 		     gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -494,7 +471,7 @@ tile_ok_callback (GtkWidget *widget,
 		  gpointer   data)
 {
   tint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -505,7 +482,7 @@ tile_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -519,7 +496,7 @@ tile_entry_update (GtkWidget *widget,
   static gchar buf[32];
   gint val;
 
-  val = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+  val = atoi (gtk_editable_get_text (GTK_EDITABLE (widget)));
 
   if (tvals.constrain)
     {
@@ -531,7 +508,7 @@ tile_entry_update (GtkWidget *widget,
 
 	      tvals.new_height = (int) ((tvals.new_width * tint.orig_height) / tint.orig_width);
 	      sprintf (buf, "%d", tvals.new_height);
-	      gtk_entry_set_text (GTK_ENTRY (tint.height_entry), buf);
+	      gtk_editable_set_text (GTK_EDITABLE (tint.height_entry), buf);
 	    }
 	  else if (widget == tint.height_entry && tvals.new_height != val)
 	    {
@@ -539,7 +516,7 @@ tile_entry_update (GtkWidget *widget,
 
 	      tvals.new_width = (int) ((tvals.new_height * tint.orig_width) / tint.orig_height);
 	      sprintf (buf, "%d", tvals.new_width);
-	      gtk_entry_set_text (GTK_ENTRY (tint.width_entry), buf);
+	      gtk_editable_set_text (GTK_EDITABLE (tint.width_entry), buf);
 	    }
 	}
     }

@@ -34,9 +34,9 @@
 #include <stdlib.h>
 #include <math.h>
 
-#include <gdk/gdk.h>
 #include <gtk/gtk.h>
 #include <libgimp/gimp.h>
+#include <libgimp/gimpui.h>
 #include <plug-ins/megawidget/megawidget.h>
 
 #ifdef HAVE_CONFIG_H
@@ -119,10 +119,10 @@ int sinus_dialog(void);
 void sinus_do_preview(GtkWidget *w);
 
 void DrawPreviewImage(gint DoCompute);
-inline void compute_block_4(guchar *dest_row, guint rowstride,gint x0,gint y0,gint h,gint w, params *p);
-inline void compute_block_3(guchar *dest_row, guint rowstride,gint x0,gint y0,gint h,gint w, params *p) ;
-inline void compute_block_2(guchar *dest_row, guint rowstride,gint x0,gint y0,gint h,gint w, params *p) ;
-inline void compute_block_1(guchar *dest_row, guint rowstride,gint x0,gint y0,gint h,gint w, params *p) ;
+static inline void compute_block_4(guchar *dest_row, guint rowstride,gint x0,gint y0,gint h,gint w, params *p);
+static inline void compute_block_3(guchar *dest_row, guint rowstride,gint x0,gint y0,gint h,gint w, params *p) ;
+static inline void compute_block_2(guchar *dest_row, guint rowstride,gint x0,gint y0,gint h,gint w, params *p) ;
+static inline void compute_block_1(guchar *dest_row, guint rowstride,gint x0,gint y0,gint h,gint w, params *p) ;
 
 GPlugInInfo PLUG_IN_INFO =
 {
@@ -435,7 +435,7 @@ double cosinus(double v)
 }
 
 
-inline void compute_block_4(guchar *dest_row, guint rowstride,gint x0,gint y0,gint w,gint h, params *p)
+static inline void compute_block_4(guchar *dest_row, guint rowstride,gint x0,gint y0,gint w,gint h, params *p)
 {
   gint i,j;
   double x,y, grey;
@@ -460,7 +460,7 @@ inline void compute_block_4(guchar *dest_row, guint rowstride,gint x0,gint y0,gi
   }
 }
 
-inline void compute_block_3(guchar *dest_row, guint rowstride,gint x0,gint y0,gint w,gint h, params *p)
+static inline void compute_block_3(guchar *dest_row, guint rowstride,gint x0,gint y0,gint w,gint h, params *p)
 {
   gint i,j;
   double x,y, grey;
@@ -482,7 +482,7 @@ inline void compute_block_3(guchar *dest_row, guint rowstride,gint x0,gint y0,gi
     dest_row += rowstride;
   }
 }
-inline void compute_block_2(guchar *dest_row, guint rowstride,gint x0,gint y0,gint w,gint h, params *p)
+static inline void compute_block_2(guchar *dest_row, guint rowstride,gint x0,gint y0,gint w,gint h, params *p)
 {
   gint i,j;
   double x,y, grey;
@@ -504,7 +504,7 @@ inline void compute_block_2(guchar *dest_row, guint rowstride,gint x0,gint y0,gi
     dest_row += rowstride;
   }
 }
-inline void compute_block_1(guchar *dest_row, guint rowstride,gint x0,gint y0,gint w,gint h, params *p)
+static inline void compute_block_1(guchar *dest_row, guint rowstride,gint x0,gint y0,gint w,gint h, params *p)
 {
   gint i,j;
   double x,y, grey;
@@ -548,8 +548,6 @@ int sinus_dialog(void)
   char buf[3*100];
   guchar *data;
 #endif
-  gchar **argv;
-  gint argc;
 
   static struct mwValueRadioGroup coloriz_radio[] = {
     { "Linear", LINEAR },
@@ -569,42 +567,32 @@ int sinus_dialog(void)
     { NULL, 0 },
   };
 
-  /* Set args */
-  argc = 1;
-  argv = g_new(gchar *, 1);
-  argv[0] = g_strdup("sinus");
-  gtk_init(&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
-  
   /* Create Main window with a vbox */
   /* ============================== */
   dlg = mw_app_new("plug_in_sinus", "Sinus", &runp);
-  main_hbox = gtk_hbox_new(FALSE, 5);
-  gtk_container_border_width(GTK_CONTAINER(main_hbox), 5);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), main_hbox, TRUE, TRUE, 0);
-  gtk_widget_show(main_hbox);
+  main_hbox = gimp_hbox_new(FALSE, 5);
+  gimp_container_set_border_width(main_hbox, 5);
+  gimp_box_pack_start(gimp_dialog_get_vbox(dlg), main_hbox, TRUE, TRUE, 0);
 
   /* Create preview */
   /* ============== */
-  vbox = gtk_vbox_new(TRUE, 5);
-  gtk_box_pack_start(GTK_BOX(main_hbox), vbox, TRUE, FALSE, 0);
-  gtk_widget_show(vbox);
+  vbox = gimp_vbox_new(TRUE, 5);
+  gimp_box_pack_start(main_hbox, vbox, TRUE, FALSE, 0);
 
   preview = mw_preview_new(vbox, thePreview, &sinus_do_preview);
   sinus_do_preview(preview);
 
 #ifdef USE_LOGO
-  logo = gtk_preview_new(GTK_PREVIEW_COLOR);
-  gtk_preview_size(GTK_PREVIEW(logo), 100, 100);
-  gtk_box_pack_start(GTK_BOX(vbox), logo, TRUE, FALSE, 0);
-  gtk_widget_show(logo);
+  logo = gimp_preview_new(GIMP_PREVIEW_COLOR);
+  gimp_preview_size(GIMP_PREVIEW(logo), 100, 100);
+  gimp_box_pack_start(vbox, logo, TRUE, FALSE, 0);
 
   data= (guchar *)logo_data;
   for (y=0;y<100; y++) {
     for (x=0; x<100; x++) {
       HEADER_PIXEL(data,(&buf[3*x]));
     }
-    gtk_preview_draw_row(GTK_PREVIEW(logo), (guchar *)buf, 0, y, 100);
+    gimp_preview_draw_row(GIMP_PREVIEW(logo), (guchar *)buf, 0, y, 100);
   }
 #endif
 
@@ -612,132 +600,113 @@ int sinus_dialog(void)
   /* =================== */
   notebook = gtk_notebook_new();
   gtk_notebook_set_tab_pos(GTK_NOTEBOOK(notebook), GTK_POS_TOP);
-  gtk_box_pack_start(GTK_BOX(main_hbox), notebook, FALSE, FALSE, 0);
-  gtk_widget_show(notebook);
+  gimp_box_pack_start(main_hbox, notebook, FALSE, FALSE, 0);
 
   /* Create the drawing settings frame */
   /* ================================= */
-  page = gtk_vbox_new(FALSE, 5);
-  gtk_container_border_width(GTK_CONTAINER(page), 5);
+  page = gimp_vbox_new(FALSE, 5);
+  gimp_container_set_border_width(page, 5);
   
   frame= gtk_frame_new("Drawing settings");
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start(GTK_BOX(page), frame, TRUE, TRUE, 0);
-  gtk_widget_show(frame);
-  table = gtk_table_new(4, 2, FALSE);
-  gtk_container_border_width(GTK_CONTAINER (table), 5);
-  gtk_container_add(GTK_CONTAINER(frame), table);
+  gimp_box_pack_start(page, frame, TRUE, TRUE, 0);
+  table = gimp_table_new(4, 2, FALSE);
+  gimp_container_set_border_width(table, 5);
+  gtk_frame_set_child(GTK_FRAME(frame), table);
   mw_fscale_entry_new(table, "X scale: ", 0.0001, 100.0, 0.001, 5, 0,
                       0, 1, 1, 2, &(svals.scalex));
   mw_fscale_entry_new(table, "Y scale: ", 0.0001, 100.0, 0.001, 5, 0,
                       0, 1, 2, 3, &(svals.scaley));
   mw_fscale_entry_new(table, "Complexity: ", 0, 15.0, 0.01, 5, 0,
                       0, 1, 3, 4, &(svals.cmplx));
-  gtk_widget_show(table);
 
   frame= gtk_frame_new("Calculation settings");
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start(GTK_BOX(page), frame, TRUE, TRUE, 0);
-  gtk_widget_show(frame);
-  vbox= gtk_vbox_new(FALSE, 5);
-  gtk_container_add(GTK_CONTAINER(frame), vbox);
-  gtk_widget_show(vbox);
+  gimp_box_pack_start(page, frame, TRUE, TRUE, 0);
+  vbox= gimp_vbox_new(FALSE, 5);
+  gtk_frame_set_child(GTK_FRAME(frame), vbox);
   mw_ientry_new(vbox, NULL, "Random seed:", &svals.seed);
   mw_toggle_button_new(vbox, NULL, "Force tiling?", &svals.tiling);
   mw_value_radio_group_new(vbox, NULL , coefs_radio, &svals.perturbation);
 
   label = gtk_label_new("Settings");
-  gtk_misc_set_alignment(GTK_MISC(label), 0.5, 0.5);
+  gtk_label_set_xalign(GTK_LABEL(label), 0.5);
+  gtk_label_set_yalign(GTK_LABEL(label), 0.5);
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook), page, label);
-  gtk_widget_show(page);
 
 
   /* Color settings dialog: */
   /* ====================== */
-  page = gtk_vbox_new(FALSE, 5);
-  gtk_container_border_width(GTK_CONTAINER(page), 5);
+  page = gimp_vbox_new(FALSE, 5);
+  gimp_container_set_border_width(page, 5);
 
   frame = gtk_frame_new("Colors");
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start(GTK_BOX(page), frame, TRUE, TRUE, 0);
-  gtk_widget_show(frame);
+  gimp_box_pack_start(page, frame, TRUE, TRUE, 0);
   if (drawable_is_grayscale) {
     /*if in grey scale, the colors are necessarily black and white */
     label = gtk_label_new("The colors are white and black.");
-    gtk_misc_set_alignment(GTK_MISC(label), 0.5, 0.5);
-    gtk_container_add(GTK_CONTAINER(frame), label);
-    gtk_widget_show(label);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.5);
+    gtk_label_set_yalign(GTK_LABEL(label), 0.5);
+    gtk_frame_set_child(GTK_FRAME(frame), label);
 
   } else {
-    vbox= gtk_vbox_new(FALSE, 5);
-    gtk_container_add(GTK_CONTAINER(frame), vbox);
-    gtk_widget_show(vbox);
+    vbox= gimp_vbox_new(FALSE, 5);
+    gtk_frame_set_child(GTK_FRAME(frame), vbox);
     mw_value_radio_group_new(vbox, NULL, colors_radio, &svals.colors);
-    hbox= gtk_hbox_new(TRUE, 20);
-    gtk_box_pack_start(GTK_BOX(vbox), hbox, TRUE, FALSE, 0);
+    hbox= gimp_hbox_new(TRUE, 20);
+    gimp_box_pack_start(vbox, hbox, TRUE, FALSE, 0);
 
     push_col1 = mw_color_select_button_create(hbox, "Fisrt Color", svals.col1, FALSE);
     push_col2 = mw_color_select_button_create(hbox, "Second Color", svals.col2, FALSE);
-    gtk_widget_show(hbox);
 
   }
 
 
   frame = gtk_frame_new("Alpha Channels");
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start(GTK_BOX(page), frame, TRUE, TRUE, 0);
-  gtk_widget_show(frame);
-  table = gtk_table_new(3, 2, FALSE);
-  gtk_container_border_width(GTK_CONTAINER (table), 5);
-  gtk_container_add(GTK_CONTAINER(frame), table);
+  gimp_box_pack_start(page, frame, TRUE, TRUE, 0);
+  table = gimp_table_new(3, 2, FALSE);
+  gimp_container_set_border_width(table, 5);
+  gtk_frame_set_child(GTK_FRAME(frame), table);
 
   mw_fscale_entry_new(table, "first color ", 0, 1.0, 0.01, 5, 0,
                       0, 1, 1, 2, &(svals.col1[3]));
   mw_fscale_entry_new(table, "last color ", 0, 1.0, 0.01, 5, 0,
                       0, 1, 2, 3, &(svals.col2[3]));
 
-  gtk_widget_show(table);
 
   label = gtk_label_new("Colors");
-  gtk_misc_set_alignment(GTK_MISC(label), 0.5, 0.5);
+  gtk_label_set_xalign(GTK_LABEL(label), 0.5);
+  gtk_label_set_yalign(GTK_LABEL(label), 0.5);
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook), page, label);
-  gtk_widget_show(page);
 
 
   /* blend settings dialog: */
   /* ====================== */
   label = gtk_label_new("Blend");
-  gtk_misc_set_alignment(GTK_MISC(label), 0.5, 0.5);
-  page = gtk_vbox_new(FALSE, 5);
-  gtk_container_border_width(GTK_CONTAINER(page), 5);
+  gtk_label_set_xalign(GTK_LABEL(label), 0.5);
+  gtk_label_set_yalign(GTK_LABEL(label), 0.5);
+  page = gimp_vbox_new(FALSE, 5);
+  gimp_container_set_border_width(page, 5);
 
   frame = gtk_frame_new("Blend settings");
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start(GTK_BOX(page), frame, TRUE, TRUE, 0);
-  gtk_widget_show(frame);
+  gimp_box_pack_start(page, frame, TRUE, TRUE, 0);
 
-  vbox= gtk_vbox_new(FALSE, 5);
-  gtk_container_add(GTK_CONTAINER(frame), vbox);
-  gtk_container_border_width(GTK_CONTAINER(vbox), 5);
-  gtk_widget_show(vbox);
+  vbox= gimp_vbox_new(FALSE, 5);
+  gtk_frame_set_child(GTK_FRAME(frame), vbox);
+  gimp_container_set_border_width(vbox, 5);
   mw_value_radio_group_new(vbox, "Gradient", coloriz_radio, &svals.colorization);
 
-  table = gtk_table_new(2, 2, FALSE);
-  gtk_container_border_width(GTK_CONTAINER (table), 5);
-  gtk_container_add(GTK_CONTAINER(vbox), table);
+  table = gimp_table_new(2, 2, FALSE);
+  gimp_container_set_border_width(table, 5);
+  gtk_box_append(GTK_BOX(vbox), table);
 
   mw_fscale_entry_new(table, "Exponent ", -7.5, 7.5, 0.01, 5.0, 0.0,
                       0, 1, 0, 1, &svals.blend_power);
-  gtk_widget_show(table);
 
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook), page, label);
-  gtk_widget_show(page);
 
 
 
-  gtk_widget_show(dlg);
-  gtk_main();
-  gdk_flush();
+  gtk_window_present(GTK_WINDOW(dlg));
+  gimp_main_loop_run();
 
   /* argp->type = mw_radio_result(mode); */
   return runp;
@@ -776,13 +745,11 @@ void sinus_do_preview(GtkWidget *w)
       fprintf(stderr,"Uh Oh....  Little sinus preview-only problem...\n");
 
     for (y=0;y<thePreview->height; y++) {
-      gtk_preview_draw_row(GTK_PREVIEW(theWidget),
-                           buf, 0, y, thePreview->width);
+      gimp_preview_draw_row(GIMP_PREVIEW(theWidget),
+                            buf, 0, y, thePreview->width);
       buf+= rowsize;
     }
     free(savbuf);
-    gtk_widget_draw(theWidget, NULL);
-    gdk_flush();
   } else {
     fprintf(stderr,"Not enough mem for sinus Preview...\n");
   }

@@ -39,17 +39,24 @@ void           gck_visualinfo_set_dither (GckVisualInfo *visinfo,
 /* RGB to Gdk routines */
 /* =================== */
 
-void      gck_rgb_to_gdkimage       (GckVisualInfo *visinfo,
+/* GTK 4 draws with cairo in true color: RGB data goes into a     */
+/* CAIRO_FORMAT_RGB24 image surface, colours become GdkRGBA or a  */
+/* cairo source.  (These replace gck_rgb_to_gdkimage (),          */
+/* gck_rgb_to_gdkcolor () and gck_gc_set_foreground/background.)  */
+
+cairo_surface_t *gck_cairo_surface_new (int width,int height);
+
+void      gck_rgb_to_cairo_surface  (GckVisualInfo *visinfo,
                                      guchar *RGB_data,
-                                     GdkImage *image,
+                                     cairo_surface_t *surface,
                                      int width,int height);
 
-GdkColor *gck_rgb_to_gdkcolor       (GckVisualInfo *visinfo,guchar r,guchar g,guchar b);
+void      gck_rgb_to_gdkrgba        (GckVisualInfo *visinfo,
+                                     guchar r,guchar g,guchar b,
+                                     GdkRGBA *color);
 
-void      gck_gc_set_foreground     (GckVisualInfo *visinfo,GdkGC *gc,
-                                     guchar r, guchar g, guchar b); 
-void      gck_gc_set_background     (GckVisualInfo *visinfo,GdkGC *gc,
-                                     guchar r, guchar g, guchar b); 
+void      gck_cairo_set_source_rgb  (cairo_t *cr,
+                                     guchar r, guchar g, guchar b);
 
 /********************/
 /* Color operations */

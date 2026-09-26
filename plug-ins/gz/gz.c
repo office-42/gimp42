@@ -29,7 +29,8 @@
 
 /* This is reads and writes gziped image files for the Gimp
  *
- * You need to have gzip installed for it to work.
+ * It used to pipe the file through an external gzip; it now uses
+ * zlib directly, so no gzip program is needed.
  *
  * It should work with file names of the form
  * filename.foo.gz where foo is some already-recognized extension
@@ -59,14 +60,23 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <sys/param.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
+#include <fcntl.h>
 #include <string.h>
-#include <unistd.h>
 #include <errno.h>
-#include "gtk/gtk.h"
+#include <glib.h>
+#include <glib/gstdio.h>
+#include <zlib.h>
 #include "libgimp/gimp.h"
+
+#ifdef G_OS_WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 
 /* Author 1: Josh MacDonald (url.c) */
 /* Author 2: Daniel Risacher (gz.c) */
@@ -91,6 +101,11 @@ static gint save_image (char   *filename,
 
 static int valid_file (char* filename) ;
 static char* find_extension (char* filename);
+
+static gboolean gz_compress   (const char *src,
+			       const char *dest);
+static gboolean gz_decompress (const char *src,
+			       const char *dest);
 
 GPlugInInfo PLUG_IN_INFO =
 {
@@ -132,7 +147,7 @@ query ()
 
   gimp_install_procedure ("file_gz_load",
                           "loads files compressed with gzip",
-                          "You need to have gzip installed.",
+                          "The file is decompressed with zlib.",
                           "Daniel Risacher",
                           "Daniel Risacher, Spencer Kimball and Peter Mattis",
                           "1995-1997",
@@ -144,7 +159,7 @@ query ()
 
   gimp_install_procedure ("file_gz_save",
                           "saves files compressed with gzip",
-                          "You need to have gzip installed",
+                          "The file is compressed with zlib.",
                           "Daniel Risacher",
                           "Daniel Risacher, Spencer Kimball and Peter Mattis",
                           "1995-1997",
@@ -205,7 +220,7 @@ run (char    *name,
 	  break;
 	case RUN_NONINTERACTIVE:
 	  /*  Make sure all the arguments are there!  */
-	  if (nparams != 4)
+	  if (nparams != 5)
 	    status = STATUS_CALLING_ERROR;
 
 	case RUN_WITH_LAST_VALS:
@@ -216,7 +231,9 @@ run (char    *name,
 	}
 
       *nreturn_vals = 1;
-      if (save_image (param[3].data.d_string,
+      if (status != STATUS_SUCCESS)
+	values[0].data.d_status = status;
+      else if (save_image (param[3].data.d_string,
 		      param[1].data.d_int32,
 		      param[2].data.d_int32,
 		      param[0].data.d_int32 ))
@@ -236,13 +253,10 @@ save_image (char   *filename,
 	    gint32  drawable_ID,
 	    gint32  run_mode)
 {
-  FILE* f;
   GParam* params;
   gint retvals;
   char* ext;
   char* tmpname;
-  int pid;
-  int status;
 
   ext = find_extension(filename);
   if (0 == *ext) {
@@ -269,51 +283,18 @@ save_image (char   *filename,
 			       PARAM_END);
 
   if (params[0].data.d_status == FALSE || !valid_file(tmpname)) {
-    unlink (tmpname);
-    return -1;
+    g_unlink (tmpname);
+    return 0;
   }
 
-/*   if (! file_save(image_ID, tmpname, tmpname)) { */
-/*     unlink (tmpname); */
-/*     return -1; */
-/*   } */
-
-  /* fork off a gzip process */
-  if ((pid = fork()) < 0)
+  /* and gzip it into the file that was asked for */
+  if (! gz_compress (tmpname, filename))
     {
-      g_message ("gz: fork failed: %s\n", g_strerror(errno));
-      return -1;
-    }
-  else if (pid == 0)
-    {
-
-      if (!(f = fopen(filename,"w"))){
-	      g_message("gz: fopen failed: %s\n", g_strerror(errno));
-	      _exit(127);
-      }
-
-      /* make stdout for this process be the output file */
-      if (-1 == dup2(fileno(f),fileno(stdout)))
-	g_message ("gz: dup2 failed: %s\n", g_strerror(errno));
-
-      /* and gzip into it */
-      execlp ("gzip", "gzip", "-cf", tmpname, NULL);
-      g_message ("gz: exec failed: gzip: %s\n", g_strerror(errno));
-      _exit(127);
-    }
-  else
-    {
-      waitpid (pid, &status, 0);
-
-      if (!WIFEXITED(status) ||
-	  WEXITSTATUS(status) != 0)
-	{
-	  g_message ("gz: gzip exited abnormally on file %s\n", tmpname);
-	  return 0;
-	}
+      g_unlink (tmpname);
+      return 0;
     }
 
-  unlink (tmpname);
+  g_unlink (tmpname);
 
   return TRUE;
 }
@@ -325,8 +306,6 @@ load_image (char *filename, gint32 run_mode)
   gint retvals;
   char* ext;
   char* tmpname;
-  int pid;
-  int status;
 
   ext = find_extension(filename);
   if (0 == *ext) {
@@ -336,44 +315,16 @@ load_image (char *filename, gint32 run_mode)
   /* find a temp name */
   params = gimp_run_procedure ("gimp_temp_name",
 			       &retvals,
-			       PARAM_STRING, ext + 1,
+			       PARAM_STRING, *ext ? ext + 1 : ext,
 			       PARAM_END);
 
   tmpname = params[1].data.d_string;
 
-  /* fork off a g(un)zip and wait for it */
-  if ((pid = fork()) < 0)
+  /* un-gzip into the temp file */
+  if (! gz_decompress (filename, tmpname))
     {
-      g_message ("gz: fork failed: %s\n", g_strerror(errno));
+      g_unlink (tmpname);
       return -1;
-    }
-  else if (pid == 0)  /* child process */
-    {
-      FILE* f;
-       if (!(f = fopen(tmpname,"w"))){
-	      g_message("gz: fopen failed: %s\n", g_strerror(errno));
-	      _exit(127);
-      }
-
-      /* make stdout for this child process be the temp file */
-      if (-1 == dup2(fileno(f),fileno(stdout)))
-	g_message ("gz: dup2 failed: %s\n", g_strerror(errno));
-
-      /* and unzip into it */
-      execlp ("gzip", "gzip", "-cfd", filename, NULL);
-      g_message ("gz: exec failed: gunzip: %s\n", g_strerror(errno));
-      _exit(127);
-    }
-  else  /* parent process */
-    {
-      waitpid (pid, &status, 0);
-
-      if (!WIFEXITED(status) ||
-	  WEXITSTATUS(status) != 0)
-	{
-	  g_message ("gz: gzip exited abnormally on file %s\n", filename);
-	  return -1;
-	}
     }
 
   /* now that we un-gziped it, load the temp file */
@@ -385,7 +336,7 @@ load_image (char *filename, gint32 run_mode)
 			       PARAM_STRING, tmpname,
 			       PARAM_END);
 
-  unlink (tmpname);
+  g_unlink (tmpname);
 
   if (params[0].data.d_status == FALSE)
     return -1;
@@ -397,12 +348,112 @@ load_image (char *filename, gint32 run_mode)
 }
 
 
+/* gzip src into dest, like "gzip -cf src > dest" */
+static gboolean
+gz_compress (const char *src,
+	     const char *dest)
+{
+  FILE   *in;
+  gzFile  out;
+  int     fd;
+  char    buf[16384];
+  size_t  n;
+  gboolean ok = TRUE;
+
+  in = g_fopen (src, "rb");
+  if (!in)
+    {
+      g_message ("gz: can't open %s: %s\n", src, g_strerror (errno));
+      return FALSE;
+    }
+
+  fd = g_open (dest, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0666);
+  if (fd < 0 || !(out = gzdopen (fd, "wb")))
+    {
+      g_message ("gz: can't open %s: %s\n", dest, g_strerror (errno));
+      if (fd >= 0)
+	close (fd);
+      fclose (in);
+      return FALSE;
+    }
+
+  while ((n = fread (buf, 1, sizeof (buf), in)) > 0)
+    {
+      if (gzwrite (out, buf, (unsigned) n) != (int) n)
+	{
+	  ok = FALSE;
+	  break;
+	}
+    }
+  if (ferror (in))
+    ok = FALSE;
+
+  fclose (in);
+  if (gzclose (out) != Z_OK)
+    ok = FALSE;
+
+  if (!ok)
+    g_message ("gz: compressing %s failed\n", dest);
+
+  return ok;
+}
+
+/* gunzip src into dest, like "gzip -cfd src > dest" */
+static gboolean
+gz_decompress (const char *src,
+	       const char *dest)
+{
+  gzFile  in;
+  FILE   *out;
+  int     fd;
+  char    buf[16384];
+  int     n;
+  gboolean ok = TRUE;
+
+  fd = g_open (src, O_RDONLY | O_BINARY, 0);
+  if (fd < 0 || !(in = gzdopen (fd, "rb")))
+    {
+      g_message ("gz: can't open %s: %s\n", src, g_strerror (errno));
+      if (fd >= 0)
+	close (fd);
+      return FALSE;
+    }
+
+  out = g_fopen (dest, "wb");
+  if (!out)
+    {
+      g_message ("gz: can't open %s: %s\n", dest, g_strerror (errno));
+      gzclose (in);
+      return FALSE;
+    }
+
+  while ((n = gzread (in, buf, sizeof (buf))) > 0)
+    {
+      if (fwrite (buf, 1, n, out) != (size_t) n)
+	{
+	  ok = FALSE;
+	  break;
+	}
+    }
+  if (n < 0)
+    ok = FALSE;
+
+  gzclose (in);
+  if (fclose (out) != 0)
+    ok = FALSE;
+
+  if (!ok)
+    g_message ("gz: decompressing %s failed\n", src);
+
+  return ok;
+}
+
 static int valid_file (char* filename)
 {
   int stat_res;
-  struct stat buf;
+  GStatBuf buf;
 
-  stat_res = stat(filename, &buf);
+  stat_res = g_stat(filename, &buf);
 
   if ((0 == stat_res) && (buf.st_size > 0))
     return 1;
@@ -423,7 +474,7 @@ static char* find_extension (char* filename)
   ext = strrchr (filename_copy, '.');
 
   while (1) {
-    if (!ext || ext[1] == 0 || strchr(ext, '/'))
+    if (!ext || ext[1] == 0 || strchr(ext, '/') || strchr(ext, G_DIR_SEPARATOR))
       {
 	return "";
       }

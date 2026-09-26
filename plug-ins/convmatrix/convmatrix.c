@@ -53,7 +53,8 @@
 #include <time.h>
 #include <string.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
+#include "libgimp/gimpui.h"
 #include <sys/types.h>
 #include <signal.h>
 #include <unistd.h>
@@ -83,7 +84,7 @@ static void run(char *name,
 		GParam * param,
 		int *nreturn_vals,
 		GParam ** return_vals);
-static gint dialog();
+static gint dialog(void);
 
 static void doit(void);
 static void check_config(void);
@@ -508,7 +509,7 @@ static void redraw_matrix(void){
 	    for(x=0;x<5;x++){
 		    fprint(my_config.matrix[x][y],buffer);
 
-		    gtk_entry_set_text(GTK_ENTRY(my_widgets.matrix[x][y]),buffer);
+		    gtk_editable_set_text(GTK_EDITABLE(my_widgets.matrix[x][y]),buffer);
 		    
 	    }
 }
@@ -516,27 +517,27 @@ static void redraw_matrix(void){
 static void redraw_channels(void){
 	int i;
 	for(i=0;i<5;i++)
-	    gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(my_widgets.channels[i]),
+	    gtk_check_button_set_active(GTK_CHECK_BUTTON(my_widgets.channels[i]),
 					my_config.channels[i]>0);
 }
 
 static void redraw_autoset(void){
-	gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(my_widgets.autoset),my_config.autoset);
+	gtk_check_button_set_active(GTK_CHECK_BUTTON(my_widgets.autoset),my_config.autoset);
 }
 static void redraw_alpha_alg(void){
-	gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(my_widgets.alpha_alg),my_config.alpha_alg>0);
+	gtk_check_button_set_active(GTK_CHECK_BUTTON(my_widgets.alpha_alg),my_config.alpha_alg>0);
 }
 
 static void redraw_off_and_div(void){
 	gchar buffer[12];
 	fprint(my_config.divisor,buffer);
-	gtk_entry_set_text(GTK_ENTRY(my_widgets.divisor),buffer);
+	gtk_editable_set_text(GTK_EDITABLE(my_widgets.divisor),buffer);
 	fprint(my_config.offset,buffer);
-	gtk_entry_set_text(GTK_ENTRY(my_widgets.offset),buffer);
+	gtk_editable_set_text(GTK_EDITABLE(my_widgets.offset),buffer);
 }
 
 static void redraw_bmode(void){
-	gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(my_widgets.bmode[my_config.bmode]),TRUE);
+	gtk_check_button_set_active(GTK_CHECK_BUTTON(my_widgets.bmode[my_config.bmode]),TRUE);
 }
 
 static void redraw_all(void){
@@ -581,13 +582,13 @@ static void check_matrix(void){
 static void close_callback(GtkWidget *widget, gpointer data){
 	(void)widget; /* Shut up warnings about unused parameters. */
 	(void)data;
-	gtk_main_quit();
+	gimp_main_loop_quit();
 }
 
 static void ok_callback(GtkWidget * widget, gpointer data){
 	(void)widget; /* Shut up warnings about unused parameters. */
 	run_flag = 1;
-	gtk_widget_destroy(GTK_WIDGET(data));
+	gtk_window_destroy(GTK_WINDOW(data));
 }
 
 
@@ -623,7 +624,7 @@ static void defaults_callback(GtkWidget * widget, gpointer data){
 static void entry_callback(GtkWidget * widget, gpointer data)
 {
 	gfloat *value=(gfloat *)data;
-	*value=atof(gtk_entry_get_text(GTK_ENTRY(widget)));
+	*value=atof(gtk_editable_get_text(GTK_EDITABLE(widget)));
 #if 0
 	check_matrix();
 #else
@@ -636,7 +637,7 @@ static void entry_callback(GtkWidget * widget, gpointer data)
 
 static void my_toggle_callback(GtkWidget * widget, gpointer data)
 {
-	int val=GTK_TOGGLE_BUTTON(widget)->active;
+	int val=gtk_check_button_get_active(GTK_CHECK_BUTTON(widget));
 	if(val)
 	    *(int *)data=TRUE;
 	else
@@ -657,13 +658,16 @@ static void my_toggle_callback(GtkWidget * widget, gpointer data)
 static void my_bmode_callback(GtkWidget * widget, gpointer data){
 	(void)widget; /* Shut up warnings about unused parameters. */
 	(void)data;
-	my_config.bmode=(int)data-1;
+	/* Radio buttons emit "toggled" when they are switched off too. */
+	if(!gtk_check_button_get_active(GTK_CHECK_BUTTON(widget)))
+		return;
+	my_config.bmode=GPOINTER_TO_INT(data)-1;
 }
 
 
 
 
-static gint dialog()
+static gint dialog(void)
 {
 	GtkWidget *dlg;
 	GtkWidget *button;
@@ -675,226 +679,167 @@ static gint dialog()
 	GtkWidget *inbox;
 	GtkWidget *yetanotherbox;
 	GtkWidget *frame;
-	gchar buffer[32];
-	gchar **argv;
-	gint argc;
 	gint x,y,i;
-	GSList *group;
-	
-	argc = 1;
-	argv = g_new(gchar *, 1);
-	argv[0] = g_strdup("convmatrix");
 
-	gtk_init(&argc, &argv);
-	gtk_rc_parse (gimp_gtkrc ());
+	gtk_init();
 
-	dlg = gtk_dialog_new();
-	gtk_window_set_title(GTK_WINDOW(dlg), "Convolution Matrix");
-	gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-	gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-			   (GtkSignalFunc) close_callback, NULL);
+	dlg = gimp_dialog_new("Convolution Matrix");
+	g_signal_connect(dlg, "destroy",
+			 G_CALLBACK(close_callback), NULL);
 
 	/*  Action area  */
-	my_widgets.ok = button = gtk_button_new_with_label("OK");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect(GTK_OBJECT(button), "clicked",
-			   (GtkSignalFunc) ok_callback,
-			   GTK_OBJECT(dlg));
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_grab_default(button);
-	gtk_widget_show(button);
+	my_widgets.ok = gimp_dialog_add_button(dlg, "OK",
+					       G_CALLBACK(ok_callback),
+					       dlg, TRUE);
 
-	button = gtk_button_new_with_label("Defaults");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-				  (GtkSignalFunc) defaults_callback,
-				  GTK_OBJECT(dlg));
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_show(button);
+	gimp_dialog_add_button(dlg, "Defaults",
+			       G_CALLBACK(defaults_callback), dlg, FALSE);
 
-	button = gtk_button_new_with_label("Cancel");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-				  (GtkSignalFunc) close_callback,
-				  GTK_OBJECT(dlg));
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_show(button);
+	button = gimp_dialog_add_button(dlg, "Cancel", NULL, NULL, FALSE);
+	g_signal_connect_swapped(button, "clicked",
+				 G_CALLBACK(gtk_window_destroy), dlg);
 
-	
-/* Outbox */	
-	outbox=gtk_hbox_new(FALSE,0);
-	gtk_box_pack_start (GTK_BOX (GTK_DIALOG(dlg)->vbox), outbox, TRUE, TRUE, 0);
 
-/* Outbox:YABox */	
-	yetanotherbox=gtk_vbox_new(FALSE,0);
-	gtk_box_pack_start (GTK_BOX (outbox), yetanotherbox, TRUE, TRUE, 0);
+/* Outbox */
+	outbox=gimp_hbox_new(FALSE,0);
+	gimp_box_pack_start (gimp_dialog_get_vbox(dlg), outbox, TRUE, TRUE, 0);
 
-/* Outbox:YABox:Frame */	
+/* Outbox:YABox */
+	yetanotherbox=gimp_vbox_new(FALSE,0);
+	gimp_box_pack_start (outbox, yetanotherbox, TRUE, TRUE, 0);
+
+/* Outbox:YABox:Frame */
 	frame = gtk_frame_new ("Matrix");
-	gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-	gtk_container_border_width (GTK_CONTAINER (frame), 10);
-	gtk_box_pack_start (GTK_BOX (yetanotherbox), frame, TRUE, TRUE, 0);
+	gimp_container_set_border_width (frame, 10);
+	gimp_box_pack_start (yetanotherbox, frame, TRUE, TRUE, 0);
 
-/* Outbox:YABox:Frame:Inbox */	
-	inbox=gtk_vbox_new(FALSE,0);
-	gtk_container_add(GTK_CONTAINER(frame),inbox);
+/* Outbox:YABox:Frame:Inbox */
+	inbox=gimp_vbox_new(FALSE,0);
+	gtk_frame_set_child(GTK_FRAME(frame),inbox);
 	/* The main table */
 	/* Set its size (y, x) */
 
-/* Outbox:YABox:Frame:Inbox:Table */	
-	table = gtk_table_new(5, 5, TRUE);
-	gtk_container_border_width(GTK_CONTAINER(table), 10);
-	gtk_container_add (GTK_CONTAINER (inbox), table);
-	gtk_widget_show(table);
+/* Outbox:YABox:Frame:Inbox:Table */
+	table = gimp_table_new(5, 5, TRUE);
+	gimp_container_set_border_width(table, 10);
+	gimp_box_pack_start (inbox, table, TRUE, TRUE, 0);
 
-	gtk_table_set_row_spacings(GTK_TABLE(table), 5);
-	gtk_table_set_col_spacings(GTK_TABLE(table), 5);
-	
-	
+	gtk_grid_set_row_spacing(GTK_GRID(table), 5);
+	gtk_grid_set_column_spacing(GTK_GRID(table), 5);
+
+
 	/* The 5x5 matrix entry fields */
 	for(y=0;y<5;y++)
 	    for(x=0;x<5;x++){
 		    my_widgets.matrix[x][y]= entry = gtk_entry_new();
-		    gtk_table_attach(GTK_TABLE(table), entry, x, x+1, y, y+1, GTK_EXPAND | GTK_FILL,
-			GTK_EXPAND | GTK_FILL, 0, 0);
-		    gtk_widget_set_usize(entry, 40, 0);
-		    
-		    gtk_entry_set_text(GTK_ENTRY(entry), buffer);
-		    gtk_signal_connect(GTK_OBJECT(entry), "changed",
-				       (GtkSignalFunc) entry_callback, &my_config.matrix[x][y]);
+		    gimp_table_attach(table, entry, x, x+1, y, y+1, GIMP_EXPAND | GIMP_FILL,
+			GIMP_EXPAND | GIMP_FILL, 0, 0);
+		    gtk_widget_set_size_request(entry, 40, -1);
+		    gtk_editable_set_width_chars(GTK_EDITABLE(entry), 4);
 
-		    gtk_widget_show(entry);
+		    g_signal_connect(entry, "changed",
+				     G_CALLBACK(entry_callback), &my_config.matrix[x][y]);
 	    }
-	
-	gtk_widget_show(table);
+
 	/* The remaining two parameters */
 
-/* Outbox:YABox:Frame:Inbox:Box */	
-	box=gtk_hbox_new(TRUE,0);
-	gtk_container_border_width(GTK_CONTAINER(box),10);
-	gtk_box_pack_start(GTK_BOX(inbox), box, TRUE, TRUE, 0);
+/* Outbox:YABox:Frame:Inbox:Box */
+	box=gimp_hbox_new(TRUE,0);
+	gimp_container_set_border_width(box,10);
+	gimp_box_pack_start(inbox, box, TRUE, TRUE, 0);
 
 	/* divisor */
-	
-	
+
+
 	label=gtk_label_new("Divisor");
-	gtk_box_pack_start(GTK_BOX(box), label, TRUE, TRUE, 0);
-	gtk_widget_show(label);
-	
+	gimp_box_pack_start(box, label, TRUE, TRUE, 0);
+
 	my_widgets.divisor=entry=gtk_entry_new();
-	gtk_box_pack_start(GTK_BOX(box), entry, TRUE, TRUE, 0);
-	gtk_widget_set_usize(entry, 40, 0);
-	gtk_signal_connect(GTK_OBJECT(entry), "changed",
-			   (GtkSignalFunc) entry_callback, &my_config.divisor);
-	gtk_widget_show(entry);
-	
+	gimp_box_pack_start(box, entry, TRUE, TRUE, 0);
+	gtk_widget_set_size_request(entry, 40, -1);
+	gtk_editable_set_width_chars(GTK_EDITABLE(entry), 4);
+	g_signal_connect(entry, "changed",
+			 G_CALLBACK(entry_callback), &my_config.divisor);
+
 
 	/* Offset */
 
-	
+
 	label=gtk_label_new("Offset");
-	gtk_box_pack_start(GTK_BOX(box), label, TRUE, TRUE, 0);
-	gtk_widget_show(label);
-	
+	gimp_box_pack_start(box, label, TRUE, TRUE, 0);
+
 	my_widgets.offset=entry=gtk_entry_new();
-	gtk_box_pack_start(GTK_BOX(box), entry, TRUE, TRUE, 0);
-	gtk_widget_set_usize(entry, 40, 0);
-	gtk_signal_connect(GTK_OBJECT(entry), "changed",
-			   (GtkSignalFunc) entry_callback, &my_config.offset);
-	gtk_widget_show(entry);
+	gimp_box_pack_start(box, entry, TRUE, TRUE, 0);
+	gtk_widget_set_size_request(entry, 40, -1);
+	gtk_editable_set_width_chars(GTK_EDITABLE(entry), 4);
+	g_signal_connect(entry, "changed",
+			 G_CALLBACK(entry_callback), &my_config.offset);
 
-	gtk_widget_show(box);
-	gtk_widget_show(inbox);
-	gtk_widget_show(frame);
+/* Outbox:YABox:Box */
 
-/* Outbox:YABox:Box */	
-	
-	box=gtk_hbox_new(TRUE,0);
-	gtk_box_pack_start(GTK_BOX(yetanotherbox),box, TRUE, TRUE, 0);
-	
+	box=gimp_hbox_new(TRUE,0);
+	gimp_box_pack_start(yetanotherbox,box, TRUE, TRUE, 0);
+
 	my_widgets.autoset=button=gtk_check_button_new_with_label("Automatic");
-	gtk_box_pack_start(GTK_BOX(box), button, TRUE, FALSE,0);
-	gtk_signal_connect(GTK_OBJECT(button), "toggled",
-			   (GtkSignalFunc) my_toggle_callback, &my_config.autoset);
-	gtk_widget_show(button);
-	
+	gimp_box_pack_start(box, button, TRUE, FALSE,0);
+	g_signal_connect(button, "toggled",
+			 G_CALLBACK(my_toggle_callback), &my_config.autoset);
+
 
 	/* Alpha-weighting */
-	
+
 	my_widgets.alpha_alg=button=gtk_check_button_new_with_label("Alpha-weighting");
 	if(my_config.alpha_alg==-1)
 	    gtk_widget_set_sensitive(button,0);
-	gtk_box_pack_start(GTK_BOX(box),button,TRUE,TRUE,0);
-	gtk_signal_connect(GTK_OBJECT(button), "toggled",(GtkSignalFunc)my_toggle_callback,&my_config.alpha_alg);
-	gtk_widget_show(button);
+	gimp_box_pack_start(box,button,TRUE,TRUE,0);
+	g_signal_connect(button, "toggled",G_CALLBACK(my_toggle_callback),&my_config.alpha_alg);
 
-	gtk_widget_show(box);
-	gtk_widget_show(yetanotherbox);
 /* Outbox:Inbox */
-	inbox=gtk_vbox_new(FALSE,0);
-	gtk_box_pack_start(GTK_BOX(outbox),inbox, FALSE, FALSE,0);
-	
+	inbox=gimp_vbox_new(FALSE,0);
+	gimp_box_pack_start(outbox,inbox, FALSE, FALSE,0);
+
 	/* Wrap-modes */
 /* OutBox:Inbox:Frame */
 	frame=gtk_frame_new("Border");
-	gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-	gtk_container_border_width (GTK_CONTAINER (frame), 10);
-	gtk_box_pack_start(GTK_BOX(inbox), frame, TRUE, TRUE,0);
-	
+	gimp_container_set_border_width (frame, 10);
+	gimp_box_pack_start(inbox, frame, TRUE, TRUE,0);
+
 /* OutBox:Inbox:Frame:Box */
-	box=gtk_vbox_new(TRUE, 0);
-	gtk_container_add(GTK_CONTAINER(frame),box);
+	box=gimp_vbox_new(TRUE, 0);
+	gtk_frame_set_child(GTK_FRAME(frame),box);
 
-	group=NULL;
-	
-
+	button=NULL;
 	for(i=0;i<3;i++){
-		my_widgets.bmode[i]=button=gtk_radio_button_new_with_label(group,bmode_labels[i]);
-		group=gtk_radio_button_group(GTK_RADIO_BUTTON(button));
-		gtk_box_pack_start(GTK_BOX(box),button,TRUE,TRUE,0);
-		gtk_widget_show(button);
-		gtk_signal_connect(GTK_OBJECT(button),"toggled",
-				   (GtkSignalFunc)my_bmode_callback,(gpointer)(i+1));
-		/* Gaahh! We cast an int to a gpointer! So sue me.
-		 * The +1 should protect against some null pointers */
+		my_widgets.bmode[i]=button=gimp_radio_button_new(button,bmode_labels[i]);
+		gimp_box_pack_start(box,button,TRUE,TRUE,0);
+		g_signal_connect(button,"toggled",
+				 G_CALLBACK(my_bmode_callback),GINT_TO_POINTER(i+1));
+		/* The +1 should protect against some null pointers */
 	}
-	
-	gtk_widget_show(box);
-
-	gtk_widget_show(frame);
 
 /* OutBox:Inbox:Frame */
 	frame=gtk_frame_new("Channels");
-	gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-	gtk_container_border_width (GTK_CONTAINER (frame), 10);
-	gtk_box_pack_start(GTK_BOX(inbox), frame, TRUE, TRUE,0);
-	
+	gimp_container_set_border_width (frame, 10);
+	gimp_box_pack_start(inbox, frame, TRUE, TRUE,0);
+
 /* OutBox:Inbox:Frame:Box */
-	box=gtk_vbox_new(TRUE, 0);
-	gtk_container_add(GTK_CONTAINER(frame),box);
+	box=gimp_vbox_new(TRUE, 0);
+	gtk_frame_set_child(GTK_FRAME(frame),box);
 	for(i=0;i<5;i++){
 		my_widgets.channels[i]=button=gtk_check_button_new_with_label(channel_labels[i]);
 		if(my_config.channels[i]<0)
 		    gtk_widget_set_sensitive(button,0);
-		gtk_signal_connect(GTK_OBJECT(button), "toggled",(GtkSignalFunc)my_toggle_callback,&my_config.channels[i]);
-		gtk_box_pack_start(GTK_BOX(box),button,TRUE,TRUE,0);
-		gtk_widget_show(button);
+		g_signal_connect(button, "toggled",G_CALLBACK(my_toggle_callback),&my_config.channels[i]);
+		gimp_box_pack_start(box,button,TRUE,TRUE,0);
 	}
 
-	gtk_widget_show(box);
-
-	gtk_widget_show(frame);
-	
-	gtk_widget_show(inbox);
-
-	gtk_widget_show(outbox);
-
-	gtk_widget_show(dlg);
+	gtk_window_present(GTK_WINDOW(dlg));
 	redraw_all();
 	gtk_widget_set_sensitive(my_widgets.bmode[CLEAR],(my_config.alpha_alg>0));
-	gtk_main();
-	gdk_flush();
+	gimp_main_loop_run();
 	return run_flag;
 }
+
+
 
 

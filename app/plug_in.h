@@ -45,13 +45,13 @@ struct _PlugIn
   unsigned int synchronous : 1;          /* Is the plug-in running synchronously or not */
   unsigned int recurse : 1;              /* Have we called 'gtk_main' recursively? */
   unsigned int busy : 1;                 /* Is the plug-in busy with a temp proc? */
-  pid_t pid;                             /* Plug-ins process id */
+  GPid pid;                              /* Plug-ins process */
   char *args[7];                         /* Plug-ins command line arguments */
 
-  int my_read, my_write;                 /* Apps read and write file descriptors */
-  int his_read, his_write;               /* Plug-ins read and write file descriptors */
+  GIOChannel *my_read, *my_write;        /* Apps ends of the pipes */
+  int his_read, his_write;               /* Plug-ins ends, until it has them */
 
-  guint32 input_id;                      /* Id of input proc */
+  guint input_id;                        /* Id of the watch on my_read */
 
   char write_buffer[WRITE_BUFFER_SIZE];  /* Buffer for writing */
   int write_buffer_index;                /* Buffer index for writing */

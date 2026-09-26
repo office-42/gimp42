@@ -137,8 +137,8 @@ gimp_tile_height ()
 static void
 gimp_tile_get (GTile *tile)
 {
-  extern int _writefd;
-  extern int _readfd;
+  extern GIOChannel *_writechannel;
+  extern GIOChannel *_readchannel;
   extern guchar* _shm_addr;
 
   GPTileReq tile_req;
@@ -148,10 +148,10 @@ gimp_tile_get (GTile *tile)
   tile_req.drawable_ID = tile->drawable->id;
   tile_req.tile_num = tile->tile_num;
   tile_req.shadow = tile->shadow;
-  if (!gp_tile_req_write (_writefd, &tile_req))
+  if (!gp_tile_req_write (_writechannel, &tile_req))
     gimp_quit ();
 
-  if (!wire_read_msg (_readfd, &msg))
+  if (!wire_read_msg (_readchannel, &msg))
     gimp_quit ();
 
   if (msg.type != GP_TILE_DATA)
@@ -183,7 +183,7 @@ gimp_tile_get (GTile *tile)
       tile_data->data = NULL;
     }
 
-  if (!gp_tile_ack_write (_writefd))
+  if (!gp_tile_ack_write (_writechannel))
     gimp_quit ();
 
   wire_destroy (&msg);
@@ -192,8 +192,8 @@ gimp_tile_get (GTile *tile)
 static void
 gimp_tile_put (GTile *tile)
 {
-  extern int _writefd;
-  extern int _readfd;
+  extern GIOChannel *_writechannel;
+  extern GIOChannel *_readchannel;
   extern guchar* _shm_addr;
 
   GPTileReq tile_req;
@@ -204,10 +204,10 @@ gimp_tile_put (GTile *tile)
   tile_req.drawable_ID = -1;
   tile_req.tile_num = 0;
   tile_req.shadow = 0;
-  if (!gp_tile_req_write (_writefd, &tile_req))
+  if (!gp_tile_req_write (_writechannel, &tile_req))
     gimp_quit ();
 
-  if (!wire_read_msg (_readfd, &msg))
+  if (!wire_read_msg (_readchannel, &msg))
     gimp_quit ();
 
   if (msg.type != GP_TILE_DATA)
@@ -232,10 +232,10 @@ gimp_tile_put (GTile *tile)
   else
     tile_data.data = tile->data;
 
-  if (!gp_tile_data_write (_writefd, &tile_data))
+  if (!gp_tile_data_write (_writechannel, &tile_data))
     gimp_quit ();
 
-  if (!wire_read_msg (_readfd, &msg))
+  if (!wire_read_msg (_readchannel, &msg))
     gimp_quit ();
 
   if (msg.type != GP_TILE_ACK)

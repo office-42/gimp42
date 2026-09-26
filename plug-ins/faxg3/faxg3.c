@@ -33,6 +33,10 @@
 #include <libgimp/gimp.h>
 #include "g3.h"
 
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
 /* Declare local functions.
  */
 gint32        emitgimp   (int, int, char *, int, char *);
@@ -181,7 +185,7 @@ load_image (char *filename)
 
   init_byte_tab( 0, byte_tab );
 
-  fd = open(filename, O_RDONLY );
+  fd = open(filename, O_RDONLY | O_BINARY );
 
   hibit = 0;
   data = 0;

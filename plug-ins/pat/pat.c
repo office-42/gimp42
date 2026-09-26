@@ -8,16 +8,26 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
+#include <glib/gstdio.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 #include "app/pattern_header.h"
-#include <netinet/in.h>
+
+#ifdef G_OS_WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 
 
 /* Declare local data types
@@ -39,7 +49,7 @@ static gint   save_image (char   *filename,
                           gint32  image_ID,
                           gint32  drawable_ID);
 
-static gint   save_dialog ();
+static gint   save_dialog (void);
 static void close_callback(GtkWidget * widget, gpointer data);
 static void ok_callback(GtkWidget * widget, gpointer data);
 static void entry_callback(GtkWidget * widget, gpointer data);
@@ -184,7 +194,7 @@ static gint32 load_image (char *filename) {
 	gimp_progress_init(temp);
 	g_free (temp);
 
-	fd = open(filename, O_RDONLY);
+	fd = g_open(filename, O_RDONLY | O_BINARY, 0);
 	if (fd == -1) {
 		return -1;
 	}
@@ -195,12 +205,12 @@ static gint32 load_image (char *filename) {
 	}
 
   /*  rearrange the bytes in each unsigned int  */
-	ph.header_size = ntohl(ph.header_size);
-	ph.version = ntohl(ph.version);
-	ph.width = ntohl(ph.width);
-	ph.height = ntohl(ph.height);
-	ph.bytes = ntohl(ph.bytes);
-	ph.magic_number = ntohl(ph.magic_number);
+	ph.header_size = g_ntohl(ph.header_size);
+	ph.version = g_ntohl(ph.version);
+	ph.width = g_ntohl(ph.width);
+	ph.height = g_ntohl(ph.height);
+	ph.bytes = g_ntohl(ph.bytes);
+	ph.magic_number = g_ntohl(ph.magic_number);
 
 	if (ph.magic_number != GPATTERN_MAGIC || ph.version != 1 ||
 			ph.header_size <= sizeof(ph)) {
@@ -243,6 +253,8 @@ static gint32 load_image (char *filename) {
 	}
 
 	gimp_drawable_flush(drawable);
+	g_free(buffer);
+	close(fd);
 
 	return image_ID;
 }
@@ -265,17 +277,17 @@ static gint save_image (char *filename, gint32 image_ID, gint32 drawable_ID) {
 	gimp_pixel_rgn_init(&pixel_rgn, drawable, 0, 0, drawable->width,
 			drawable->height, FALSE, FALSE);
 
-	fd = open(filename, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+	fd = g_open(filename, O_CREAT | O_TRUNC | O_WRONLY | O_BINARY, 0644);
 	if (fd == -1) {
 		return 0;
 	}
 
-	ph.header_size = htonl(sizeof(ph) + strlen(description) + 1);
-	ph.version = htonl(1);
-	ph.width = htonl(drawable->width);
-	ph.height = htonl(drawable->height);
-	ph.bytes = htonl(drawable->bpp);
-	ph.magic_number = htonl(GPATTERN_MAGIC);
+	ph.header_size = g_htonl(sizeof(ph) + strlen(description) + 1);
+	ph.version = g_htonl(1);
+	ph.width = g_htonl(drawable->width);
+	ph.height = g_htonl(drawable->height);
+	ph.bytes = g_htonl(drawable->bpp);
+	ph.magic_number = g_htonl(GPATTERN_MAGIC);
 
 	if (write(fd, &ph, sizeof(ph)) != sizeof(ph)) {
 		close(fd);
@@ -310,99 +322,74 @@ static gint save_image (char *filename, gint32 image_ID, gint32 drawable_ID) {
 }
 
 
-static gint save_dialog()
+static gint save_dialog(void)
 {
 	GtkWidget *dlg;
 	GtkWidget *button;
 	GtkWidget *label;
 	GtkWidget *entry;
 	GtkWidget *table;
-	gchar **argv;
-	gint argc;
 
-	argc = 1;
-	argv = g_new(gchar *, 1);
-	argv[0] = g_strdup("plasma");
+	gtk_init();
 
-	gtk_init(&argc, &argv);
-	gtk_rc_parse (gimp_gtkrc ());
-
-	dlg = gtk_dialog_new();
-	gtk_window_set_title(GTK_WINDOW(dlg), "Save As Pattern");
-	gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-	gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-										 (GtkSignalFunc) close_callback, NULL);
+	dlg = gimp_dialog_new("Save As Pattern");
+	g_signal_connect(dlg, "destroy", G_CALLBACK(close_callback), NULL);
 
 	/*  Action area  */
-	button = gtk_button_new_with_label("OK");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect(GTK_OBJECT(button), "clicked",
-										 (GtkSignalFunc) ok_callback,
-										 dlg);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_grab_default(button);
-	gtk_widget_show(button);
-
-	button = gtk_button_new_with_label("Cancel");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-														(GtkSignalFunc) gtk_widget_destroy,
-														GTK_OBJECT(dlg));
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_show(button);
+	gimp_dialog_add_button(dlg, "OK", G_CALLBACK(ok_callback), dlg, TRUE);
+	button = gimp_dialog_add_button(dlg, "Cancel", NULL, NULL, FALSE);
+	g_signal_connect_swapped(button, "clicked",
+			G_CALLBACK(gtk_window_destroy), dlg);
 
 	/* The main table */
 	/* Set its size (y, x) */
-	table = gtk_table_new(1, 2, FALSE);
-	gtk_container_border_width(GTK_CONTAINER(table), 10);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), table, TRUE, TRUE, 0);
-	gtk_widget_show(table);
+	table = gimp_table_new(1, 2, FALSE);
+	gimp_container_set_border_width(table, 10);
+	gimp_box_pack_start(gimp_dialog_get_vbox(dlg), table, TRUE, TRUE, 0);
 
-	gtk_table_set_row_spacings(GTK_TABLE(table), 10);
-	gtk_table_set_col_spacings(GTK_TABLE(table), 10);
+	gtk_grid_set_row_spacing(GTK_GRID(table), 10);
+	gtk_grid_set_column_spacing(GTK_GRID(table), 10);
 
 	/**********************
 	 * label
 	 **********************/
 	label = gtk_label_new("Description:");
-	gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
-	gtk_table_attach(GTK_TABLE(table), label, 0, 1, 0, 1, GTK_FILL, GTK_FILL, 0,
-			0);
-	gtk_widget_show(label);
+	gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+	gimp_table_attach(table, label, 0, 1, 0, 1, GIMP_FILL, GIMP_FILL, 0, 0);
 
 	/************************
 	 * The entry
 	 ************************/
 	entry = gtk_entry_new();
-	gtk_table_attach(GTK_TABLE(table), entry, 1, 2, 0, 1, GTK_EXPAND | GTK_FILL,
-			GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_set_usize(entry, 200, 0);
-	gtk_entry_set_text(GTK_ENTRY(entry), description);
-	gtk_signal_connect(GTK_OBJECT(entry), "changed",
-			(GtkSignalFunc) entry_callback, description);
-	gtk_widget_show(entry);
+	gimp_table_attach(table, entry, 1, 2, 0, 1, GIMP_EXPAND | GIMP_FILL,
+			GIMP_EXPAND | GIMP_FILL, 0, 0);
+	gtk_widget_set_size_request(entry, 200, -1);
+	gtk_entry_set_max_length(GTK_ENTRY(entry), sizeof(description) - 1);
+	gtk_editable_set_text(GTK_EDITABLE(entry), description);
+	g_signal_connect(entry, "changed",
+			G_CALLBACK(entry_callback), description);
 
-	gtk_widget_show(dlg);
+	gtk_window_present(GTK_WINDOW(dlg));
 
-	gtk_main();
-	gdk_flush();
+	gimp_main_loop_run();
 
 	return run_flag;
 }
 
 static void close_callback(GtkWidget * widget, gpointer data)
 {
-	gtk_main_quit();
+	gimp_main_loop_quit();
 }
 
 static void ok_callback(GtkWidget * widget, gpointer data)
 {
 	run_flag = 1;
-	gtk_widget_destroy(GTK_WIDGET(data));
+	gtk_window_destroy(GTK_WINDOW(data));
 }
 
 static void entry_callback(GtkWidget * widget, gpointer data)
 {
 	if (data == description)
-		strncpy(description, gtk_entry_get_text(GTK_ENTRY(widget)), 256);
+		g_strlcpy(description, gtk_editable_get_text(GTK_EDITABLE(widget)),
+				sizeof(description));
 }

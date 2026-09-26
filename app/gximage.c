@@ -17,76 +17,32 @@
  */
 #include <stdlib.h>
 #include "appenv.h"
-#include "colormaps.h"
-#include "gimage.h"
 #include "gximage.h"
-#include "errors.h"
 
-typedef struct _GXImage  GXImage;
+/*  The scratch buffer image_render.c renders a chunk of the display into:
+ *  GXIMAGE_WIDTH x GXIMAGE_HEIGHT pixels of packed RGB.  gximage_put ()
+ *  copies a chunk into a display's backing surface.
+ */
 
-struct _GXImage
-{
-  long width, height;		/*  width and height of ximage structure    */
-
-  GdkVisual *visual;		/*  visual appropriate to our depth         */
-  GdkGC *gc;			/*  graphics context                        */
-
-  guchar *data;
-};
-
-
-/*  The static gximages for drawing to windows  */
-static GXImage *gximage = NULL;
-
-#define QUANTUM   32
-
-/*  STATIC functions  */
-
-static GXImage *
-create_gximage (GdkVisual *visual, int width, int height)
-{
-  GXImage * gximage;
-
-  gximage = (GXImage *) g_malloc (sizeof (GXImage));
-
-  gximage->visual = visual;
-  gximage->gc = NULL;
-
-  gximage->data = g_malloc (width * height * 3);
-
-  return gximage;
-}
-
-static void
-delete_gximage (GXImage *gximage)
-{
-  g_free (gximage->data);
-  if (gximage->gc)
-    gdk_gc_destroy (gximage->gc);
-  g_free (gximage);
-}
-
-/****************************************************************/
-
-
-/*  Function definitions  */
+static guchar *gximage_data = NULL;
 
 void
 gximage_init ()
 {
-  gximage = create_gximage (g_visual, GXIMAGE_WIDTH, GXIMAGE_HEIGHT);
+  gximage_data = g_malloc (GXIMAGE_WIDTH * GXIMAGE_HEIGHT * 3);
 }
 
 void
 gximage_free ()
 {
-  delete_gximage (gximage);
+  g_free (gximage_data);
+  gximage_data = NULL;
 }
 
 guchar*
 gximage_get_data ()
 {
-  return gximage->data;
+  return gximage_data;
 }
 
 int
@@ -104,30 +60,46 @@ gximage_get_bpl ()
 int
 gximage_get_byte_order ()
 {
-  return GDK_MSB_FIRST;
+  return GXIMAGE_MSB_FIRST;
 }
 
 void
-gximage_put (GdkWindow *win, int x, int y, int w, int h, int xdith, int ydith)
+gximage_put (cairo_surface_t *surface,
+	     int              x,
+	     int              y,
+	     int              w,
+	     int              h)
 {
-    /*  create the GC if it doesn't yet exist  */
-  if (!gximage->gc)
+  guchar *dest;
+  int     stride;
+  int     width, height;
+  int     row, col;
+
+  if (!surface)
+    return;
+
+  width  = cairo_image_surface_get_width (surface);
+  height = cairo_image_surface_get_height (surface);
+
+  if (x < 0) { w += x; x = 0; }
+  if (y < 0) { h += y; y = 0; }
+  if (x + w > width)  w = width - x;
+  if (y + h > height) h = height - y;
+  if (w <= 0 || h <= 0)
+    return;
+
+  cairo_surface_flush (surface);
+  dest   = cairo_image_surface_get_data (surface);
+  stride = cairo_image_surface_get_stride (surface);
+
+  for (row = 0; row < h; row++)
     {
-      gximage->gc = gdk_gc_new (win);
-      gdk_gc_set_exposures (gximage->gc, TRUE);
+      const guchar *s = gximage_data + row * GXIMAGE_WIDTH * 3;
+      guint32      *d = (guint32 *) (dest + (y + row) * stride) + x;
+
+      for (col = 0; col < w; col++, s += 3)
+	d[col] = (0xffu << 24) | (s[0] << 16) | (s[1] << 8) | s[2];
     }
 
-  gdk_draw_rgb_image_dithalign (win,
-				gximage->gc,
-				x,
-				y,
-				w,
-				h,
-				/* todo: make configurable */
-				GDK_RGB_DITHER_MAX,
-				gximage->data,
-				GXIMAGE_WIDTH * 3,
-				xdith, ydith);
+  cairo_surface_mark_dirty_rectangle (surface, x, y, w, h);
 }
-
-

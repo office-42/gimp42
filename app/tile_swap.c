@@ -3,6 +3,11 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <glib/gstdio.h>
+
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 #include <unistd.h>
 
 
@@ -287,7 +292,7 @@ tile_swap_open (SwapFile *swap_file)
       nopen_swap_files -= 1;
     }
 
-  swap_file->fd = open (swap_file->filename, O_CREAT|O_RDWR, S_IRUSR|S_IWUSR);
+  swap_file->fd = g_open (swap_file->filename, O_CREAT|O_RDWR|O_BINARY, S_IRUSR|S_IWUSR);
   if (swap_file->fd == -1)
     {
       g_message ("unable to open swap file...BAD THINGS WILL HAPPEN SOON");

@@ -45,7 +45,7 @@ typedef struct _ImageMap
   PixelRegion       srcPR, destPR;
   void *            pr;
   int               state;
-  gint              idle;
+  guint             idle;
 } _ImageMap;
 
 
@@ -130,7 +130,7 @@ image_map_apply (ImageMap           image_map,
   /*  If we're still working, remove the timer  */
   if (_image_map->state == WORKING)
     {
-      gtk_idle_remove (_image_map->idle);
+      g_source_remove (_image_map->idle);
       pixel_regions_process_stop (_image_map->pr);
       _image_map->pr = NULL;
     }
@@ -206,7 +206,7 @@ image_map_apply (ImageMap           image_map,
 
   /*  Start the intermittant work procedure  */
   _image_map->state = WORKING;
-  _image_map->idle = gtk_idle_add (image_map_do, image_map);
+  _image_map->idle = g_idle_add (image_map_do, image_map);
 }
 
 void
@@ -219,7 +219,7 @@ image_map_commit (ImageMap image_map)
 
   if (_image_map->state == WORKING)
     {
-      gtk_idle_remove (_image_map->idle);
+      g_source_remove (_image_map->idle);
 
       /*  Finish the changes  */
       while (image_map_do (image_map)) ;
@@ -252,7 +252,7 @@ image_map_abort (ImageMap image_map)
 
   if (_image_map->state == WORKING)
     {
-      gtk_idle_remove (_image_map->idle);
+      g_source_remove (_image_map->idle);
       pixel_regions_process_stop (_image_map->pr);
       _image_map->pr = NULL;
     }

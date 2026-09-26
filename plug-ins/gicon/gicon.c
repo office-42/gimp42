@@ -20,18 +20,14 @@
  */
 
 #include <setjmp.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
-#include <netinet/in.h>
+#include "libgimp/gimpui.h"
 
 
 typedef struct
@@ -377,82 +373,57 @@ save_image (char   *filename,
 
 
 static gint
-save_dialog()
+save_dialog (void)
 {
   GtkWidget *dlg;
   GtkWidget *button;
   GtkWidget *label;
   GtkWidget *entry;
   GtkWidget *table;
-  gchar **argv;
-  gint argc;
 
-  argc = 1;
-  argv = g_new(gchar *, 1);
-  argv[0] = g_strdup("gicon");
+  gtk_init();
 
-  gtk_init(&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new();
-  gtk_window_set_title(GTK_WINDOW(dlg), "Save As GIcon");
-  gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-		     (GtkSignalFunc) close_callback, NULL);
+  dlg = gimp_dialog_new("Save As GIcon");
+  g_signal_connect (dlg, "destroy",
+		     G_CALLBACK (close_callback), NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label("OK");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect(GTK_OBJECT(button), "clicked",
-		     (GtkSignalFunc) ok_callback,
-		     dlg);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default(button);
-  gtk_widget_show(button);
-
-  button = gtk_button_new_with_label("Cancel");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-			    (GtkSignalFunc) gtk_widget_destroy,
-			    GTK_OBJECT(dlg));
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show(button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (ok_callback), dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /* The main table */
   /* Set its size (y, x) */
-  table = gtk_table_new(1, 2, FALSE);
-  gtk_container_border_width(GTK_CONTAINER(table), 10);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show(table);
+  table = gimp_table_new(1, 2, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), table, TRUE, TRUE, 0);
 
-  gtk_table_set_row_spacings(GTK_TABLE(table), 10);
-  gtk_table_set_col_spacings(GTK_TABLE(table), 10);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 10);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 10);
 
   /**********************
    * label
    **********************/
   label = gtk_label_new("Icon Name:");
-  gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
-  gtk_table_attach(GTK_TABLE(table), label, 0, 1, 0, 1, GTK_FILL, GTK_FILL, 0, 0);
-  gtk_widget_show(label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_FILL, GIMP_FILL, 0, 0);
 
   /************************
    * The entry
    ************************/
   entry = gtk_entry_new();
-  gtk_table_attach(GTK_TABLE(table), entry, 1, 2, 0, 1, GTK_EXPAND | GTK_FILL,
-		   GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_set_usize(entry, 200, 0);
-  gtk_entry_set_text(GTK_ENTRY(entry), givals.icon_name);
-  gtk_signal_connect(GTK_OBJECT(entry), "changed",
-		     (GtkSignalFunc) entry_callback, givals.icon_name);
-  gtk_widget_show(entry);
+  gimp_table_attach (table, entry, 1, 2, 0, 1, GIMP_EXPAND | GIMP_FILL,
+		   GIMP_EXPAND | GIMP_FILL, 0, 0);
+  gtk_widget_set_size_request(entry, 200, -1);
+  gtk_editable_set_text (GTK_EDITABLE (entry), givals.icon_name);
+  g_signal_connect (entry, "changed",
+		     G_CALLBACK (entry_callback), givals.icon_name);
 
 
-  gtk_widget_show(dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main();
-  gdk_flush();
+  gimp_main_loop_run ();
 
   return giint.run;
 }
@@ -461,7 +432,7 @@ static void
 close_callback (GtkWidget *widget,
 		gpointer   data)
 {
-  gtk_main_quit();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -469,12 +440,12 @@ ok_callback (GtkWidget *widget,
 	     gpointer   data)
 {
   giint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
 entry_callback (GtkWidget *widget,
 		gpointer   data)
 {
-  strncpy(givals.icon_name, gtk_entry_get_text (GTK_ENTRY (widget)), 256);
+  strncpy(givals.icon_name, gtk_editable_get_text (GTK_EDITABLE (widget)), 256);
 }

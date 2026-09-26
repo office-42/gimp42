@@ -20,53 +20,11 @@
 
 #include "gimage.h"               /* For the image types  */
 
-/*  This is a macro for arranging the red, green, and blue components into
- *  a value acceptable to the target X server
+/*  Under X the GIMP allocated a visual, a colormap and pixel values for
+ *  everything it drew.  With cairo there is nothing to allocate: colors
+ *  are RGB.  What is left is the one call app_procs makes at startup.
  */
-#if 0
-#define COLOR_COMPOSE(r,g,b) (lookup_red [r] | lookup_green [g] | lookup_blue [b])
-#endif
-#define COLOR_COMPOSE(r,g,b) (r | g | b)
 
-extern GdkVisual *g_visual;
-extern GdkColormap *g_cmap;
-
-/*  Pixel values of black and white  */
-extern gulong g_black_pixel;
-extern gulong g_gray_pixel;
-extern gulong g_white_pixel;
-extern gulong g_color_pixel;
-extern gulong g_normal_guide_pixel;
-extern gulong g_active_guide_pixel;
-
-/*  Foreground and Background colors  */
-extern gulong foreground_pixel;
-extern gulong background_pixel;
-
-/*  Old and New colors  */
-extern gulong old_color_pixel;
-extern gulong new_color_pixel;
-
-/*  Colormap entries reserved for color cycled marching ants--optional  */
-extern gulong  marching_ants_pixels[8];
-
-extern GtkDitherInfo *red_ordered_dither;
-extern GtkDitherInfo *green_ordered_dither;
-extern GtkDitherInfo *blue_ordered_dither;
-extern GtkDitherInfo *gray_ordered_dither;
-
-extern guchar ***ordered_dither_matrix;
-
-extern gulong *g_lookup_red;
-extern gulong *g_lookup_green;
-extern gulong *g_lookup_blue;
-
-extern gulong *color_pixel_vals;
-extern gulong *gray_pixel_vals;
-
-gulong get_color (int red, int green, int blue);
-void   store_color (gulong *pixel, int red, int green, int blue);
 void   get_standard_colormaps (void);
-
 
 #endif  /*  __COLORMAPS_H__  */

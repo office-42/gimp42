@@ -35,6 +35,7 @@
 
 #include <libgimp/gimp.h>
 #include <gtk/gtk.h>
+#include <libgimp/gimpui.h>
 #include <plug-ins/megawidget/megawidget.h>
 
 #ifdef HAVE_CONFIG_H
@@ -262,51 +263,36 @@ gint pluginCoreIA(struct piArgs *argp) {
      { "Edge Enhancement", 0 },
      { NULL, 0 }
   };
-  gchar **argv;
-  gint argc;
-
-  /* Set args */
-  argc = 1;
-  argv = g_new(gchar *, 1);
-  argv[0] = g_strdup("nlfilt");
-  gtk_init(&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
   filter[argp->filter].var = 1;
 
   dlg = mw_app_new("plug_in_nlfilt", "NL Filter", &runp);
 
-  hbox = gtk_hbox_new(FALSE, 5);
-  gtk_container_border_width(GTK_CONTAINER(hbox), 5);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), hbox, TRUE, TRUE, 0);
-  gtk_widget_show(hbox);
+  hbox = gimp_hbox_new(FALSE, 5);
+  gimp_container_set_border_width(hbox, 5);
+  gimp_box_pack_start(gimp_dialog_get_vbox(dlg), hbox, TRUE, TRUE, 0);
 
   preview = mw_preview_new(hbox, thePreview, &nlfilt_do_preview);
-  gtk_object_set_data(GTK_OBJECT(preview), "piArgs", argp);
-  gtk_object_set_data(GTK_OBJECT(preview), "mwRadioGroup", &filter);
+  g_object_set_data(G_OBJECT(preview), "piArgs", argp);
+  g_object_set_data(G_OBJECT(preview), "mwRadioGroup", &filter);
   nlfilt_do_preview(preview);
 
   mw_radio_group_new(hbox, "Filter", filter);
 
   frame = gtk_frame_new("Parameters");
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width(GTK_CONTAINER(frame), 5);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), frame, FALSE, FALSE, 0);
-  gtk_widget_show(frame);
+  gimp_container_set_border_width(frame, 5);
+  gimp_box_pack_start(gimp_dialog_get_vbox(dlg), frame, FALSE, FALSE, 0);
 
-  table = gtk_table_new(4, 2, FALSE);
-  gtk_container_border_width(GTK_CONTAINER (table), 5);
-  gtk_container_add(GTK_CONTAINER(frame), table);
+  table = gimp_table_new(4, 2, FALSE);
+  gimp_container_set_border_width(table, 5);
+  gtk_frame_set_child(GTK_FRAME(frame), table);
 
   mw_fscale_entry_new(table, "Alpha", 0.0, 1.0, 0.05, 0.1, 0.0,
                       0, 1, 1, 2, &argp->alpha);
   mw_fscale_entry_new(table, "Radius", 0.3333333, 1.0, 0.05, 0.1, 0.0,
                       0, 1, 2, 3, &argp->radius);
-  gtk_widget_show(table);
 
-  gtk_widget_show(table);
-  gtk_widget_show(dlg);
-  gtk_main();
-  gdk_flush();
+  gtk_window_present(GTK_WINDOW(dlg));
+  gimp_main_loop_run();
 
   argp->filter = mw_radio_result(filter);
   
@@ -336,8 +322,8 @@ nlfilt_do_preview(GtkWidget *w) {
       theWidget=w;
    }
 
-   ap = gtk_object_get_data(GTK_OBJECT(theWidget), "piArgs");
-   rgp = gtk_object_get_data(GTK_OBJECT(theWidget), "mwRadioGroup");
+   ap = g_object_get_data(G_OBJECT(theWidget), "piArgs");
+   rgp = g_object_get_data(G_OBJECT(theWidget), "mwRadioGroup");
    ap->filter = mw_radio_result(rgp);
 
    rowsize=thePreview->width*thePreview->bpp;
@@ -347,23 +333,21 @@ nlfilt_do_preview(GtkWidget *w) {
    memcpy(c+rowsize, thePreview->bits, rowsize*2);
    filtno =  nlfiltInit(ap->alpha, ap->radius, ap->filter);
    nlfiltRow(c, dst, thePreview->width, thePreview->bpp, filtno);
-   gtk_preview_draw_row(GTK_PREVIEW(theWidget),
-                        dst, 0, 0, thePreview->width);
+   gimp_preview_draw_row(GIMP_PREVIEW(theWidget),
+                         dst, 0, 0, thePreview->width);
    
    memcpy(c, thePreview->bits+((thePreview->height-2)*rowsize), rowsize*2);
    memcpy(c+(rowsize*2), thePreview->bits+((thePreview->height-1)*rowsize),
           rowsize);
-   gtk_preview_draw_row(GTK_PREVIEW(theWidget),
-                        dst, 0, thePreview->height-1, thePreview->width);
+   gimp_preview_draw_row(GIMP_PREVIEW(theWidget),
+                         dst, 0, thePreview->height-1, thePreview->width);
    free(c);
    for(y=0, c=thePreview->bits;y<thePreview->height-2; y++, c+=rowsize){
       nlfiltRow(c, dst, thePreview->width, thePreview->bpp, filtno);
-      gtk_preview_draw_row(GTK_PREVIEW(theWidget),
-                           dst, 0, y, thePreview->width);
+      gimp_preview_draw_row(GIMP_PREVIEW(theWidget),
+                            dst, 0, y, thePreview->width);
    }
 
-   gtk_widget_draw(theWidget, NULL);
-   gdk_flush();
    free(dst);
 }
 

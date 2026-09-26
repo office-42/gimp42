@@ -53,7 +53,7 @@ eraser_toggle_update (GtkWidget *w,
 
   toggle_val = (gboolean *) data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -73,30 +73,27 @@ create_eraser_options (void)
   options->incremental = FALSE;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
+  vbox = gimp_vbox_new (FALSE, 1);
 
   /*  the main label  */
   label = gtk_label_new ("Eraser Options");
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (vbox), label);
 
   /* the hard toggle */
   hard_toggle = gtk_check_button_new_with_label ("Hard edge");
-  gtk_box_pack_start (GTK_BOX (vbox), hard_toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (hard_toggle), "toggled",
-		      (GtkSignalFunc) eraser_toggle_update,
-		      &options->hard);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (hard_toggle), options->hard);
-  gtk_widget_show (hard_toggle);
+  gtk_box_append (GTK_BOX (vbox), hard_toggle);
+  g_signal_connect (hard_toggle, "toggled",
+		    G_CALLBACK (eraser_toggle_update),
+		    &options->hard);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (hard_toggle), options->hard);
   
   /* the incremental toggle */
   incremental_toggle = gtk_check_button_new_with_label ("Incremental");
-  gtk_box_pack_start (GTK_BOX (vbox), incremental_toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (incremental_toggle), "toggled",
-		      (GtkSignalFunc) eraser_toggle_update,
-		      &options->incremental);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (incremental_toggle), options->incremental);
-  gtk_widget_show (incremental_toggle);
+  gtk_box_append (GTK_BOX (vbox), incremental_toggle);
+  g_signal_connect (incremental_toggle, "toggled",
+		    G_CALLBACK (eraser_toggle_update),
+		    &options->incremental);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (incremental_toggle), options->incremental);
   
   /*  Register this eraser options widget with the main tools options dialog  */
   tools_register_options (ERASER, vbox);

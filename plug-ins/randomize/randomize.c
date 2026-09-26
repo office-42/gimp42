@@ -125,9 +125,11 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include "libgimp/gimpui.h"
 #include <plug-ins/gpc/gpc.h>
 
 /*********************************
@@ -218,7 +220,7 @@ static inline void randomize_prepare_row(
     int w
 );
 
-static gint randomize_dialog();
+static gint randomize_dialog(void);
 
 static void randomize_ok_callback(
     GtkWidget *widget,
@@ -239,7 +241,7 @@ MAIN()
  ********************************/
 
 static void
-query()
+query(void)
 {
     static GParamDef args[] = {
         { PARAM_INT32, "run_mode", "Interactive, non-interactive" },
@@ -645,15 +647,13 @@ randomize(GDrawable *drawable)
  ********************************/
 
 static gint
-randomize_dialog()
+randomize_dialog(void)
 {
     GtkWidget *dlg, *entry, *frame,
         *seed_hbox, *seed_vbox, *table, *toggle_hbox;
     GSList *type_group = NULL;
     GSList *seed_group = NULL;
-    gchar **argv;
-    gint argc;
-    gchar buffer[10];
+    gchar buffer[12];
 /*
  *  various initializations
  */
@@ -664,52 +664,43 @@ randomize_dialog()
     gint do_time = (pivals.seed_type == SEED_TIME);
     gint do_user = (pivals.seed_type == SEED_USER);
 
-    argc = 1;
-    argv = g_new(gchar *, 1);
-    argv[0] = g_strdup("randomize");
-
-    gtk_init(&argc, &argv);
-    gtk_rc_parse(gimp_gtkrc());
+    gtk_init();
 
 /*
  *  Open a new dialog, label it and set up its
  *  destroy callback.
  */
-    dlg = gtk_dialog_new();
-    gtk_window_set_title(GTK_WINDOW(dlg), RNDM_VERSION);
-    gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-    gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-        (GtkSignalFunc) gpc_close_callback, NULL);
+    dlg = gimp_dialog_new(RNDM_VERSION);
+    g_signal_connect(dlg, "destroy",
+        G_CALLBACK(gpc_close_callback), NULL);
 /*
  *  Parameter settings
  *
  *  First set up the basic containers, label them, etc.
  */
     frame = gtk_frame_new("Parameter Settings");
-    gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-    gtk_container_border_width(GTK_CONTAINER(frame), 10);
-    gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), frame, TRUE, TRUE, 0);
-    table = gtk_table_new(4, 2, FALSE);
-    gtk_container_border_width(GTK_CONTAINER(table), 10);
-    gtk_container_add(GTK_CONTAINER(frame), table);
-    gtk_widget_show(table);
+    gimp_container_set_border_width(frame, 10);
+    gimp_box_pack_start(gimp_dialog_get_vbox(dlg), frame, TRUE, TRUE, 0);
+    table = gimp_table_new(4, 2, FALSE);
+    gimp_container_set_border_width(table, 10);
+    gtk_frame_set_child(GTK_FRAME(frame), table);
     gpc_setup_tooltips(table);
 /*
  *  Action area OK & Cancel buttons
  */
-    gpc_add_action_button("OK", (GtkSignalFunc) randomize_ok_callback, dlg,
+    gpc_add_action_button("OK", G_CALLBACK(randomize_ok_callback), dlg,
         "Accept settings and apply filter to image");
-    gpc_add_action_button("Cancel", (GtkSignalFunc) gpc_cancel_callback, dlg,
+    gpc_add_action_button("Cancel", G_CALLBACK(gpc_cancel_callback), dlg,
         "Close plug-in without making any changes");
 /*
  *  Randomization Type - label & radio buttons
  */
     gpc_add_label("Randomization Type:", table, 0, 1, 0, 1);
 
-    toggle_hbox = gtk_hbox_new(FALSE, 5);
-    gtk_container_border_width(GTK_CONTAINER(toggle_hbox), 5);
-    gtk_table_attach(GTK_TABLE(table), toggle_hbox, 1, 2, 0, 1,
-        GTK_FILL | GTK_EXPAND, GTK_FILL, 5, 0);
+    toggle_hbox = gimp_hbox_new(FALSE, 5);
+    gimp_container_set_border_width(toggle_hbox, 5);
+    gimp_table_attach(table, toggle_hbox, 1, 2, 0, 1,
+        GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 5, 0);
 /*
  *  Hurl, Pick and Slur buttons
  */
@@ -726,10 +717,10 @@ randomize_dialog()
 /*
  *  Box to hold seed initialization radio buttons
  */
-    seed_vbox = gtk_vbox_new(FALSE, 2);
-    gtk_container_border_width(GTK_CONTAINER(seed_vbox), 5);
-    gtk_table_attach(GTK_TABLE(table), seed_vbox, 1, 2, 1, 2,
-        GTK_FILL | GTK_EXPAND, GTK_FILL, 5, 0);
+    seed_vbox = gimp_vbox_new(FALSE, 2);
+    gimp_container_set_border_width(seed_vbox, 5);
+    gimp_table_attach(table, seed_vbox, 1, 2, 1, 2,
+        GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 5, 0);
 /*
  *  Time button
  */
@@ -738,9 +729,8 @@ randomize_dialog()
 /*
  *  Box to hold seed user initialization controls
  */
-    seed_hbox = gtk_hbox_new(FALSE, 3);
-    gtk_container_border_width(GTK_CONTAINER(seed_hbox), 0);
-    gtk_box_pack_start(GTK_BOX(seed_vbox), seed_hbox, FALSE, FALSE, 0);
+    seed_hbox = gimp_hbox_new(FALSE, 3);
+    gtk_box_append(GTK_BOX(seed_vbox), seed_hbox);
 /*
  *  User button
  */
@@ -750,15 +740,13 @@ randomize_dialog()
  *  Randomization seed number (text)
  */
     entry = gtk_entry_new();
-    gtk_widget_set_usize(entry, ENTRY_WIDTH, 0);
-    gtk_box_pack_start(GTK_BOX(seed_hbox), entry, FALSE, FALSE, 0);
+    gtk_widget_set_size_request(entry, ENTRY_WIDTH, -1);
+    gtk_box_append(GTK_BOX(seed_hbox), entry);
     sprintf(buffer, "%d", pivals.rndm_seed);
-    gtk_entry_set_text(GTK_ENTRY(entry), buffer);
-    gtk_signal_connect(GTK_OBJECT(entry), "changed",
-        (GtkSignalFunc) gpc_text_update, &pivals.rndm_seed);
-    gtk_widget_show(entry);
+    gtk_editable_set_text(GTK_EDITABLE(entry), buffer);
+    g_signal_connect(entry, "changed",
+        G_CALLBACK(gpc_text_update), &pivals.rndm_seed);
     gpc_set_tooltip(entry, "Value for seeding the random number generator");
-    gtk_widget_show(seed_hbox);
 /*
  *  Randomization percentage label & scale (1 to 100)
  */
@@ -778,11 +766,9 @@ randomize_dialog()
 /*
  *  Display everything.
  */
-    gtk_widget_show(frame);
-    gtk_widget_show(dlg);
+    gtk_window_present(GTK_WINDOW(dlg));
 
-    gtk_main();
-    gdk_flush();
+    gimp_main_loop_run();
 /*
  *  Figure out which type of randomization to apply.
  */
@@ -809,5 +795,5 @@ randomize_dialog()
 static void
 randomize_ok_callback(GtkWidget *widget, gpointer data) {
     rndm_int.run = TRUE;
-    gtk_widget_destroy(GTK_WIDGET(data));
+    gtk_window_destroy(GTK_WINDOW(data));
 }

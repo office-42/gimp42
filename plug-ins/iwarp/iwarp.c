@@ -41,8 +41,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #ifndef M_PI
 #define M_PI    3.14159265358979323846
@@ -104,8 +105,12 @@ static void      iwarp_close_callback  (GtkWidget *widget,
 					 gpointer   data);
 static void      iwarp_ok_callback     (GtkWidget *widget,
 					 gpointer   data);
-static gint      iwarp_motion_callback (GtkWidget *widget,
-                                          GdkEvent *event);
+static void      iwarp_drag_begin      (GtkGestureDrag *gesture,
+                                        gdouble x, gdouble y,
+                                        gpointer data);
+static void      iwarp_drag_update     (GtkGestureDrag *gesture,
+                                        gdouble offset_x, gdouble offset_y,
+                                        gpointer data);
 static void      iwarp_iscale_update (GtkAdjustment *adjustment,
                                       gint* scale_val);
 static void      iwarp_fscale_update (GtkAdjustment *adjustment,
@@ -222,7 +227,7 @@ static int layer_alpha;
 MAIN ()
 
 static void
-query ()
+query (void)
 {
   static GParamDef args[] =
   {
@@ -755,78 +760,67 @@ iwarp_animate_dialog(GtkWidget* dlg, GtkWidget* notebook)
  GtkWidget *button;
  GtkWidget *label;
  GtkWidget *scale;
- GtkObject *scale_data;
+ GtkAdjustment *scale_data;
  
 
- table = gtk_table_new (2, 2, FALSE);
+ table = gimp_table_new (2, 2, FALSE);
 
- gtk_container_border_width (GTK_CONTAINER (table), 5);
- gtk_table_set_row_spacings(GTK_TABLE(table), 10);
- gtk_table_set_col_spacings(GTK_TABLE(table), 3);
+ gimp_container_set_border_width (table, 5);
+ gtk_grid_set_row_spacing (GTK_GRID (table), 10);
+ gtk_grid_set_column_spacing (GTK_GRID (table), 3);
 
  button = gtk_check_button_new_with_label ("Animate");
- gtk_table_attach (GTK_TABLE (table), button, 0, 1, 0, 1, GTK_FILL , GTK_FILL , 0, 0); 
- gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) iwarp_animate_toggle,
+ gimp_table_attach (table, button, 0, 1, 0, 1, GIMP_FILL , GIMP_FILL , 0, 0); 
+ g_signal_connect (button, "clicked",
+                      G_CALLBACK (iwarp_animate_toggle),
                       &do_animate);
- gtk_widget_show(button);
 
- animate_table = gtk_table_new (3, 5, FALSE);
- gtk_container_border_width (GTK_CONTAINER (animate_table), 5);
- gtk_table_set_row_spacings(GTK_TABLE(animate_table), 5);
- gtk_table_set_col_spacings(GTK_TABLE(animate_table), 3);
+ animate_table = gimp_table_new (3, 5, FALSE);
+ gimp_container_set_border_width (animate_table, 5);
+ gtk_grid_set_row_spacing (GTK_GRID (animate_table), 5);
+ gtk_grid_set_column_spacing (GTK_GRID (animate_table), 3);
 
  
  animate_frame = gtk_frame_new ("");
- gtk_frame_set_shadow_type (GTK_FRAME (animate_frame), GTK_SHADOW_ETCHED_IN);
- gtk_container_add (GTK_CONTAINER (animate_frame), animate_table);
+ gimp_container_add (animate_frame, animate_table);
  
 
  label = gtk_label_new ("Number of Frames");
- gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
- gtk_table_attach (GTK_TABLE (animate_table), label, 0, 1, 0, 1, GTK_FILL, 0, 5, 0);
+ gimp_misc_set_alignment (label, 0.0, 0.5);
+ gimp_table_attach (animate_table, label, 0, 1, 0, 1, GIMP_FILL, 0, 5, 0);
  scale_data = gtk_adjustment_new (animate_num_frames, 2, MAX_NUM_FRAMES, 1.0, 1.0, 0.0);
- scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
- gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
- gtk_table_attach (GTK_TABLE (animate_table), scale, 1, 2, 0, 1, GTK_FILL, 0, 0, 0);
+ scale = gimp_hscale_new (GTK_ADJUSTMENT (scale_data), 1);
+ gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+ gimp_table_attach (animate_table, scale, 1, 2, 0, 1, GIMP_FILL, 0, 0, 0);
  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
  gtk_scale_set_digits(GTK_SCALE(scale),0);
- gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
- gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) iwarp_iscale_update,
+ g_signal_connect (scale_data, "value-changed",
+		      G_CALLBACK (iwarp_iscale_update),
 		      &animate_num_frames);
- gtk_widget_show (label);
- gtk_widget_show (scale);
    
 
  button = gtk_check_button_new_with_label ("Reverse");
- gtk_table_attach (GTK_TABLE (animate_table), button, 0, 1, 1, 2, GTK_FILL | GTK_EXPAND, GTK_FILL | GTK_EXPAND, 0, 0); 
- gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) iwarp_toggle_update,
+ gimp_table_attach (animate_table, button, 0, 1, 1, 2, GIMP_FILL | GIMP_EXPAND, GIMP_FILL | GIMP_EXPAND, 0, 0); 
+ g_signal_connect (button, "clicked",
+                      G_CALLBACK (iwarp_toggle_update),
                       &do_animate_reverse);
- gtk_widget_show(button);
  
  button = gtk_check_button_new_with_label ("Ping Pong");
- gtk_table_attach (GTK_TABLE (animate_table), button, 0, 1, 2, 3, GTK_FILL | GTK_EXPAND, GTK_FILL | GTK_EXPAND, 0, 0); 
- gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) iwarp_toggle_update,
+ gimp_table_attach (animate_table, button, 0, 1, 2, 3, GIMP_FILL | GIMP_EXPAND, GIMP_FILL | GIMP_EXPAND, 0, 0); 
+ g_signal_connect (button, "clicked",
+                      G_CALLBACK (iwarp_toggle_update),
                       &do_animate_ping_pong);
- gtk_widget_show(button);
  
 
 
 
-  gtk_widget_show (animate_table);
 
-  gtk_widget_show (animate_frame);
   gtk_widget_set_sensitive(animate_frame,do_animate);
-  gtk_table_attach (GTK_TABLE (table), animate_frame, 0, 2, 1, 2, GTK_FILL, 0, 0, 0);
+  gimp_table_attach (table, animate_frame, 0, 2, 1, 2, GIMP_FILL, 0, 0, 0);
  
   label = gtk_label_new("Animate");
-  gtk_misc_set_alignment(GTK_MISC(label),0.5,0.5);
+  gimp_misc_set_alignment (label,0.5,0.5);
   gtk_notebook_append_page(GTK_NOTEBOOK(notebook),table,label);
-  gtk_widget_show(label);
-  gtk_widget_show(table);
 } 
    
 
@@ -840,273 +834,223 @@ iwarp_settings_dialog(GtkWidget* dlg, GtkWidget* notebook)
  GtkWidget *scale;
  GtkWidget *toggle;
  GtkWidget *separator;
- GtkObject *scale_data;
+ GtkAdjustment *scale_data;
  GtkWidget *supersample_table;  
- GSList *group = NULL;
+ GtkWidget *group = NULL;
  
- table = gtk_table_new (12, 2, FALSE);
- gtk_container_border_width (GTK_CONTAINER (table), 5);
- gtk_table_set_row_spacings(GTK_TABLE(table), 5);
- gtk_table_set_col_spacings(GTK_TABLE(table), 3);
+ table = gimp_table_new (12, 2, FALSE);
+ gimp_container_set_border_width (table, 5);
+ gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+ gtk_grid_set_column_spacing (GTK_GRID (table), 3);
   
 
  label = gtk_label_new ("Deform Radius");
- gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
- gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1, GTK_FILL, 0, 5, 0);
+ gimp_misc_set_alignment (label, 0.0, 0.5);
+ gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_FILL, 0, 5, 0);
  scale_data = gtk_adjustment_new (iwarp_vals.deform_area_radius, 5.0, MAX_DEFORM_AREA_RADIUS, 1.0, 1.0, 0.0);
- scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
- gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
- gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 0, 1, GTK_FILL, 0, 0, 0);
+ scale = gimp_hscale_new (GTK_ADJUSTMENT (scale_data), 1);
+ gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+ gimp_table_attach (table, scale, 1, 2, 0, 1, GIMP_FILL, 0, 0, 0);
  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
  gtk_scale_set_digits(GTK_SCALE(scale),0);
- gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
- gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-	      (GtkSignalFunc) iwarp_iscale_update,
+ g_signal_connect (scale_data, "value-changed",
+	      G_CALLBACK (iwarp_iscale_update),
 		      &iwarp_vals.deform_area_radius);
- gtk_widget_show (label);
- gtk_widget_show (scale);
  
  label = gtk_label_new ("Deform Amount");
- gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
- gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2, GTK_FILL, 0, 5, 0);
+ gimp_misc_set_alignment (label, 0.0, 0.5);
+ gimp_table_attach (table, label, 0, 1, 1, 2, GIMP_FILL, 0, 5, 0);
  scale_data = gtk_adjustment_new (iwarp_vals.deform_amount, 0.0, 1.0, 0.01,0.01, 0.0);
- scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
- gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
- gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 1, 2, GTK_FILL, 0, 0, 0);
+ scale = gimp_hscale_new (GTK_ADJUSTMENT (scale_data), 1);
+ gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+ gimp_table_attach (table, scale, 1, 2, 1, 2, GIMP_FILL, 0, 0, 0);
  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
  gtk_scale_set_digits(GTK_SCALE(scale),2);
- gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
- gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-	      (GtkSignalFunc) iwarp_fscale_update,
+ g_signal_connect (scale_data, "value-changed",
+	      G_CALLBACK (iwarp_fscale_update),
 		      &iwarp_vals.deform_amount);
- gtk_widget_show (label);
- gtk_widget_show (scale);
 
- separator = gtk_hseparator_new();
- gtk_table_attach (GTK_TABLE(table), separator, 0, 2 ,2,3,GTK_FILL,0,0,0); 
- gtk_widget_show(separator);
+ separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+ gimp_table_attach (table, separator, 0, 2 ,2,3,GIMP_FILL,0,0,0); 
     
- toggle = gtk_radio_button_new_with_label(group,"Move");
- group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
- gtk_table_attach (GTK_TABLE (table), toggle, 0, 1, 3, 4, GTK_FILL, 0, 0, 0);
- gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) iwarp_toggle_update,
+ toggle = gimp_radio_button_new (group,"Move");
+ group = toggle;
+ gimp_table_attach (table, toggle, 0, 1, 3, 4, GIMP_FILL, 0, 0, 0);
+ g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (iwarp_toggle_update),
 		      &iwarp_vals.do_move);
- gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), iwarp_vals.do_move);
- gtk_widget_show(toggle);  
+ gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), iwarp_vals.do_move);
  
- toggle = gtk_radio_button_new_with_label(group,"Shrink");
- group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
- gtk_table_attach (GTK_TABLE (table), toggle, 1, 2, 4, 5, GTK_FILL, 0, 0, 0);
- gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) iwarp_toggle_update,
+ toggle = gimp_radio_button_new (group,"Shrink");
+ group = toggle;
+ gimp_table_attach (table, toggle, 1, 2, 4, 5, GIMP_FILL, 0, 0, 0);
+ g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (iwarp_toggle_update),
 		      &iwarp_vals.do_shrink);
- gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), iwarp_vals.do_shrink);
- gtk_widget_show(toggle);  
+ gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), iwarp_vals.do_shrink);
  
- toggle = gtk_radio_button_new_with_label(group,"Grow");
- group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
- gtk_table_attach (GTK_TABLE (table), toggle, 0, 1, 4, 5, GTK_FILL, 0, 0, 0);
- gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-	      (GtkSignalFunc) iwarp_toggle_update,
+ toggle = gimp_radio_button_new (group,"Grow");
+ group = toggle;
+ gimp_table_attach (table, toggle, 0, 1, 4, 5, GIMP_FILL, 0, 0, 0);
+ g_signal_connect (toggle, "toggled",
+	      G_CALLBACK (iwarp_toggle_update),
 		      &iwarp_vals.do_grow);
- gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), iwarp_vals.do_grow);
- gtk_widget_show(toggle);  
+ gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), iwarp_vals.do_grow);
 
- toggle = gtk_radio_button_new_with_label(group,"Remove");
- group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
- gtk_table_attach (GTK_TABLE (table), toggle, 1, 2, 3, 4, GTK_FILL, 0, 0, 0);
- gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) iwarp_toggle_update,
+ toggle = gimp_radio_button_new (group,"Remove");
+ group = toggle;
+ gimp_table_attach (table, toggle, 1, 2, 3, 4, GIMP_FILL, 0, 0, 0);
+ g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (iwarp_toggle_update),
 		      &iwarp_vals.do_remove);
- gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), iwarp_vals.do_remove);
- gtk_widget_show(toggle);  
+ gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), iwarp_vals.do_remove);
 
- toggle = gtk_radio_button_new_with_label(group,"Swirl CW");
- group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
- gtk_table_attach (GTK_TABLE (table), toggle, 1, 2, 5, 6, GTK_FILL, 0, 0, 0);
- gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) iwarp_toggle_update,
+ toggle = gimp_radio_button_new (group,"Swirl CW");
+ group = toggle;
+ gimp_table_attach (table, toggle, 1, 2, 5, 6, GIMP_FILL, 0, 0, 0);
+ g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (iwarp_toggle_update),
 		      &iwarp_vals.do_swirl_cw);
- gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), iwarp_vals.do_swirl_cw);
- gtk_widget_show(toggle);  
+ gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), iwarp_vals.do_swirl_cw);
  
- toggle = gtk_radio_button_new_with_label(group,"Swirl CCW");
- group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
- gtk_table_attach (GTK_TABLE (table), toggle, 0, 1, 5, 6, GTK_FILL, 0, 0, 0);
- gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) iwarp_toggle_update,
+ toggle = gimp_radio_button_new (group,"Swirl CCW");
+ group = toggle;
+ gimp_table_attach (table, toggle, 0, 1, 5, 6, GIMP_FILL, 0, 0, 0);
+ g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (iwarp_toggle_update),
 		      &iwarp_vals.do_swirl_ccw);
- gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), iwarp_vals.do_swirl_ccw);
- gtk_widget_show(toggle);  
+ gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), iwarp_vals.do_swirl_ccw);
 
 
- separator = gtk_hseparator_new();
- gtk_table_attach (GTK_TABLE(table), separator, 0, 2 ,6,7,GTK_FILL,0,0,0); 
- gtk_widget_show(separator);
+ separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+ gimp_table_attach (table, separator, 0, 2 ,6,7,GIMP_FILL,0,0,0); 
   
 
  button = gtk_check_button_new_with_label ("Bilinear");
- gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(button), iwarp_vals.do_bilinear);
- gtk_table_attach (GTK_TABLE (table), button, 1, 2, 7, 8, GTK_FILL | GTK_EXPAND, GTK_FILL | GTK_EXPAND, 0, 0); 
- gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) iwarp_toggle_update,
+ gtk_check_button_set_active (GTK_CHECK_BUTTON (button), iwarp_vals.do_bilinear);
+ gimp_table_attach (table, button, 1, 2, 7, 8, GIMP_FILL | GIMP_EXPAND, GIMP_FILL | GIMP_EXPAND, 0, 0); 
+ g_signal_connect (button, "clicked",
+                      G_CALLBACK (iwarp_toggle_update),
                       &iwarp_vals.do_bilinear);
- gtk_widget_show(button);
 
 
  button = gtk_button_new_with_label ("Reset");
- gtk_table_attach (GTK_TABLE (table), button, 0, 1, 7, 8, GTK_FILL | GTK_EXPAND, GTK_FILL | GTK_EXPAND, 0, 0); 
- gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) iwarp_reset_callback,
+ gimp_table_attach (table, button, 0, 1, 7, 8, GIMP_FILL | GIMP_EXPAND, GIMP_FILL | GIMP_EXPAND, 0, 0); 
+ g_signal_connect (button, "clicked",
+                      G_CALLBACK (iwarp_reset_callback),
                       NULL);
- gtk_widget_show(button);
 
- separator = gtk_hseparator_new();
- gtk_table_attach (GTK_TABLE(table), separator, 0, 2 ,8,9,GTK_FILL,0,0,0); 
- gtk_widget_show(separator);
+ separator = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+ gimp_table_attach (table, separator, 0, 2 ,8,9,GIMP_FILL,0,0,0); 
   
 
  button = gtk_check_button_new_with_label ("Adaptive Supersample");
- gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(button), iwarp_vals.do_supersample);
- gtk_table_attach (GTK_TABLE (table), button, 0, 1, 9, 10, GTK_FILL | GTK_EXPAND, GTK_FILL | GTK_EXPAND, 0, 0); 
- gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) iwarp_supersample_toggle,
+ gtk_check_button_set_active (GTK_CHECK_BUTTON (button), iwarp_vals.do_supersample);
+ gimp_table_attach (table, button, 0, 1, 9, 10, GIMP_FILL | GIMP_EXPAND, GIMP_FILL | GIMP_EXPAND, 0, 0); 
+ g_signal_connect (button, "clicked",
+                      G_CALLBACK (iwarp_supersample_toggle),
                       &iwarp_vals.do_supersample);
- gtk_widget_show(button);
 
  supersample_frame = gtk_frame_new ("");
- gtk_frame_set_shadow_type (GTK_FRAME (supersample_frame), GTK_SHADOW_ETCHED_IN);
- supersample_table = gtk_table_new (2, 2, FALSE);
- gtk_container_border_width (GTK_CONTAINER (supersample_table), 5);
- gtk_table_set_row_spacings(GTK_TABLE(supersample_table), 5);
- gtk_table_set_col_spacings(GTK_TABLE(supersample_table), 3);
+ supersample_table = gimp_table_new (2, 2, FALSE);
+ gimp_container_set_border_width (supersample_table, 5);
+ gtk_grid_set_row_spacing (GTK_GRID (supersample_table), 5);
+ gtk_grid_set_column_spacing (GTK_GRID (supersample_table), 3);
   
- gtk_container_add (GTK_CONTAINER (supersample_frame), supersample_table);
+ gimp_container_add (supersample_frame, supersample_table);
  
  label = gtk_label_new ("Max Depth");
- gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
- gtk_table_attach (GTK_TABLE (supersample_table), label, 0, 1, 0, 1, GTK_FILL, 0, 5, 0);
+ gimp_misc_set_alignment (label, 0.0, 0.5);
+ gimp_table_attach (supersample_table, label, 0, 1, 0, 1, GIMP_FILL, 0, 5, 0);
  scale_data = gtk_adjustment_new (iwarp_vals.max_supersample_depth, 1.0, 5.0, 1.0, 1.0, 0.0);
- scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
- gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
- gtk_table_attach (GTK_TABLE (supersample_table), scale, 1, 2, 0, 1, GTK_FILL, 0, 0, 0);
+ scale = gimp_hscale_new (GTK_ADJUSTMENT (scale_data), 1);
+ gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+ gimp_table_attach (supersample_table, scale, 1, 2, 0, 1, GIMP_FILL, 0, 0, 0);
  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
  gtk_scale_set_digits(GTK_SCALE(scale),0);
- gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
- gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) iwarp_iscale_update,
+ g_signal_connect (scale_data, "value-changed",
+		      G_CALLBACK (iwarp_iscale_update),
 		      &iwarp_vals.max_supersample_depth);
- gtk_widget_show (label);
- gtk_widget_show (scale);
    
  label = gtk_label_new ("Threshold");
- gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
- gtk_table_attach (GTK_TABLE (supersample_table), label, 0, 1, 1, 2, GTK_FILL, 0, 5, 0);
+ gimp_misc_set_alignment (label, 0.0, 0.5);
+ gimp_table_attach (supersample_table, label, 0, 1, 1, 2, GIMP_FILL, 0, 5, 0);
  scale_data = gtk_adjustment_new (iwarp_vals.supersample_threshold, 1.0, 10.0, 0.01,0.01, 0.0);
- scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
- gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
- gtk_table_attach (GTK_TABLE (supersample_table), scale, 1, 2, 1, 2, GTK_FILL, 0, 0, 0);
+ scale = gimp_hscale_new (GTK_ADJUSTMENT (scale_data), 1);
+ gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+ gimp_table_attach (supersample_table, scale, 1, 2, 1, 2, GIMP_FILL, 0, 0, 0);
  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
  gtk_scale_set_digits(GTK_SCALE(scale),2);
- gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
- gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) iwarp_fscale_update,
+ g_signal_connect (scale_data, "value-changed",
+		      G_CALLBACK (iwarp_fscale_update),
 		      &iwarp_vals.supersample_threshold);
- gtk_widget_show (label);
- gtk_widget_show (scale);
 
 
- gtk_widget_show (supersample_table);
- gtk_widget_show (supersample_frame);
 
  gtk_widget_set_sensitive(supersample_frame,iwarp_vals.do_supersample);
 
- gtk_table_attach (GTK_TABLE (table), supersample_frame, 0, 2, 11, 12, GTK_FILL, 0, 0, 0);
+ gimp_table_attach (table, supersample_frame, 0, 2, 11, 12, GIMP_FILL, 0, 0, 0);
 
     
- gtk_widget_show (table);
 
  label = gtk_label_new("Settings");
- gtk_misc_set_alignment(GTK_MISC(label),0.5,0.5);
+ gimp_misc_set_alignment (label,0.5,0.5);
  gtk_notebook_append_page(GTK_NOTEBOOK(notebook),table,label);
- gtk_widget_show(label);
- gtk_widget_show(table);
 }
 
 
 static gint
-iwarp_dialog()
+iwarp_dialog(void)
 {
  GtkWidget *dlg;
  GtkWidget *pframe;
+ GtkGesture *gesture;
  GtkWidget *top_table;
  GtkWidget *notebook;
  GtkWidget *button;
- guchar *color_cube; 
- gint argc;
- gchar** argv;
   
  
- argc = 1;
- argv = g_new(gchar *, 1);
- argv[0] = g_strdup("iwarp");
 
- gtk_init(&argc,&argv);
- gtk_rc_parse(gimp_gtkrc());
- gtk_preview_set_gamma (gimp_gamma ());
- gtk_preview_set_install_cmap (gimp_install_cmap ());
- color_cube = gimp_color_cube ();
- gtk_preview_set_color_cube (color_cube[0], color_cube[1],
-			      color_cube[2], color_cube[3]);
+ gtk_init ();
 
- gtk_widget_set_default_visual (gtk_preview_get_visual ());
- gtk_widget_set_default_colormap (gtk_preview_get_cmap ());
  
  iwarp_init();
  
- dlg = gtk_dialog_new ();
- gtk_window_set_title (GTK_WINDOW (dlg), "IWarp");
- gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
- gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) iwarp_close_callback,
+ dlg = gimp_dialog_new ("IWarp");
+ g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (iwarp_close_callback),
 		      NULL);
  
  button = gtk_button_new_with_label ("OK");
- GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
- gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) iwarp_ok_callback,
+ g_signal_connect (button, "clicked",
+                      G_CALLBACK (iwarp_ok_callback),
                       dlg);
- gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
- gtk_widget_grab_default (button);
- gtk_widget_show (button);
+ gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
+ gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
  button = gtk_button_new_with_label ("Cancel");
- GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
- gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
+ g_signal_connect_swapped (button, "clicked", G_CALLBACK (gtk_window_destroy), dlg);
 
- gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
- gtk_widget_show (button);
+ gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
 
   
  pframe = gtk_frame_new (NULL);
- gtk_frame_set_shadow_type (GTK_FRAME (pframe), GTK_SHADOW_IN);
- gtk_widget_show (pframe); 
 
- if (preview_bpp == 3) preview = gtk_preview_new (GTK_PREVIEW_COLOR);
- else preview = gtk_preview_new (GTK_PREVIEW_GRAYSCALE);
- gtk_preview_size (GTK_PREVIEW (preview), preview_width, preview_height);
+ if (preview_bpp == 3) preview = gimp_preview_new (GIMP_PREVIEW_COLOR);
+ else preview = gimp_preview_new (GIMP_PREVIEW_GRAYSCALE);
+ gimp_preview_size (GIMP_PREVIEW (preview), preview_width, preview_height);
  iwarp_update_preview(0,0,preview_width,preview_height);
- gtk_container_add (GTK_CONTAINER (pframe), preview);
- gtk_widget_show (preview);
+ gimp_container_add (pframe, preview);
  
- gtk_widget_set_events(preview,GDK_BUTTON_PRESS_MASK |
-   GDK_BUTTON_RELEASE_MASK | GDK_BUTTON1_MOTION_MASK | 
-   GDK_POINTER_MOTION_HINT_MASK);
- gtk_signal_connect(GTK_OBJECT(preview), "event",
-                     (GtkSignalFunc)iwarp_motion_callback,NULL);
+ gesture = gtk_gesture_drag_new ();
+ gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), GDK_BUTTON_PRIMARY);
+ g_signal_connect (gesture, "drag-begin",
+                   G_CALLBACK (iwarp_drag_begin), NULL);
+ g_signal_connect (gesture, "drag-update",
+                   G_CALLBACK (iwarp_drag_update), NULL);
+ g_signal_connect (gesture, "drag-end",
+                   G_CALLBACK (iwarp_drag_update), NULL);
+ gtk_widget_add_controller (preview, GTK_EVENT_CONTROLLER (gesture));
 
  notebook = gtk_notebook_new();
  gtk_notebook_set_tab_pos(GTK_NOTEBOOK (notebook), GTK_POS_TOP);
@@ -1114,19 +1058,16 @@ iwarp_dialog()
  iwarp_settings_dialog(dlg,notebook);
  iwarp_animate_dialog(dlg,notebook);
  
- gtk_widget_show(notebook);
   
- top_table = gtk_table_new(1, 2, FALSE);
- gtk_container_border_width(GTK_CONTAINER(top_table), 6);
- gtk_table_set_row_spacings(GTK_TABLE(top_table), 5);
- gtk_table_set_col_spacings(GTK_TABLE(top_table), 3);
- gtk_table_attach(GTK_TABLE(top_table), pframe, 0,1,0,1,0,0,0,0); 
- gtk_table_attach(GTK_TABLE(top_table), notebook, 1,2,0,1,0,0,0,0);
- gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), top_table, FALSE, FALSE, 0);
- gtk_widget_show(top_table);
- gtk_widget_show(dlg);
- gtk_main ();
- gdk_flush ();
+ top_table = gimp_table_new(1, 2, FALSE);
+ gimp_container_set_border_width (top_table, 6);
+ gtk_grid_set_row_spacing (GTK_GRID (top_table), 5);
+ gtk_grid_set_column_spacing (GTK_GRID (top_table), 3);
+ gimp_table_attach (top_table, pframe, 0,1,0,1,0,0,0,0); 
+ gimp_table_attach (top_table, notebook, 1,2,0,1,0,0,0,0);
+ gimp_box_pack_start (gimp_dialog_get_vbox (dlg), top_table, FALSE, FALSE, 0);
+ gtk_window_present (GTK_WINDOW (dlg));
+ gimp_main_loop_run ();
 
  return wint.run;   
 }
@@ -1136,22 +1077,15 @@ static void
 iwarp_update_preview(int x0, int y0,int x1,int y1)
 {
  int i;
- GdkRectangle rect;
- 
  if (x0<0) x0=0;
  if (y0<0) y0=0;
  if (x1>=preview_width) x1=preview_width;
  if (y1>=preview_height) y1=preview_height;
  for (i = y0; i < y1; i++)
-    gtk_preview_draw_row (GTK_PREVIEW (preview),
+    gimp_preview_draw_row (GIMP_PREVIEW (preview),
 			  dstimage + (i * preview_width + x0) * preview_bpp,
 			  x0, i,x1-x0);
- rect.x = x0;
- rect.y = y0;
- rect.width = x1-x0;
- rect.height = y1-y0;  
- gtk_widget_draw(preview,&rect);
- gdk_flush();
+ gtk_widget_queue_draw (preview);
 }
 
 
@@ -1343,7 +1277,7 @@ static void
 iwarp_close_callback (GtkWidget *widget,
 		       gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -1351,60 +1285,52 @@ iwarp_ok_callback (GtkWidget *widget,
 		    gpointer   data)
 {
   wint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 
-static gint
-iwarp_motion_callback(GtkWidget *widget,
-                      GdkEvent *event)
+static void
+iwarp_drag_begin (GtkGestureDrag *gesture,
+                  gdouble         x,
+                  gdouble         y,
+                  gpointer        data)
 {
- GdkEventButton* mb;
+ lastx = x;
+ lasty = y;
+}
+
+/* Called while the first button is held and moved, and once more when it
+   is released, like the old motion-notify / button-release handlers. */
+static void
+iwarp_drag_update (GtkGestureDrag *gesture,
+                   gdouble         offset_x,
+                   gdouble         offset_y,
+                   gpointer        data)
+{
+ gdouble sx, sy;
  int x,y;
- 
- mb = (GdkEventButton*) event; 
- switch (event->type) {
-   case GDK_BUTTON_PRESS:
-      lastx = mb->x;
-      lasty = mb->y;
-   break;
-   case GDK_BUTTON_RELEASE:
-     if (mb->state & GDK_BUTTON1_MASK) {
-       x = mb->x;
-       y = mb->y;
-       if (iwarp_vals.do_move) iwarp_move(x,y,lastx,lasty);
-       else iwarp_deform(x, y,0.0,0.0);
-     }
-   break; 
-   case GDK_MOTION_NOTIFY :
-     if (mb->state & GDK_BUTTON1_MASK) { 
-       x = mb->x;
-       y = mb->y;
-       if (iwarp_vals.do_move) iwarp_move(x,y,lastx,lasty);
-       else iwarp_deform(x, y,0.0,0.0);
-       lastx = x;
-       lasty = y;
-       gtk_widget_get_pointer(widget,NULL,NULL); 
-     }
-   break;
-   default:
-   break;
- }
- 
-return FALSE;
+
+ if (! gtk_gesture_drag_get_start_point (gesture, &sx, &sy))
+   return;
+ x = sx + offset_x;
+ y = sy + offset_y;
+ if (iwarp_vals.do_move) iwarp_move(x,y,lastx,lasty);
+ else iwarp_deform(x, y,0.0,0.0);
+ lastx = x;
+ lasty = y;
 }
 
 
 static void    
 iwarp_iscale_update (GtkAdjustment *adjustment, gint* scale_val)
 {
- *scale_val = (gint)adjustment->value;
+ *scale_val = (gint)gtk_adjustment_get_value (adjustment);
 }
 
 static void    
 iwarp_fscale_update (GtkAdjustment *adjustment, gfloat* scale_val)
 {
- *scale_val = adjustment->value;
+ *scale_val = gtk_adjustment_get_value (adjustment);
 }
                                       
                                       
@@ -1413,7 +1339,7 @@ static void
 iwarp_toggle_update (GtkWidget *widget,
                      int  *data)
 {
- if ( GTK_TOGGLE_BUTTON (widget)->active) *data = TRUE;
+ if ( gtk_check_button_get_active (GTK_CHECK_BUTTON (widget))) *data = TRUE;
  else *data = FALSE;
 }
 
@@ -1421,7 +1347,7 @@ static void
 iwarp_supersample_toggle (GtkWidget *widget,
                      int  *data)
 {
- if ( GTK_TOGGLE_BUTTON (widget)->active) *data = TRUE;
+ if ( gtk_check_button_get_active (GTK_CHECK_BUTTON (widget))) *data = TRUE;
  else *data = FALSE;
  gtk_widget_set_sensitive(supersample_frame,iwarp_vals.do_supersample);
 }
@@ -1430,7 +1356,7 @@ static void
 iwarp_animate_toggle (GtkWidget *widget,
                      int  *data)
 {
- if ( GTK_TOGGLE_BUTTON (widget)->active) *data = TRUE;
+ if ( gtk_check_button_get_active (GTK_CHECK_BUTTON (widget))) *data = TRUE;
  else *data = FALSE;
  gtk_widget_set_sensitive(animate_frame,do_animate);
 }

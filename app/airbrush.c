@@ -58,7 +58,7 @@ struct _AirbrushOptions
 
 
 /*  local variables  */
-static gint         timer;                 /*  timer for successive paint applications  */
+static guint        timer;                 /*  timer for successive paint applications  */
 static int          timer_state = OFF;     /*  state of airbrush tool  */
 static AirbrushTimeout  airbrush_timeout;
 static AirbrushOptions *airbrush_options = NULL;
@@ -67,7 +67,7 @@ static void
 airbrush_scale_update (GtkAdjustment *adjustment,
 		       double        *scale_val)
 {
-  *scale_val = adjustment->value;
+  *scale_val = gtk_adjustment_get_value (adjustment);
 }
 
 static AirbrushOptions *
@@ -79,8 +79,8 @@ create_airbrush_options (void)
   GtkWidget *label;
   GtkWidget *rate_scale;
   GtkWidget *pressure_scale;
-  GtkObject *rate_scale_data;
-  GtkObject *pressure_scale_data;
+  GtkAdjustment *rate_scale_data;
+  GtkAdjustment *pressure_scale_data;
 
   /*  the new options structure  */
   options = (AirbrushOptions *) g_malloc (sizeof (AirbrushOptions));
@@ -88,48 +88,37 @@ create_airbrush_options (void)
   options->pressure = 10.0;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
+  vbox = gimp_vbox_new (FALSE, 1);
 
   /*  the main label  */
   label = gtk_label_new ("Airbrush Options");
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (vbox), label);
 
   /*  the rate scale  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-  gtk_widget_show (hbox);
+  hbox = gimp_hbox_new (FALSE, 1);
+  gtk_box_append (GTK_BOX (vbox), hbox);
 
   label = gtk_label_new ("Rate");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (hbox), label);
 
   rate_scale_data = gtk_adjustment_new (25.0, 0.0, 100.0, 1.0, 1.0, 0.0);
-  rate_scale = gtk_hscale_new (GTK_ADJUSTMENT (rate_scale_data));
-  gtk_box_pack_start (GTK_BOX (hbox), rate_scale, TRUE, TRUE, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (rate_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (rate_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (rate_scale_data), "value_changed",
-		      (GtkSignalFunc) airbrush_scale_update, &options->rate);
-  gtk_widget_show (rate_scale);
+  rate_scale = gimp_hscale_new (rate_scale_data, 1);
+  gimp_box_pack_start (hbox, rate_scale, TRUE, TRUE, 0);
+  g_signal_connect (rate_scale_data, "value-changed",
+		    G_CALLBACK (airbrush_scale_update), &options->rate);
 
   /*  the pressure scale  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-  gtk_widget_show (hbox);
+  hbox = gimp_hbox_new (FALSE, 1);
+  gtk_box_append (GTK_BOX (vbox), hbox);
 
   label = gtk_label_new ("Pressure");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (hbox), label);
 
   pressure_scale_data = gtk_adjustment_new (10.0, 0.0, 100.0, 1.0, 1.0, 0.0);
-  pressure_scale = gtk_hscale_new (GTK_ADJUSTMENT (pressure_scale_data));
-  gtk_box_pack_start (GTK_BOX (hbox), pressure_scale, TRUE, TRUE, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (pressure_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (pressure_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (pressure_scale_data), "value_changed",
-		      (GtkSignalFunc) airbrush_scale_update, &options->pressure);
-  gtk_widget_show (pressure_scale);
+  pressure_scale = gimp_hscale_new (pressure_scale_data, 1);
+  gimp_box_pack_start (hbox, pressure_scale, TRUE, TRUE, 0);
+  g_signal_connect (pressure_scale_data, "value-changed",
+		    G_CALLBACK (airbrush_scale_update), &options->pressure);
 
   /*  Register this selection options widget with the main tools options dialog  */
   tools_register_options (AIRBRUSH, vbox);
@@ -142,12 +131,9 @@ airbrush_paint_func (PaintCore *paint_core,
 		     GimpDrawable *drawable,
 		     int        state)
 {
-  GBrushP brush;
-
   if (!drawable) 
     return NULL;
 
-  brush = get_active_brush ();
   switch (state)
     {
     case INIT_PAINT :
@@ -156,7 +142,7 @@ airbrush_paint_func (PaintCore *paint_core,
 
     case MOTION_PAINT :
       if (timer_state == ON)
-	gtk_timeout_remove (timer);
+	g_source_remove (timer);
       timer_state = OFF;
 
       airbrush_motion (paint_core, drawable, airbrush_options->pressure);
@@ -165,7 +151,7 @@ airbrush_paint_func (PaintCore *paint_core,
 	{
 	  airbrush_timeout.paint_core = paint_core;
 	  airbrush_timeout.drawable = drawable;
-	  timer = gtk_timeout_add ((10000 / airbrush_options->rate),
+	  timer = g_timeout_add ((10000 / airbrush_options->rate),
 				   airbrush_time_out, NULL);
 	  timer_state = ON;
 	}
@@ -173,7 +159,7 @@ airbrush_paint_func (PaintCore *paint_core,
 
     case FINISH_PAINT :
       if (timer_state == ON)
-	gtk_timeout_remove (timer);
+	g_source_remove (timer);
       timer_state = OFF;
       break;
 
@@ -209,7 +195,7 @@ tools_free_airbrush (Tool *tool)
   paint_core_free (tool);
 
   if (timer_state == ON)
-    gtk_timeout_remove (timer);
+    g_source_remove (timer);
   timer_state = OFF;
 }
 
@@ -225,9 +211,11 @@ airbrush_time_out (gpointer client_data)
 
   /*  restart the timer  */
   if (airbrush_options->rate != 0.0)
-    return TRUE;
-  else
-    return FALSE;
+    return G_SOURCE_CONTINUE;
+
+  /*  the source goes away: do not remove it again later  */
+  timer_state = OFF;
+  return G_SOURCE_REMOVE;
 }
 
 

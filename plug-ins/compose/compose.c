@@ -39,9 +39,9 @@ static char ident[] = "@(#) GIMP Compose plug-in v1.02 03-Oct-98";
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
-#include "libgimp/gimpmenu.h"
+#include "libgimp/gimpui.h"
 
 /* Declare local functions
  */
@@ -767,10 +767,8 @@ compose_dialog (char *compose_type,
   GtkWidget *hbox;
   GtkWidget *label;
   GtkWidget *table;
-  GtkWidget *image_option_menu, *image_menu;
-  GSList *group;
-  gchar **argv;
-  gint argc;
+  GtkWidget *image_option_menu;
+  GtkWidget *group;
   int j, compose_idx, sensitive;
 
   /* Check default compose type */
@@ -786,54 +784,31 @@ compose_dialog (char *compose_type,
   composeint.width = gimp_drawable_width (drawable_ID);
   composeint.height = gimp_drawable_height (drawable_ID);
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("Compose");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Compose");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) compose_close_callback,
-		      NULL);
+  dlg = gimp_dialog_new ("Compose");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (compose_close_callback), NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) compose_ok_callback, dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
-                      TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
-                      TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (compose_ok_callback),
+			  dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  parameter settings  */
-  hbox = gtk_hbox_new (FALSE, 0);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 0);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), hbox, TRUE, TRUE, 0);
-  gtk_widget_show (hbox);
+  hbox = gimp_hbox_new (FALSE, 0);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), hbox, TRUE, TRUE, 0);
 
   /* The left frame keeps the compose type toggles */
   left_frame = gtk_frame_new ("Compose channels:");
-  gtk_frame_set_shadow_type (GTK_FRAME (left_frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (left_frame), 10);
-  gtk_box_pack_start (GTK_BOX (hbox), left_frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (left_frame, 10);
+  gimp_box_pack_start (hbox, left_frame, TRUE, TRUE, 0);
 
-  left_vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (left_vbox), 10);
-  gtk_container_add (GTK_CONTAINER (left_frame), left_vbox);
+  left_vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (left_vbox, 10);
+  gtk_frame_set_child (GTK_FRAME (left_frame), left_vbox);
 
   /* The right frame keeps the selection menues for images. */
   /* Because the labels within this frame will change when a toggle */
@@ -841,29 +816,26 @@ compose_dialog (char *compose_type,
   /* Otherwise it can occur, that a non-existing label might be changed. */
 
   right_frame = gtk_frame_new ("Channel representations:");
-  gtk_frame_set_shadow_type (GTK_FRAME (right_frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (right_frame), 10);
-  gtk_box_pack_start (GTK_BOX (hbox), right_frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (right_frame, 10);
+  gimp_box_pack_start (hbox, right_frame, TRUE, TRUE, 0);
 
-  right_vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (right_vbox), 10);
-  gtk_container_add (GTK_CONTAINER (right_frame), right_vbox);
+  right_vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (right_vbox, 10);
+  gtk_frame_set_child (GTK_FRAME (right_frame), right_vbox);
 
-  table = gtk_table_new (MAX_COMPOSE_IMAGES, 3, FALSE);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 5);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 5);
-  gtk_box_pack_start (GTK_BOX (right_vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show (table);
+  table = gimp_table_new (MAX_COMPOSE_IMAGES, 3, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 5);
+  gimp_box_pack_start (right_vbox, table, TRUE, TRUE, 0);
 
   /* Channel names */
   for (j = 0; j < MAX_COMPOSE_IMAGES; j++)
   {
     composeint.channel_label[j] = label =
          gtk_label_new (compose_dsc[compose_idx].channel_name[j]);
-    gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-    gtk_table_attach (GTK_TABLE (table), label, 1, 2, j, j+1,
-                      GTK_FILL, GTK_FILL, 0, 0);
-    gtk_widget_show (label);
+    gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+    gimp_table_attach (table, label, 1, 2, j, j+1,
+                       GIMP_FILL, GIMP_FILL, 0, 0);
   }
   /* Set sensitivity of last label */
   sensitive = (strcmp (compose_dsc[compose_idx].channel_name[3],
@@ -874,14 +846,12 @@ compose_dialog (char *compose_type,
   for (j = 0; j <  MAX_COMPOSE_IMAGES; j++)
   {
     composeint.select_ID[j] = drawable_ID;
-    composeint.channel_menu[j] = image_option_menu = gtk_option_menu_new ();
-    image_menu = gimp_drawable_menu_new (check_gray, image_menu_callback,
-                        &(composeint.select_ID[j]), composeint.select_ID[j]);
-    gtk_table_attach (GTK_TABLE (table), image_option_menu, 2, 3, j, j+1,
-                      GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-
-    gtk_widget_show (image_option_menu);
-    gtk_option_menu_set_menu (GTK_OPTION_MENU (image_option_menu), image_menu);
+    composeint.channel_menu[j] = image_option_menu =
+      gimp_drawable_menu_new (check_gray, image_menu_callback,
+                              &(composeint.select_ID[j]),
+                              composeint.select_ID[j]);
+    gimp_table_attach (table, image_option_menu, 2, 3, j, j+1,
+                       GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
   }
   gtk_widget_set_sensitive (composeint.channel_menu[3], sensitive);
 
@@ -889,27 +859,20 @@ compose_dialog (char *compose_type,
   group = NULL;
   for (j = 0; j < MAX_COMPOSE_TYPES; j++)
   {
-    toggle = gtk_radio_button_new_with_label (group,
-                                              compose_dsc[j].compose_type);
-    group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-    gtk_box_pack_start (GTK_BOX (left_vbox), toggle, TRUE, TRUE, 0);
+    toggle = gimp_radio_button_new (group, compose_dsc[j].compose_type);
+    group = toggle;
+    gimp_box_pack_start (left_vbox, toggle, TRUE, TRUE, 0);
     composeint.compose_flag[j] = (j == compose_idx);
-    gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                        (GtkSignalFunc) compose_type_toggle_update,
-                        &(composeint.compose_flag[j]));
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle),
+    g_signal_connect (toggle, "toggled",
+                      G_CALLBACK (compose_type_toggle_update),
+                      &(composeint.compose_flag[j]));
+    gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle),
                                  composeint.compose_flag[j]);
-    gtk_widget_show (toggle);
   }
 
-  gtk_widget_show (left_vbox);
-  gtk_widget_show (right_vbox);
-  gtk_widget_show (left_frame);
-  gtk_widget_show (right_frame);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return composeint.run;
 }
@@ -1016,7 +979,7 @@ static void
 compose_close_callback (GtkWidget *widget,
                         gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 
@@ -1026,7 +989,6 @@ compose_ok_callback (GtkWidget *widget,
 {int j;
 
   composeint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
 
   for (j = 0; j < MAX_COMPOSE_IMAGES; j++)
     composevals.compose_ID[j] = composeint.select_ID[j];
@@ -1039,6 +1001,8 @@ compose_ok_callback (GtkWidget *widget,
       break;
     }
   }
+
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 
@@ -1052,12 +1016,12 @@ compose_type_toggle_update (GtkWidget *widget,
 
   toggle_val = (gint *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
   {
     *toggle_val = TRUE;
     compose_idx = toggle_val - &(composeint.compose_flag[0]);
     for (j = 0; j < MAX_COMPOSE_IMAGES; j++)
-      gtk_label_set (GTK_LABEL (composeint.channel_label[j]),
+      gtk_label_set_text (GTK_LABEL (composeint.channel_label[j]),
                      compose_dsc[compose_idx].channel_name[j]);
 
     /* Set sensitivity of last label */

@@ -33,8 +33,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tiffio.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 
 typedef struct
@@ -1248,152 +1249,118 @@ save_dialog ()
   GtkWidget *hbox;
   GtkWidget *label;
   GtkWidget *entry;
-  GSList *group;
-  gchar **argv;
-  gint argc;
+  GtkWidget *group;
   gint use_none = (tsvals.compression == COMPRESSION_NONE);
   gint use_lzw = (tsvals.compression == COMPRESSION_LZW);
   gint use_packbits = (tsvals.compression == COMPRESSION_PACKBITS);
   gint use_lsb2msb = (tsvals.fillorder == FILLORDER_LSB2MSB);
   gint use_msb2lsb = (tsvals.fillorder == FILLORDER_MSB2LSB);
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("save");
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Save as Tiff");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) save_close_callback,
+  dlg = gimp_dialog_new ("Save as Tiff");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (save_close_callback),
 		      NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) save_ok_callback,
+  button = gimp_dialog_add_button (dlg, "OK", NULL, NULL, TRUE);
+  g_signal_connect (button, "clicked",
+                      G_CALLBACK (save_ok_callback),
                       dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			     G_CALLBACK (gtk_window_destroy), dlg);
 
   /* hbox for compression and fillorder settings */
-  hbox = gtk_hbox_new (FALSE, 5);
+  hbox = gimp_hbox_new (FALSE, 5);
 
   /*  compression  */
   frame = gtk_frame_new ("Compression");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (hbox), frame, TRUE, FALSE, 0);
-  toggle_vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (toggle_vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), toggle_vbox);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (hbox, frame, TRUE, FALSE, 0);
+  toggle_vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (toggle_vbox, 5);
+  gimp_container_add (frame, toggle_vbox);
 
   group = NULL;
-  toggle = gtk_radio_button_new_with_label (group, "None");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) save_toggle_update,
+  toggle = gimp_radio_button_new (group, "None");
+  group = toggle;
+  gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (save_toggle_update),
 		      &use_none);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_none);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_none);
 
-  toggle = gtk_radio_button_new_with_label (group, "LZW");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) save_toggle_update,
+  toggle = gimp_radio_button_new (group, "LZW");
+  group = toggle;
+  gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (save_toggle_update),
 		      &use_lzw);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_lzw);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_lzw);
 
-  toggle = gtk_radio_button_new_with_label (group, "Pack Bits");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) save_toggle_update,
+  toggle = gimp_radio_button_new (group, "Pack Bits");
+  group = toggle;
+  gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (save_toggle_update),
 		      &use_packbits);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_packbits);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_packbits);
 
-  gtk_widget_show (toggle_vbox);
-  gtk_widget_show (frame);
 
   /*  fillorder  */
   frame = gtk_frame_new ("Fill Order");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (hbox), frame, TRUE, FALSE, 0);
-  toggle_vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (toggle_vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), toggle_vbox);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (hbox, frame, TRUE, FALSE, 0);
+  toggle_vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (toggle_vbox, 5);
+  gimp_container_add (frame, toggle_vbox);
 
   group = NULL;
-  toggle = gtk_radio_button_new_with_label (group, "LSB to MSB");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) save_toggle_update,
+  toggle = gimp_radio_button_new (group, "LSB to MSB");
+  group = toggle;
+  gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (save_toggle_update),
 		      &use_lsb2msb);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_lsb2msb);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_lsb2msb);
 
-  toggle = gtk_radio_button_new_with_label (group, "MSB to LSB");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) save_toggle_update,
+  toggle = gimp_radio_button_new (group, "MSB to LSB");
+  group = toggle;
+  gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (save_toggle_update),
 		      &use_msb2lsb);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_msb2lsb);
-  gtk_widget_show (toggle);
-
-  gtk_widget_show (toggle_vbox);
-  gtk_widget_show (frame);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_msb2lsb);
 
 
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), hbox, FALSE, TRUE, 0);
-  gtk_widget_show (hbox);
+
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), hbox, FALSE, TRUE, 0);
 
 
   /* comment entry */
   frame = gtk_frame_new(NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_NONE);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, FALSE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, FALSE, TRUE, 0);
 
-  hbox = gtk_hbox_new (FALSE, 5);
+  hbox = gimp_hbox_new (FALSE, 5);
   label = gtk_label_new ("Comment: ");
-  gtk_widget_show (label);
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, TRUE, 0);
+  gimp_box_pack_start (hbox, label, FALSE, TRUE, 0);
   entry = gtk_entry_new ();
-  gtk_widget_show (entry);
-  gtk_box_pack_start (GTK_BOX (hbox), entry, TRUE, TRUE, 0);
-  gtk_entry_set_text (GTK_ENTRY (entry), image_comment);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                      (GtkSignalFunc) comment_entry_callback,
+  gimp_box_pack_start (hbox, entry, TRUE, TRUE, 0);
+  gtk_editable_set_text (GTK_EDITABLE (entry), image_comment);
+  g_signal_connect (entry, "changed",
+                      G_CALLBACK (comment_entry_callback),
                       NULL);
 
-  gtk_container_add (GTK_CONTAINER (frame), hbox);
-  gtk_widget_show (hbox);
-  gtk_widget_show (frame);
+  gimp_container_add (frame, hbox);
 
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   if (use_none)
     tsvals.compression = COMPRESSION_NONE;
@@ -1417,7 +1384,7 @@ static void
 save_close_callback (GtkWidget *widget,
 		     gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -1425,7 +1392,7 @@ save_ok_callback (GtkWidget *widget,
 		  gpointer   data)
 {
   tsint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -1436,7 +1403,7 @@ save_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -1447,9 +1414,9 @@ comment_entry_callback (GtkWidget *widget,
 			gpointer   data)
 {
   int len;
-  char *text;
+  const char *text;
 
-  text = gtk_entry_get_text (GTK_ENTRY (widget));
+  text = gtk_editable_get_text (GTK_EDITABLE (widget));
   len = strlen(text);
 
   /* Temporary kludge for overlength strings - just return */

@@ -31,8 +31,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #define PLUG_IN_NAME "Colorify"
 #define PLUG_IN_VERSION "1.1"
@@ -99,7 +100,7 @@ static void colorify (GDrawable *drawable);
 static void set_preview_color (GtkWidget *preview, guchar red, guchar green, guchar blue);
 
 static void
-query ()
+query (void)
 {
 	static GParamDef args[] =
 	{
@@ -125,7 +126,6 @@ query ()
 
 gint sel_x1, sel_x2, sel_y1, sel_y2, sel_width, sel_height;
 GtkWidget *preview;
-GtkWidget *c_dialog;
 
 
 static void
@@ -208,7 +208,7 @@ static void custom_color_callback (GtkWidget *widget,
 				   gpointer data);
 static void predefined_color_callback (GtkWidget *widget,
 				       gpointer data);
-static void color_changed (GtkWidget *widget,
+static void color_changed (const guchar *rgb,
 			   gpointer data);
 
 static void
@@ -269,7 +269,7 @@ colorify_row (guchar *row,
 		current += 3;
 	}
 }
-		
+
 static int
 colorify_dialog (guchar red,
 		 guchar green,
@@ -280,99 +280,78 @@ colorify_dialog (guchar red,
 	GtkWidget *button;
 	GtkWidget *frame;
 	GtkWidget *table;
-	gchar **argv;
-	gint argc;
+	GtkWidget *group;
 	gint i;
-	GSList *group = NULL;
 
-	argc = 1;
-	argv = g_new (gchar *, 1);
-	argv[0] = g_strdup ("colorify");
+	gtk_init ();
 
-	gtk_init (&argc, &argv);
-	gtk_rc_parse (gimp_gtkrc());
+	dialog = gimp_dialog_new ("Colorify");
+	g_signal_connect (dialog, "destroy",
+			  G_CALLBACK (close_callback),
+			  NULL);
 
-	dialog = gtk_dialog_new ();
-	gtk_window_set_title (GTK_WINDOW (dialog), "Colorify");
-	gtk_window_position (GTK_WINDOW (dialog), GTK_WIN_POS_MOUSE);
-	gtk_signal_connect (GTK_OBJECT (dialog), "destroy",
-			    (GtkSignalFunc) close_callback,
-			    NULL);
+	gimp_dialog_add_button (dialog, "Ok",
+				G_CALLBACK (colorify_ok_callback),
+				dialog, TRUE);
 
-	button = gtk_button_new_with_label ("Ok");
-	GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-	gtk_signal_connect (GTK_OBJECT (button), "clicked",
-			    (GtkSignalFunc) colorify_ok_callback,
-			    dialog);
-	gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_grab_default (button);
-	gtk_widget_show (button);
-
-	button = gtk_button_new_with_label ("Cancel");
-	GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-	gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-				   (GtkSignalFunc) gtk_widget_destroy,
-				   GTK_OBJECT (dialog));
-	gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_show (button);
+	button = gimp_dialog_add_button (dialog, "Cancel", NULL, NULL, FALSE);
+	g_signal_connect_swapped (button, "clicked",
+				  G_CALLBACK (gtk_window_destroy),
+				  dialog);
 
 	frame = gtk_frame_new ("Color");
-	gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-	gtk_container_border_width (GTK_CONTAINER (frame), 10);
-	gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog)->vbox), frame, TRUE, TRUE, 0);
-	gtk_widget_show (frame);
+	gimp_container_set_border_width (frame, 10);
+	gimp_box_pack_start (gimp_dialog_get_vbox (dialog), frame, TRUE, TRUE, 0);
 
-	table = gtk_table_new (2, 7, TRUE);
-	gtk_container_border_width (GTK_CONTAINER (table), 10);
-	gtk_container_add (GTK_CONTAINER (frame), table);
-	gtk_table_set_row_spacings (GTK_TABLE (table), 5);
-	gtk_table_set_col_spacings (GTK_TABLE (table), 5);
-	gtk_widget_show (table);
+	table = gimp_table_new (2, 7, TRUE);
+	gimp_container_set_border_width (table, 10);
+	gtk_frame_set_child (GTK_FRAME (frame), table);
+	gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+	gtk_grid_set_column_spacing (GTK_GRID (table), 5);
 
 	label = gtk_label_new ("Custom Color: ");
-	gtk_table_attach (GTK_TABLE (table), label, 4, 6, 0, 1,  GTK_FILL, GTK_FILL, 0, 0);
-	gtk_widget_show (label);
+	gimp_table_attach (table, label, 4, 6, 0, 1,  GIMP_FILL, GIMP_FILL, 0, 0);
 
-	button = gtk_radio_button_new (group);
-	gtk_toggle_button_set_mode (GTK_TOGGLE_BUTTON (button), FALSE);
- 	gtk_widget_set_usize (button, 35, 35);
-	gtk_signal_connect (GTK_OBJECT (button), "button_press_event",
-			    (GtkSignalFunc) custom_color_callback,
-			    NULL);
-	gtk_table_attach (GTK_TABLE (table), button, 6, 7, 0, 1, GTK_FILL, GTK_FILL, 0, 0);
-	gtk_widget_show (button);
+	/*  The colour buttons are a group of toggle buttons showing a
+	 *  swatch, like GTK 1's radio buttons without an indicator.
+	 */
+	button = gtk_toggle_button_new ();
+	group = button;
+	gtk_widget_set_size_request (button, 35, 35);
+	g_signal_connect (button, "clicked",
+			  G_CALLBACK (custom_color_callback),
+			  dialog);
+	gimp_table_attach (table, button, 6, 7, 0, 1, GIMP_FILL, GIMP_FILL, 0, 0);
 
-	preview = gtk_preview_new (GTK_PREVIEW_COLOR);
-	gtk_preview_size (GTK_PREVIEW (preview), 30, 30);
+	preview = gimp_preview_new (GIMP_PREVIEW_COLOR);
+	gimp_preview_size (GIMP_PREVIEW (preview), 30, 30);
 	set_preview_color (preview, cvals.color[0], cvals.color[1], cvals.color[2]);
-	gtk_container_add (GTK_CONTAINER (button), preview);
-	gtk_widget_show (preview);
-	
+	gtk_button_set_child (GTK_BUTTON (button), preview);
+	gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (button), TRUE);
+
 	for(i = 0; i < 7; i++) {
-		group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-		button = gtk_radio_button_new (group);
-		gtk_toggle_button_set_mode (GTK_TOGGLE_BUTTON (button), FALSE);
-		button_info[i].preview = gtk_preview_new (GTK_PREVIEW_COLOR);
-		gtk_preview_size (GTK_PREVIEW (button_info[i].preview),
-				  30, 30);
-		gtk_container_add (GTK_CONTAINER (button), button_info[i].preview);
+		button = gtk_toggle_button_new ();
+		gtk_toggle_button_set_group (GTK_TOGGLE_BUTTON (button),
+					     GTK_TOGGLE_BUTTON (group));
+		button_info[i].preview = gimp_preview_new (GIMP_PREVIEW_COLOR);
+		gimp_preview_size (GIMP_PREVIEW (button_info[i].preview),
+				   30, 30);
+		gtk_button_set_child (GTK_BUTTON (button), button_info[i].preview);
 		set_preview_color (button_info[i].preview,
 				   button_info[i].red,
 				   button_info[i].green,
 				   button_info[i].blue);
 		button_info[i].button_num = i;
-		gtk_signal_connect (GTK_OBJECT (button), "clicked",
-				    (GtkSignalFunc) predefined_color_callback,
-				    &button_info[i].button_num);
-		gtk_widget_show (button_info[i].preview);
-		
-		gtk_table_attach (GTK_TABLE (table), button, i, i + 1, 1, 2, GTK_FILL, GTK_FILL, 0, 0);
-		gtk_widget_show (button);
+		g_signal_connect (button, "clicked",
+				  G_CALLBACK (predefined_color_callback),
+				  &button_info[i].button_num);
+
+		gimp_table_attach (table, button, i, i + 1, 1, 2, GIMP_FILL, GIMP_FILL, 0, 0);
 	}
-		
-	gtk_widget_show (dialog);
-	
-	gtk_main();
+
+	gtk_window_present (GTK_WINDOW (dialog));
+
+	gimp_main_loop_run ();
 	return cint.run;
 }
 
@@ -380,15 +359,15 @@ static void
 close_callback (GtkWidget *widget,
 		gpointer data)
 {
-	gtk_main_quit();
+	gimp_main_loop_quit ();
 }
 
 static void
 colorify_ok_callback (GtkWidget *widget,
 		      gpointer data)
 {
-	gtk_widget_destroy (GTK_WIDGET (data));
-	cint.run = TRUE;	
+	cint.run = TRUE;
+	gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -397,48 +376,15 @@ set_preview_color (GtkWidget *preview,
 		   guchar green,
 		   guchar blue)
 {
-	gint i;
-	guchar buf[3 * 30];
-
-	for (i = 0; i < 30; i ++) {
-		buf [3 * i] = red;
-		buf [3 * i + 1] = green;
-		buf [3 * i + 2] = blue;
-	}
-
-	for (i = 0; i < 30; i ++) 
-		gtk_preview_draw_row (GTK_PREVIEW (preview), buf, 0, i, 30);
-
-	gtk_widget_draw (preview, NULL);
+	gimp_preview_fill (GIMP_PREVIEW (preview), red, green, blue);
 }
 
 static void
 custom_color_callback (GtkWidget *widget,
 		       gpointer data)
 {
-	GtkColorSelectionDialog *csd;
-	gdouble colour[3];
-
-	c_dialog = gtk_color_selection_dialog_new ("Colorify Custom Color");
-	csd = GTK_COLOR_SELECTION_DIALOG (c_dialog);
- 	gtk_color_selection_set_update_policy (GTK_COLOR_SELECTION(csd->colorsel), 
- 					       GTK_UPDATE_DISCONTINUOUS); 
-
-	gtk_widget_destroy (csd->help_button);
-	gtk_widget_destroy (csd->cancel_button);
-
-	gtk_signal_connect (GTK_OBJECT (csd->ok_button), "clicked",
-			    (GtkSignalFunc) color_changed,
-			    NULL);
-
-	colour[0] = cvals.color[0] / 255.0;
-	colour[1] = cvals.color[1] / 255.0;
-	colour[2] = cvals.color[2] / 255.0;
-
-	gtk_color_selection_set_color (GTK_COLOR_SELECTION (csd->colorsel),
-				       colour);
-	gtk_window_position (GTK_WINDOW(c_dialog), GTK_WIN_POS_MOUSE);
-	gtk_widget_show (c_dialog);
+	gimp_color_dialog_run (GTK_WINDOW (data), "Colorify Custom Color",
+			       cvals.color, color_changed, NULL);
 }
 
 static void
@@ -448,26 +394,19 @@ predefined_color_callback (GtkWidget *widget,
 	gint *num;
 
 	num = (gint *) data;
-	
+
 	cvals.color[0] = button_info[*num].red;
 	cvals.color[1] = button_info[*num].green;
 	cvals.color[2] = button_info[*num].blue;
 }
 
 static void
-color_changed (GtkWidget *widget,
+color_changed (const guchar *rgb,
 	       gpointer data)
 {
-	gdouble colour[3];
+	cvals.color[0] = rgb[0];
+	cvals.color[1] = rgb[1];
+	cvals.color[2] = rgb[2];
 
-	gtk_color_selection_get_color (GTK_COLOR_SELECTION (GTK_COLOR_SELECTION_DIALOG (c_dialog)->colorsel),
-				       colour);
-
-	cvals.color[0] = (guchar) (colour[0] * 255.0);
-	cvals.color[1] = (guchar) (colour[1] * 255.0);
-	cvals.color[2] = (guchar) (colour[2] * 255.0);
-	
 	set_preview_color (preview, cvals.color[0], cvals.color[1], cvals.color[2]);
-	gtk_widget_destroy (c_dialog);
 }
-

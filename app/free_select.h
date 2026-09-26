@@ -22,9 +22,9 @@
 
 /*  free select action functions  */
 
-void          free_select_button_press      (Tool *, GdkEventButton *, gpointer);
-void          free_select_button_release    (Tool *, GdkEventButton *, gpointer);
-void          free_select_motion            (Tool *, GdkEventMotion *, gpointer);
+void          free_select_button_press      (Tool *, GimpButtonEvent *, gpointer);
+void          free_select_button_release    (Tool *, GimpButtonEvent *, gpointer);
+void          free_select_motion            (Tool *, GimpMotionEvent *, gpointer);
 
 
 /*  free select functions  */

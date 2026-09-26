@@ -19,8 +19,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <dirent.h>
-#include <sys/stat.h>
 #include "gtk/gtk.h"
 #include "libgimp/gimp.h"
 #include "libgimp/gimpui.h"
@@ -35,9 +33,7 @@
 typedef struct
 {
   GtkWidget *preview;
-  GtkWidget *dialog;
   gdouble    color[3];
-  gdouble    old_color[3];
 } SFColor;
 
 typedef union
@@ -96,7 +92,6 @@ static void       script_fu_disable_cc       (gint    err_msg);
 static void       script_fu_interface        (SFScript *script);
 static void       script_fu_color_preview    (GtkWidget *preview,
 					      gdouble   *color);
-static void       script_fu_cleanup_widgets  (SFScript *script);
 static void       script_fu_ok_callback      (GtkWidget *widget,
 					      gpointer   data);
 static void       script_fu_close_callback   (GtkWidget *widget,
@@ -107,13 +102,10 @@ static void       script_fu_toggle_update    (GtkWidget *widget,
 					      gpointer   data);
 static void       script_fu_preview_callback (GtkWidget *widget,
 					      gpointer   data);
-static void       script_fu_preview_changed  (GtkWidget *widget,
+static void       script_fu_color_chosen     (const guchar *rgb,
 					      gpointer   data);
-static void       script_fu_preview_cancel   (GtkWidget *widget,
-					      gpointer   data);
-static gint       script_fu_preview_delete   (GtkWidget *widget,
-					      GdkEvent  *event,
-					      gpointer   data);
+static gchar    **script_fu_split_path       (const gchar *path_str);
+static void       script_fu_load_script      (const gchar *filename);
 
 /*
  *  Local variables
@@ -125,7 +117,6 @@ static SFInterface sf_interface =
   NULL   /*  active script    */
 };
 
-static struct stat filestat;
 static gint   current_command_enabled = FALSE;
 static gint   command_count = 0;
 static gint   consec_command_count = 0;
@@ -144,16 +135,12 @@ script_fu_find_scripts ()
   GParam *return_vals;
   gint nreturn_vals;
   gchar *path_str;
-  gchar *home;
-  gchar *local_path;
+  gchar **tokens;
   gchar *path;
   gchar *filename;
-  gchar *token;
-  gchar *next_token;
-  gchar *command;
-  gint   my_err;
-  DIR   *dir;
-  struct dirent *dir_ent;
+  const gchar *entry;
+  GDir  *dir;
+  gint   i;
 
   /*  Make sure to clear any existing scripts  */
   if (script_list != NULL)
@@ -179,91 +166,121 @@ script_fu_find_scripts ()
 				    PARAM_STRING, "script-fu-path",
 				    PARAM_END);
 
-  if (return_vals[0].data.d_status == STATUS_SUCCESS)
+  if (return_vals[0].data.d_status == STATUS_SUCCESS &&
+      (path_str = return_vals[1].data.d_string) != NULL)
     {
-      path_str = return_vals[1].data.d_string;
+      /* Search through all directories in the path */
+      tokens = script_fu_split_path (path_str);
 
-      if (path_str == NULL)
-	return;
-
-      /* Set local path to contain temp_path, where (supposedly)
-       * there may be working files.
-       */
-      home = getenv ("HOME");
-      local_path = g_strdup (path_str);
-
-      /* Search through all directories in the local path */
-
-      next_token = local_path;
-
-      token = strtok (next_token, ":");
-
-      while (token)
+      for (i = 0; tokens[i]; i++)
 	{
-	  if (*token == '~')
-	    {
-	      path = g_malloc (strlen (home) + strlen (token) + 2);
-	      sprintf (path, "%s%s", home, token + 1);
-	    }
+	  if (*tokens[i] == '\0')
+	    continue;
+
+	  if (*tokens[i] == '~')
+	    path = g_build_filename (g_get_home_dir (), tokens[i] + 1, NULL);
 	  else
-	    {
-	      path = g_malloc (strlen (token) + 2);
-	      strcpy (path, token);
-	    } /* else */
+	    path = g_strdup (tokens[i]);
 
 	  /* Check if directory exists and if it has any items in it */
-	  my_err = stat (path, &filestat);
-
-	  if (!my_err && S_ISDIR (filestat.st_mode))
+	  if (g_file_test (path, G_FILE_TEST_IS_DIR))
 	    {
-	      if (path[strlen (path) - 1] != '/')
-		strcat (path, "/");
-
 	      /* Open directory */
-	      dir = opendir (path);
+	      dir = g_dir_open (path, 0, NULL);
 
 	      if (!dir)
-		  g_message ("error reading script directory \"%s\"", path);
+		g_message ("error reading script directory \"%s\"", path);
 	      else
 		{
-		  while ((dir_ent = readdir (dir)))
+		  while ((entry = g_dir_read_name (dir)))
 		    {
-		      filename = g_malloc (strlen(path) + strlen (dir_ent->d_name) + 1);
+		      if (! g_str_has_suffix (entry, ".scm"))
+			continue;
 
-		      sprintf (filename, "%s%s", path, dir_ent->d_name);
+		      filename = g_build_filename (path, entry, NULL);
 
-		      if (strcmp (filename + strlen (filename) - 4, ".scm") == 0)
-			{
-			  /* Check the file and see that it is not a sub-directory */
-			  my_err = stat (filename, &filestat);
-
-			  if (!my_err && S_ISREG (filestat.st_mode))
-			    {
-			      command = g_new (char, strlen ("(load \"\")") + strlen (filename) + 1);
-			      sprintf (command, "(load \"%s\")", filename);
-
-			      repl_c_string (command, 0, 0, 1);
-
-			      g_free (command);
-			    }
-			}
+		      /* Check the file and see that it is not a sub-directory */
+		      if (g_file_test (filename, G_FILE_TEST_IS_REGULAR))
+			script_fu_load_script (filename);
 
 		      g_free (filename);
 		    } /* while */
 
-		  closedir (dir);
+		  g_dir_close (dir);
 		} /* else */
 	    } /* if */
 
 	  g_free (path);
+	} /* for */
 
-	  token = strtok (NULL, ":");
-	} /* while */
-
-      g_free(local_path);
+      g_strfreev (tokens);
     }
 
   gimp_destroy_params (return_vals, nreturn_vals);
+}
+
+/*  Splits a search path such as gimprc's script-fu-path.  The separator
+ *  is G_SEARCHPATH_SEPARATOR (';' on Windows); a gimprc written for Unix
+ *  separates with ':', which is accepted on Windows too as long as it is
+ *  not the colon of a drive letter ("C:\..." or "C:/...").
+ */
+static gchar **
+script_fu_split_path (const gchar *path_str)
+{
+#ifdef G_OS_WIN32
+  GPtrArray   *array = g_ptr_array_new ();
+  const gchar *start = path_str;
+  const gchar *p;
+
+  for (p = path_str; ; p++)
+    {
+      gboolean split = FALSE;
+
+      if (*p == '\0' || *p == G_SEARCHPATH_SEPARATOR)
+	split = TRUE;
+      else if (*p == ':' &&
+	       ! (p - start == 1 && g_ascii_isalpha (*start) &&
+		  (p[1] == '\\' || p[1] == '/')))
+	split = TRUE;
+
+      if (split)
+	{
+	  g_ptr_array_add (array, g_strndup (start, p - start));
+	  if (*p == '\0')
+	    break;
+	  start = p + 1;
+	}
+    }
+
+  g_ptr_array_add (array, NULL);
+
+  return (gchar **) g_ptr_array_free (array, FALSE);
+#else
+  return g_strsplit (path_str, G_SEARCHPATH_SEPARATOR_S, -1);
+#endif
+}
+
+/*  Loads one script file through the interpreter.  The name goes into a
+ *  Scheme string, so backslashes (Windows paths) and quotes are escaped.
+ */
+static void
+script_fu_load_script (const gchar *filename)
+{
+  GString     *command;
+  const gchar *p;
+
+  command = g_string_new ("(load \"");
+  for (p = filename; *p; p++)
+    {
+      if (*p == '\\' || *p == '"')
+	g_string_append_c (command, '\\');
+      g_string_append_c (command, *p);
+    }
+  g_string_append (command, "\")");
+
+  repl_c_string (command->str, 0, 0, 1);
+
+  g_string_free (command, TRUE);
 }
 
 LISP
@@ -419,7 +436,6 @@ script_fu_add_script (LISP a)
 		  memcpy (script->arg_defaults[i].sfa_color.color, color, sizeof (gdouble) * 3);
 		  memcpy (script->arg_values[i].sfa_color.color, color, sizeof (gdouble) * 3);
 		  script->arg_values[i].sfa_color.preview = NULL;
-		  script->arg_values[i].sfa_color.dialog = NULL;
 
 		  args[i + 1].type = PARAM_COLOR;
 		  args[i + 1].name = "color";
@@ -487,7 +503,7 @@ script_fu_report_cc (gchar *command)
       new_command = g_new (gchar, strlen (command) + 10);
       sprintf (new_command, "%s <%d>", command, ++consec_command_count);
       if (current_command_enabled == TRUE)
-	gtk_entry_set_text (GTK_ENTRY (sf_interface.cc), new_command);
+	gtk_editable_set_text (GTK_EDITABLE (sf_interface.cc), new_command);
       g_free (new_command);
       g_free (last_command);
     }
@@ -495,15 +511,18 @@ script_fu_report_cc (gchar *command)
     {
       consec_command_count = 1;
       if (current_command_enabled == TRUE)
-	gtk_entry_set_text (GTK_ENTRY (sf_interface.cc), command);
+	gtk_editable_set_text (GTK_EDITABLE (sf_interface.cc), command);
       if (last_command)
 	g_free (last_command);
     }
   last_command = g_strdup (command);
   command_count++;
 
+  /*  Let the current command field redraw while the script runs; the
+   *  dialog is insensitive meanwhile (see script_fu_ok_callback).
+   */
   if (current_command_enabled == TRUE)
-    gdk_flush ();
+    gimp_process_events ();
 }
 
 static void
@@ -740,244 +759,191 @@ script_fu_disable_cc (gint err_msg)
   consec_command_count = 0;
 }
 
+static gboolean script_fu_running = FALSE;
+
+static gboolean
+script_fu_close_request (GtkWindow *window,
+			 gpointer   data)
+{
+  /*  Keep the dialog while its script runs  */
+  return script_fu_running;
+}
+
 static void
 script_fu_interface (SFScript *script)
 {
   GtkWidget *dlg;
   GtkWidget *button;
   GtkWidget *label;
-  GtkWidget *menu;
   GtkWidget *table;
-  guchar *title;
-  gchar **argv;
-  gint argc;
+  gchar *title;
   int start_args;
   int i;
-  guchar *color_cube;
 
   static gint gtk_initted = FALSE;
 
   if (!gtk_initted)
     {
-      argc = 1;
-      argv = g_new (gchar *, 1);
-      argv[0] = g_strdup ("script-fu");
-      
-      gtk_init (&argc, &argv);
-      gtk_rc_parse (gimp_gtkrc ());
-      
-      gdk_set_use_xshm(gimp_use_xshm());
-  
-      gtk_preview_set_gamma(gimp_gamma());
-      gtk_preview_set_install_cmap(gimp_install_cmap());
-      color_cube = gimp_color_cube();
-      gtk_preview_set_color_cube(color_cube[0], color_cube[1], color_cube[2], color_cube[3]);
-      
-      gtk_widget_set_default_visual(gtk_preview_get_visual());
-      gtk_widget_set_default_colormap(gtk_preview_get_cmap());
-      
+      gtk_init ();
+
       gtk_initted = TRUE;
     }
 
   sf_interface.script = script;
 
-  title = g_new (guchar, strlen ("Script-Fu: ") + strlen (script->description) + 1);
-  sprintf ((char *)title, "Script-Fu: %s", script->description);
+  title = g_strdup_printf ("Script-Fu: %s", script->description);
 
-  dlg = gtk_dialog_new ();
-  gtk_quit_add_destroy (1, GTK_OBJECT (dlg));
-  gtk_window_set_title (GTK_WINDOW (dlg), (const gchar *)title);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) script_fu_close_callback,
-		      NULL);
-  gtk_container_border_width (GTK_CONTAINER (GTK_DIALOG (dlg)->vbox), 2);
-  gtk_container_border_width (GTK_CONTAINER (GTK_DIALOG (dlg)->action_area), 2);
+  dlg = gimp_dialog_new (title);
+  g_free (title);
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (script_fu_close_callback),
+		    NULL);
+  g_signal_connect (dlg, "close-request",
+		    G_CALLBACK (script_fu_close_request),
+		    NULL);
+  gimp_container_set_border_width (gimp_dialog_get_vbox (dlg), 2);
+  gimp_container_set_border_width (gimp_dialog_get_action_area (dlg), 2);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) script_fu_ok_callback,
-                      NULL);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK",
+			  G_CALLBACK (script_fu_ok_callback), dlg, TRUE);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) script_fu_close_callback,
-                      NULL);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy),
+			    dlg);
 
   /*  The info vbox  */
   label = gtk_label_new ("Script Arguments");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), label, FALSE, TRUE, 0);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), label, FALSE, TRUE, 0);
 
   /*  The argument table  */
-  table = gtk_table_new (script->num_args, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 4);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), table, TRUE, TRUE, 0);
+  table = gimp_table_new (script->num_args, 2, FALSE);
+  gimp_container_set_border_width (table, 4);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), table, TRUE, TRUE, 0);
 
-  script->args_widgets = g_new (GtkWidget *, script->num_args);
+  script->args_widgets = g_new0 (GtkWidget *, script->num_args);
 
   start_args = (script->image_based) ? 2 : 0;
 
   for (i = start_args; i < script->num_args; i++)
     {
       label = gtk_label_new (script->arg_labels[i]);
-      gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-      gtk_table_attach (GTK_TABLE (table), label,
-			0, 1, i, i + 1, GTK_FILL, GTK_FILL, 4, 2);
-      gtk_widget_show (label);
+      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+      gimp_table_attach (table, label,
+			 0, 1, i, i + 1, GIMP_FILL, GIMP_FILL, 4, 2);
 
       switch (script->arg_types[i])
 	{
 	case SF_IMAGE:
+	  script->args_widgets[i] =
+	    gimp_image_menu_new (NULL, script_fu_menu_callback,
+				 &script->arg_values[i].sfa_image,
+				 script->arg_defaults[i].sfa_image);
+	  break;
 	case SF_DRAWABLE:
+	  script->args_widgets[i] =
+	    gimp_drawable_menu_new (NULL, script_fu_menu_callback,
+				    &script->arg_values[i].sfa_drawable,
+				    script->arg_defaults[i].sfa_drawable);
+	  break;
 	case SF_LAYER:
+	  script->args_widgets[i] =
+	    gimp_layer_menu_new (NULL, script_fu_menu_callback,
+				 &script->arg_values[i].sfa_layer,
+				 script->arg_defaults[i].sfa_layer);
+	  break;
 	case SF_CHANNEL:
-	  script->args_widgets[i] = gtk_option_menu_new ();
-	  switch (script->arg_types[i])
-	    {
-	    case SF_IMAGE:
-	      menu = gimp_image_menu_new (NULL, script_fu_menu_callback,
-					  &script->arg_values[i].sfa_image,
-					  script->arg_defaults[i].sfa_image);
-	      break;
-	    case SF_DRAWABLE:
-	      menu = gimp_drawable_menu_new (NULL, script_fu_menu_callback,
-					     &script->arg_values[i].sfa_drawable,
-					     script->arg_defaults[i].sfa_drawable);
-	      break;
-	    case SF_LAYER:
-	      menu = gimp_layer_menu_new (NULL, script_fu_menu_callback,
-					  &script->arg_values[i].sfa_layer,
-					  script->arg_defaults[i].sfa_layer);
-	      break;
-	    case SF_CHANNEL:
-	      menu = gimp_channel_menu_new (NULL, script_fu_menu_callback,
-					    &script->arg_values[i].sfa_channel,
-					    script->arg_defaults[i].sfa_channel);
-	      break;
-	    default:
-	      menu = NULL;
-	      break;
-	    }
-	  gtk_option_menu_set_menu (GTK_OPTION_MENU (script->args_widgets[i]), menu);
+	  script->args_widgets[i] =
+	    gimp_channel_menu_new (NULL, script_fu_menu_callback,
+				   &script->arg_values[i].sfa_channel,
+				   script->arg_defaults[i].sfa_channel);
 	  break;
 
 	case SF_COLOR:
-	  script->args_widgets[i] = gtk_button_new();
+	  script->args_widgets[i] = gtk_button_new ();
 
-	  script->arg_values[i].sfa_color.preview = gtk_preview_new(GTK_PREVIEW_COLOR);
-	  gtk_preview_size (GTK_PREVIEW (script->arg_values[i].sfa_color.preview),
-			    COLOR_SAMPLE_WIDTH, COLOR_SAMPLE_HEIGHT);
-	  gtk_container_add (GTK_CONTAINER (script->args_widgets[i]),
-			     script->arg_values[i].sfa_color.preview);
-	  gtk_widget_show (script->arg_values[i].sfa_color.preview);
+	  script->arg_values[i].sfa_color.preview = gimp_preview_new (GIMP_PREVIEW_COLOR);
+	  gimp_preview_size (GIMP_PREVIEW (script->arg_values[i].sfa_color.preview),
+			     COLOR_SAMPLE_WIDTH, COLOR_SAMPLE_HEIGHT);
+	  gtk_button_set_child (GTK_BUTTON (script->args_widgets[i]),
+				script->arg_values[i].sfa_color.preview);
+	  /*  The pointer is cleared when the dialog goes away  */
+	  g_object_add_weak_pointer (G_OBJECT (script->arg_values[i].sfa_color.preview),
+				     (gpointer *) &script->arg_values[i].sfa_color.preview);
 
 	  script_fu_color_preview (script->arg_values[i].sfa_color.preview,
 				   script->arg_values[i].sfa_color.color);
 
-	  gtk_signal_connect (GTK_OBJECT (script->args_widgets[i]), "clicked",
-			      (GtkSignalFunc) script_fu_preview_callback,
-			      &script->arg_values[i].sfa_color);
+	  g_signal_connect (script->args_widgets[i], "clicked",
+			    G_CALLBACK (script_fu_preview_callback),
+			    &script->arg_values[i].sfa_color);
 	  break;
 
 	case SF_TOGGLE:
-	  gtk_label_set (GTK_LABEL (label), "Script Toggle");
+	  gtk_label_set_text (GTK_LABEL (label), "Script Toggle");
 	  script->args_widgets[i] = gtk_check_button_new_with_label (script->arg_labels[i]);
-	  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (script->args_widgets[i]),
+	  gtk_check_button_set_active (GTK_CHECK_BUTTON (script->args_widgets[i]),
 				       script->arg_values[i].sfa_toggle);
-	  gtk_signal_connect (GTK_OBJECT (script->args_widgets[i]), "toggled",
-			      (GtkSignalFunc) script_fu_toggle_update,
-			      &script->arg_values[i].sfa_toggle);
+	  g_signal_connect (script->args_widgets[i], "toggled",
+			    G_CALLBACK (script_fu_toggle_update),
+			    &script->arg_values[i].sfa_toggle);
 	  break;
 
 	case SF_VALUE:
 	  script->args_widgets[i] = gtk_entry_new ();
-	  gtk_widget_set_usize (script->args_widgets[i], TEXT_WIDTH, 0);
-	  gtk_entry_set_text (GTK_ENTRY (script->args_widgets[i]),
-			      script->arg_defaults[i].sfa_value);
+	  gtk_widget_set_size_request (script->args_widgets[i], TEXT_WIDTH, -1);
+	  gtk_editable_set_text (GTK_EDITABLE (script->args_widgets[i]),
+				 script->arg_defaults[i].sfa_value);
 	  break;
 	default:
 	  break;
 	}
 
-      gtk_table_attach (GTK_TABLE (table), script->args_widgets[i],
-			1, 2, i, i + 1, 0, 0, 4, 2);
-      gtk_widget_show (script->args_widgets[i]);
+      if (script->args_widgets[i])
+	gimp_table_attach (table, script->args_widgets[i],
+			   1, 2, i, i + 1, 0, 0, 4, 2);
     }
-  gtk_widget_show (table);
 
   /*  The current command  */
   label = gtk_label_new ("Current Command");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), label, FALSE, TRUE, 0);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), label, FALSE, TRUE, 0);
   sf_interface.cc = gtk_entry_new ();
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), sf_interface.cc, FALSE, TRUE, 0);
-  gtk_widget_show (sf_interface.cc);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), sf_interface.cc, FALSE, TRUE, 0);
 
   sf_interface.script = script;
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  
+  gimp_main_loop_run ();
+
+  sf_interface.cc = NULL;
   g_free (script->args_widgets);
-  gdk_flush ();
+  script->args_widgets = NULL;
 }
 
 static void
 script_fu_color_preview (GtkWidget *preview,
 			 gdouble   *color)
 {
-  gint i;
-  guchar buf[3 * COLOR_SAMPLE_WIDTH];
+  if (preview == NULL)
+    return;
 
-  for (i = 0; i < COLOR_SAMPLE_WIDTH; i++)
-    {
-      buf[3*i] = (guint) (255.999 * color[0]);
-      buf[3*i+1] = (guint) (255.999 * color[1]);
-      buf[3*i+2] = (guint) (255.999 * color[2]);
-    }
-  for (i = 0; i < COLOR_SAMPLE_HEIGHT; i++)
-    gtk_preview_draw_row (GTK_PREVIEW (preview), buf, 0, i, COLOR_SAMPLE_WIDTH);
-
-  gtk_widget_draw (preview, NULL);
-}
-
-static void
-script_fu_cleanup_widgets (SFScript *script)
-{
-  int i;
-
-  for (i = 0; i < script->num_args; i++)
-    switch (script->arg_types[i])
-      {
-      case SF_COLOR:
-	if (script->arg_values[i].sfa_color.dialog != NULL)
-	  {
-	    gtk_widget_destroy (script->arg_values[i].sfa_color.dialog);
-	    script->arg_values[i].sfa_color.dialog = NULL;
-	  }
-	break;
-      default:
-	break;
-      }
+  gimp_preview_fill (GIMP_PREVIEW (preview),
+		     (guchar) (255.999 * color[0]),
+		     (guchar) (255.999 * color[1]),
+		     (guchar) (255.999 * color[2]));
 }
 
 static void
 script_fu_ok_callback (GtkWidget *widget,
 		       gpointer   data)
 {
+  GtkWidget *dlg = GTK_WIDGET (data);
   SFScript *script;
   gint err_msg;
-  char *text = NULL;
+  const char *text = NULL;
   char *command, *c;
   char buffer[32];
   int length;
@@ -1004,7 +970,7 @@ script_fu_ok_callback (GtkWidget *widget,
 	length += 6;   /*  Maximum size of (TRUE, FALSE)  */
 	break;
       case SF_VALUE:
-	length += strlen (gtk_entry_get_text (GTK_ENTRY (script->args_widgets[i]))) + 1;
+	length += strlen (gtk_editable_get_text (GTK_EDITABLE (script->args_widgets[i]))) + 1;
 	break;
       default:
 	break;
@@ -1037,7 +1003,7 @@ script_fu_ok_callback (GtkWidget *widget,
 	  text = buffer;
 	  break;
 	case SF_VALUE:
-	  text = gtk_entry_get_text (GTK_ENTRY (script->args_widgets[i]));
+	  text = gtk_editable_get_text (GTK_EDITABLE (script->args_widgets[i]));
 	  break;
 	default:
 	  break;
@@ -1050,6 +1016,15 @@ script_fu_ok_callback (GtkWidget *widget,
       c += strlen (text) + 1;
     }
 
+  /*  The dialog stays up showing the current command while the script
+   *  runs, but takes no input.
+   */
+  script_fu_running = TRUE;
+  gtk_widget_set_sensitive (gimp_dialog_get_action_area (dlg), FALSE);
+  for (i = 0; i < script->num_args; i++)
+    if (script->args_widgets[i])
+      gtk_widget_set_sensitive (script->args_widgets[i], FALSE);
+
   /*  enable the current command field  */
   script_fu_enable_cc ();
 
@@ -1059,22 +1034,19 @@ script_fu_ok_callback (GtkWidget *widget,
   /*  disable the current command field  */
   script_fu_disable_cc (err_msg);
 
-  /* Clean up flying widgets before terminating Gtk */
-  script_fu_cleanup_widgets(script);
-
-  gtk_main_quit ();
+  script_fu_running = FALSE;
 
   g_free (command);
+
+  /*  Closing the dialog ends its main loop (script_fu_close_callback)  */
+  gtk_window_destroy (GTK_WINDOW (dlg));
 }
 
 static void
 script_fu_close_callback (GtkWidget *widget,
 			  gpointer   data)
 {
-  if (sf_interface.script != NULL)
-    script_fu_cleanup_widgets(sf_interface.script);
-
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -1092,7 +1064,7 @@ script_fu_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -1102,82 +1074,38 @@ static void
 script_fu_preview_callback (GtkWidget *widget,
 			    gpointer   data)
 {
-  GtkColorSelectionDialog *csd;
   SFColor *color;
+  guchar   rgb[3];
+  GtkRoot *root;
 
   color = (SFColor *) data;
-  color->old_color[0] = color->color[0];
-  color->old_color[1] = color->color[1];
-  color->old_color[2] = color->color[2];
-      
-  if (!color->dialog)
-    {
-      color->dialog = gtk_color_selection_dialog_new ("Script-Fu Color Picker");
-      csd = GTK_COLOR_SELECTION_DIALOG (color->dialog);
 
-      gtk_widget_destroy (csd->help_button);
+  rgb[0] = (guchar) (color->color[0] * 255.999);
+  rgb[1] = (guchar) (color->color[1] * 255.999);
+  rgb[2] = (guchar) (color->color[2] * 255.999);
 
-      gtk_signal_connect_object (GTK_OBJECT (csd->ok_button), "clicked",
-				 (GtkSignalFunc) gtk_widget_hide,
-				 GTK_OBJECT (color->dialog));
-      gtk_signal_connect (GTK_OBJECT (csd), "delete_event",
-			  (GtkSignalFunc) script_fu_preview_delete,
-			  color);
-      gtk_signal_connect (GTK_OBJECT (csd->cancel_button), "clicked",
-			  (GtkSignalFunc) script_fu_preview_cancel,
-			  color);
-      gtk_signal_connect (GTK_OBJECT (csd->colorsel), "color_changed",
-			  (GtkSignalFunc) script_fu_preview_changed,
-			  color);
+  root = gtk_widget_get_root (widget);
 
-      /* call here so the old color is set */
-      gtk_color_selection_set_color (GTK_COLOR_SELECTION (csd->colorsel),
-				     color->color);
-    }
-  else
-    csd = GTK_COLOR_SELECTION_DIALOG (color->dialog);
-
-  gtk_color_selection_set_color (GTK_COLOR_SELECTION (csd->colorsel),
-				 color->color);
-
-  gtk_window_position (GTK_WINDOW (color->dialog), GTK_WIN_POS_MOUSE);
-  gtk_widget_show (color->dialog);
+  gimp_color_dialog_run (GTK_IS_WINDOW (root) ? GTK_WINDOW (root) : NULL,
+			 "Script-Fu Color Picker", rgb,
+			 script_fu_color_chosen, color);
 }
 
 static void
-script_fu_preview_changed (GtkWidget *widget,
-			   gpointer data)
-{
-  SFColor *color;
-
-  color = (SFColor *) data;
-  gtk_color_selection_get_color (GTK_COLOR_SELECTION (GTK_COLOR_SELECTION_DIALOG (color->dialog)->colorsel),
-				 color->color);
-  script_fu_color_preview (color->preview, color->color);
-}
-
-static void
-script_fu_preview_cancel (GtkWidget *widget,
-			  gpointer data)
+script_fu_color_chosen (const guchar *rgb,
+			gpointer      data)
 {
   SFColor *color;
 
   color = (SFColor *) data;
 
-  gtk_widget_hide(color->dialog);
+  /*  The dialog the button was in may be gone already  */
+  if (color->preview == NULL)
+    return;
 
-  color->color[0] = color->old_color[0];
-  color->color[1] = color->old_color[1];
-  color->color[2] = color->old_color[2];
+  color->color[0] = rgb[0] / 255.0;
+  color->color[1] = rgb[1] / 255.0;
+  color->color[2] = rgb[2] / 255.0;
 
   script_fu_color_preview (color->preview, color->color);
-}
-
-static gint
-script_fu_preview_delete (GtkWidget *widget,
-			  GdkEvent *event,
-			  gpointer data)
-{
-  script_fu_preview_cancel (widget, data);
-  return TRUE;
 }

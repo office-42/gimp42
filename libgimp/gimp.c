@@ -24,21 +24,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/time.h>
-#include <sys/param.h>
+
+#include <glib.h>
+
+#ifdef G_OS_WIN32
+#include <windows.h>
+#include <io.h>
+#include <fcntl.h>
+#else
 #include <unistd.h>
-
-#ifdef HAVE_IPC_H
-#include <sys/ipc.h>
-#endif
-
-#ifdef HAVE_SHM_H
-#include <sys/shm.h>
-#endif
-
-#ifdef HAVE_SYS_SELECT_H
-#include <sys/select.h>
 #endif
 
 #include "gimp.h"
@@ -52,17 +46,20 @@ void gimp_extension_process (guint timeout);
 void gimp_extension_ack     (void);
 
 static RETSIGTYPE gimp_signal        (int signum);
-static int        gimp_write         (int fd, guint8 *buf, gulong count);
-static int        gimp_flush         (int fd);
+static int        gimp_write         (GIOChannel *channel, guint8 *buf, gulong count);
+static int        gimp_flush         (GIOChannel *channel);
 static void       gimp_loop          (void);
 static void       gimp_config        (GPConfig *config);
 static void       gimp_proc_run      (GPProcRun *proc_run);
 static void       gimp_temp_proc_run (GPProcRun *proc_run);
-static void       gimp_message_func  (char *str);
+static void       gimp_message_func  (const gchar    *log_domain,
+				      GLogLevelFlags  log_level,
+				      const gchar    *message,
+				      gpointer        data);
 
 
-int _readfd = 0;
-int _writefd = 0;
+GIOChannel *_readchannel = NULL;
+GIOChannel *_writechannel = NULL;
 int _shm_ID = -1;
 guchar *_shm_addr = NULL;
 
@@ -96,17 +93,33 @@ gimp_main (int   argc,
 
   progname = argv[0];
 
-  signal (SIGHUP, gimp_signal);
   signal (SIGINT, gimp_signal);
-  signal (SIGQUIT, gimp_signal);
-  signal (SIGBUS, gimp_signal);
   signal (SIGSEGV, gimp_signal);
-  signal (SIGPIPE, gimp_signal);
   signal (SIGTERM, gimp_signal);
   signal (SIGFPE, gimp_signal);
+#ifndef G_OS_WIN32
+  signal (SIGHUP, gimp_signal);
+  signal (SIGQUIT, gimp_signal);
+  signal (SIGBUS, gimp_signal);
+  signal (SIGPIPE, gimp_signal);
+#endif
 
-  _readfd = atoi (argv[2]);
-  _writefd = atoi (argv[3]);
+#ifdef G_OS_WIN32
+  /*  On Windows the GIMP hands over the pipe ends as inherited HANDLEs,
+   *  which become C runtime descriptors here.
+   */
+  _readchannel = g_io_channel_win32_new_fd
+    (_open_osfhandle ((intptr_t) g_ascii_strtoll (argv[2], NULL, 10), _O_BINARY));
+  _writechannel = g_io_channel_win32_new_fd
+    (_open_osfhandle ((intptr_t) g_ascii_strtoll (argv[3], NULL, 10), _O_BINARY));
+#else
+  _readchannel = g_io_channel_unix_new (atoi (argv[2]));
+  _writechannel = g_io_channel_unix_new (atoi (argv[3]));
+#endif
+
+  g_io_channel_set_encoding (_readchannel, NULL, NULL);
+  g_io_channel_set_encoding (_writechannel, NULL, NULL);
+  g_io_channel_set_buffered (_writechannel, FALSE);
 
   gp_init ();
   wire_set_writer (gimp_write);
@@ -120,7 +133,7 @@ gimp_main (int   argc,
       return 0;
     }
 
-  g_set_message_handler ((GPrintFunc) gimp_message_func);
+  g_log_set_handler (NULL, G_LOG_LEVEL_MESSAGE, gimp_message_func, NULL);
 
   temp_proc_ht = g_hash_table_new (&g_str_hash, &g_str_equal);
 
@@ -134,12 +147,7 @@ gimp_quit ()
   if (PLUG_IN_INFO.quit_proc)
     (* PLUG_IN_INFO.quit_proc) ();
 
-#ifdef HAVE_SHM_H
-  if ((_shm_ID != -1) && _shm_addr)
-    shmdt ((char*) _shm_addr);
-#endif
-
-  gp_quit_write (_writefd);
+  gp_quit_write (_writechannel);
   exit (0);
 }
 
@@ -231,9 +239,12 @@ gimp_message (char *message)
 }
 
 static void
-gimp_message_func (char *str)
+gimp_message_func (const gchar    *log_domain,
+		   GLogLevelFlags  log_level,
+		   const gchar    *message,
+		   gpointer        data)
 {
-  gimp_message (str);
+  gimp_message ((char *) message);
 }
 
 
@@ -433,7 +444,7 @@ gimp_install_procedure (char     *name,
   proc_install.params = (GPParamDef*) params;
   proc_install.return_vals = (GPParamDef*) return_vals;
 
-  if (!gp_proc_install_write (_writefd, &proc_install))
+  if (!gp_proc_install_write (_writechannel, &proc_install))
     gimp_quit ();
 }
 
@@ -468,7 +479,7 @@ gimp_uninstall_temp_proc (char *name)
 
   proc_uninstall.name = name;
 
-  if (!gp_proc_uninstall_write (_writefd, &proc_uninstall))
+  if (!gp_proc_uninstall_write (_writechannel, &proc_uninstall))
     gimp_quit ();
   g_hash_table_remove (temp_proc_ht, (gpointer) name);
 }
@@ -690,9 +701,9 @@ gimp_run_procedure (char *name,
 
   va_end (args);
 
-  if (!gp_proc_run_write (_writefd, &proc_run))
+  if (!gp_proc_run_write (_writechannel, &proc_run))
     gimp_quit ();
-  if (!wire_read_msg (_readfd, &msg))
+  if (!wire_read_msg (_readchannel, &msg))
     gimp_quit ();
 
   if (msg.type != GP_PROC_RETURN)
@@ -736,9 +747,9 @@ gimp_run_procedure2 (char   *name,
   proc_run.nparams = nparams;
   proc_run.params = (GPParam *) params;
 
-  if (!gp_proc_run_write (_writefd, &proc_run))
+  if (!gp_proc_run_write (_writechannel, &proc_run))
     gimp_quit ();
-  if (!wire_read_msg (_readfd, &msg))
+  if (!wire_read_msg (_readchannel, &msg))
     gimp_quit ();
 
   if (msg.type != GP_PROC_RETURN)
@@ -801,14 +812,17 @@ gimp_color_cube ()
 gchar*
 gimp_gtkrc ()
 {
-  static char filename[MAXPATHLEN];
-  char *home_dir;
+  static gchar *filename = NULL;
 
-  home_dir = getenv ("HOME");
-  if (!home_dir)
-    return NULL;
-
-  sprintf (filename, "%s/%s/gtkrc", home_dir, GIMPDIR);
+  if (!filename)
+    {
+#ifdef G_OS_WIN32
+      filename = g_build_filename (g_get_user_config_dir (), GIMPDIR,
+				   "gtkrc", NULL);
+#else
+      filename = g_build_filename (g_get_home_dir (), GIMPDIR, "gtkrc", NULL);
+#endif
+    }
 
   return filename;
 }
@@ -817,26 +831,31 @@ void
 gimp_extension_process (guint timeout)
 {
   WireMessage msg;
-  fd_set readfds;
+  GPollFD pollfd;
   int select_val;
-  struct timeval tv;
-  struct timeval *tvp;
 
-  if (timeout)
-    {
-      tv.tv_sec = timeout / 1000;
-      tv.tv_usec = timeout % 1000;
-      tvp = &tv;
-    }
+  /*  Anything already read into the channel's buffer is a message
+   *  waiting; polling the pipe underneath would not see it.
+   */
+  if (g_io_channel_get_buffer_condition (_readchannel) & G_IO_IN)
+    select_val = 1;
   else
-    tvp = NULL;
-
-  FD_ZERO (&readfds);
-  FD_SET (_readfd, &readfds);
-
-  if ((select_val = select (FD_SETSIZE, &readfds, NULL, NULL, tvp)) > 0)
     {
-      if (!wire_read_msg (_readfd, &msg))
+#ifdef G_OS_WIN32
+      g_io_channel_win32_make_pollfd (_readchannel, G_IO_IN | G_IO_PRI,
+				      &pollfd);
+#else
+      pollfd.fd = g_io_channel_unix_get_fd (_readchannel);
+      pollfd.events = G_IO_IN | G_IO_PRI;
+#endif
+      pollfd.revents = 0;
+
+      select_val = g_poll (&pollfd, 1, timeout ? (gint) timeout : -1);
+    }
+
+  if (select_val > 0)
+    {
+      if (!wire_read_msg (_readchannel, &msg))
 	gimp_quit ();
 
       switch (msg.type)
@@ -873,7 +892,7 @@ gimp_extension_process (guint timeout)
     }
   else if (select_val == -1)
     {
-      perror ("gimp_process");
+      g_printerr ("gimp_process: %s\n", g_strerror (errno));
       gimp_quit ();
     }
 }
@@ -882,7 +901,7 @@ void
 gimp_extension_ack ()
 {
   /*  Send an extension initialization acknowledgement  */
-  if (! gp_extension_ack_write (_writefd))
+  if (! gp_extension_ack_write (_writechannel))
     gimp_quit ();
 }
 
@@ -892,27 +911,19 @@ gimp_signal (int signum)
   static int caught_fatal_sig = 0;
 
   if (caught_fatal_sig)
-    kill (getpid (), signum);
+    {
+      signal (signum, SIG_DFL);
+      raise (signum);
+    }
   caught_fatal_sig = 1;
 
   fprintf (stderr, "\n%s: %s caught\n", progname, g_strsignal (signum));
-
-  switch (signum)
-    {
-    case SIGBUS:
-    case SIGSEGV:
-    case SIGFPE:
-      g_on_error_query (progname);
-      break;
-    default:
-      break;
-    }
 
   gimp_quit ();
 }
 
 static int
-gimp_write (int fd, guint8 *buf, gulong count)
+gimp_write (GIOChannel *channel, guint8 *buf, gulong count)
 {
   gulong bytes;
 
@@ -923,7 +934,7 @@ gimp_write (int fd, guint8 *buf, gulong count)
 	  bytes = WRITE_BUFFER_SIZE - write_buffer_index;
 	  memcpy (&write_buffer[write_buffer_index], buf, bytes);
 	  write_buffer_index += bytes;
-	  if (!wire_flush (fd))
+	  if (!wire_flush (channel))
 	    return FALSE;
 	}
       else
@@ -941,10 +952,12 @@ gimp_write (int fd, guint8 *buf, gulong count)
 }
 
 static int
-gimp_flush (int fd)
+gimp_flush (GIOChannel *channel)
 {
-  int count;
-  int bytes;
+  GIOStatus status;
+  GError   *error = NULL;
+  gsize     count;
+  gsize     bytes;
 
   if (write_buffer_index > 0)
     {
@@ -952,11 +965,18 @@ gimp_flush (int fd)
       while (count != write_buffer_index)
         {
 	  do {
-	    bytes = write (fd, &write_buffer[count], (write_buffer_index - count));
-	  } while ((bytes == -1) && (errno == EAGAIN));
+	    bytes = 0;
+	    status = g_io_channel_write_chars (channel,
+					       (gchar *) &write_buffer[count],
+					       (write_buffer_index - count),
+					       &bytes, &error);
+	  } while (status == G_IO_STATUS_AGAIN);
 
-	  if (bytes == -1)
-	    return FALSE;
+	  if (status != G_IO_STATUS_NORMAL)
+	    {
+	      g_clear_error (&error);
+	      return FALSE;
+	    }
 
           count += bytes;
         }
@@ -974,7 +994,7 @@ gimp_loop ()
 
   while (1)
     {
-      if (!wire_read_msg (_readfd, &msg))
+      if (!wire_read_msg (_readchannel, &msg))
 	gimp_quit ();
 
       switch (msg.type)
@@ -1042,15 +1062,10 @@ gimp_config (GPConfig *config)
   _color_cube[2] = config->color_cube[2];
   _color_cube[3] = config->color_cube[3];
 
-#ifdef HAVE_SHM_H
-  if (_shm_ID != -1)
-    {
-      _shm_addr = (guchar*) shmat (_shm_ID, 0, 0);
-
-      if (_shm_addr == (guchar*) -1)
-	g_error ("could not attach to gimp shared memory segment\n");
-    }
-#endif
+  /*  Tiles always travel over the pipe; there is no shared memory
+   *  segment to attach to.
+   */
+  _shm_ID = -1;
 }
 
 static void
@@ -1072,7 +1087,7 @@ gimp_proc_run (GPProcRun *proc_run)
       proc_return.nparams = nreturn_vals;
       proc_return.params = (GPParam*) return_vals;
 
-      if (!gp_proc_return_write (_writefd, &proc_return))
+      if (!gp_proc_return_write (_writechannel, &proc_return))
 	gimp_quit ();
     }
 }
@@ -1099,7 +1114,7 @@ gimp_temp_proc_run (GPProcRun *proc_run)
       proc_return.nparams = nreturn_vals;
       proc_return.params = (GPParam*) return_vals;
 
-      if (!gp_temp_proc_return_write (_writefd, &proc_return))
+      if (!gp_temp_proc_return_write (_writechannel, &proc_return))
 	gimp_quit ();
     }
 }

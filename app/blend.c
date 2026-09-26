@@ -135,10 +135,10 @@ static void   supersample_toggle_update (GtkWidget *, gpointer);
 static void   max_depth_scale_update    (GtkAdjustment *, int *);
 static void   threshold_scale_update    (GtkAdjustment *, double *);
 
-static void   blend_button_press            (Tool *, GdkEventButton *, gpointer);
-static void   blend_button_release          (Tool *, GdkEventButton *, gpointer);
-static void   blend_motion                  (Tool *, GdkEventMotion *, gpointer);
-static void   blend_cursor_update           (Tool *, GdkEventMotion *, gpointer);
+static void   blend_button_press            (Tool *, GimpButtonEvent *, gpointer);
+static void   blend_button_release          (Tool *, GimpButtonEvent *, gpointer);
+static void   blend_motion                  (Tool *, GimpMotionEvent *, gpointer);
+static void   blend_cursor_update           (Tool *, GimpMotionEvent *, gpointer);
 static void   blend_control                 (Tool *, int, gpointer);
 
 static void   blend                         (GImage *gimage, GimpDrawable *drawable,
@@ -243,15 +243,15 @@ static void
 blend_scale_update (GtkAdjustment *adjustment,
 		    double        *scale_val)
 {
-  *scale_val = adjustment->value;
+  *scale_val = gtk_adjustment_get_value (adjustment);
 }
 
 static void
 gradient_type_callback (GtkWidget *w,
 			gpointer   client_data)
 {
-  blend_options->gradient_type = (GradientType) client_data;
-  gtk_widget_set_sensitive (blend_options->repeat_mode_menu, 
+  blend_options->gradient_type = (GradientType) GPOINTER_TO_INT (client_data);
+  gtk_widget_set_sensitive (blend_options->repeat_mode_menu,
 			    (blend_options->gradient_type < 6));
 }
 
@@ -259,28 +259,28 @@ static void
 blend_mode_callback (GtkWidget *w,
 		     gpointer   client_data)
 {
-  blend_options->blend_mode = (BlendMode) client_data;
+  blend_options->blend_mode = (BlendMode) GPOINTER_TO_INT (client_data);
 }
 
 static void
 paint_mode_callback (GtkWidget *w,
 		     gpointer   client_data)
 {
-  blend_options->paint_mode = (long) client_data;
+  blend_options->paint_mode = GPOINTER_TO_INT (client_data);
 }
 
 static void
 repeat_type_callback(GtkWidget *widget,
 		     gpointer   client_data)
 {
-  blend_options->repeat = (RepeatMode) client_data;
+  blend_options->repeat = (RepeatMode) GPOINTER_TO_INT (client_data);
 }
 
 static void
 supersample_toggle_update(GtkWidget *widget,
 			  gpointer   client_data)
 {
-  if (GTK_TOGGLE_BUTTON(widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     {
       blend_options->supersample = TRUE;
 
@@ -298,14 +298,14 @@ static void
 max_depth_scale_update(GtkAdjustment *adjustment,
 		       int           *scale_val)
 {
-  *scale_val = (int) adjustment->value;
+  *scale_val = (int) gtk_adjustment_get_value (adjustment);
 }
 
 static void
 threshold_scale_update(GtkAdjustment *adjustment,
 		       double        *scale_val)
 {
-  *scale_val = adjustment->value;
+  *scale_val = gtk_adjustment_get_value (adjustment);
 }
 
 static BlendOptions *
@@ -316,22 +316,18 @@ create_blend_options ()
   GtkWidget *frame;
   GtkWidget *label;
   GtkWidget *bm_option_menu;
-  GtkWidget *bm_menu;
   GtkWidget *pm_option_menu;
-  GtkWidget *pm_menu;
   GtkWidget *gt_option_menu;
-  GtkWidget *gt_menu;
   GtkWidget *rt_option_menu;
-  GtkWidget *rt_menu;
   GtkWidget *opacity_scale;
   GtkWidget *table;
   GtkWidget *offset_scale;
-  GtkObject *opacity_scale_data;
-  GtkObject *offset_scale_data;
+  GtkAdjustment *opacity_scale_data;
+  GtkAdjustment *offset_scale_data;
   GtkWidget *button;
-  GtkObject *depth_scale_data;
+  GtkAdjustment *depth_scale_data;
   GtkWidget *depth_scale;
-  GtkObject *threshold_scale_data;
+  GtkAdjustment *threshold_scale_data;
   GtkWidget *threshold_scale;
 
   /*  the new options structure  */
@@ -347,190 +343,139 @@ create_blend_options ()
   options->threshold     = 0.2;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 2);
+  vbox = gimp_vbox_new (FALSE, 2);
 
   /*  the main label  */
   label = gtk_label_new ("Blend Options");
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_box_pack_start (vbox, label, FALSE, FALSE, 0);
 
   /*  the table  */
-  table = gtk_table_new (6, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 2);
-  gtk_box_pack_start(GTK_BOX(vbox), table, TRUE, TRUE, 0);
+  table = gimp_table_new (6, 2, FALSE);
+  gimp_container_set_border_width (table, 2);
+  gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
   /*  the opacity scale  */
   label = gtk_label_new ("Opacity:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 1.0);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 0, 2);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 1.0);
+  gimp_table_attach (table, label, 0, 1, 0, 1,
+		     GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 0, 2);
 
   opacity_scale_data = gtk_adjustment_new (100.0, 0.0, 100.0, 1.0, 1.0, 0.0);
-  opacity_scale = gtk_hscale_new (GTK_ADJUSTMENT (opacity_scale_data));
-  gtk_table_attach (GTK_TABLE (table), opacity_scale, 1, 2, 0, 1,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL, GTK_SHRINK, 4, 2);
-  gtk_scale_set_value_pos (GTK_SCALE (opacity_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (opacity_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (opacity_scale_data), "value_changed",
-		      (GtkSignalFunc) blend_scale_update,
-		      &options->opacity);
-  gtk_widget_show (opacity_scale);
+  opacity_scale = gimp_hscale_new (opacity_scale_data, 1);
+  gimp_table_attach (table, opacity_scale, 1, 2, 0, 1,
+		     GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 4, 2);
+  g_signal_connect (opacity_scale_data, "value-changed",
+		    G_CALLBACK (blend_scale_update),
+		    &options->opacity);
 
   /*  the offset scale  */
   label = gtk_label_new ("Offset:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 1.0);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 0, 2);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 1.0);
+  gimp_table_attach (table, label, 0, 1, 1, 2,
+		     GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 0, 2);
 
   offset_scale_data = gtk_adjustment_new (0.0, 0.0, 100.0, 1.0, 1.0, 0.0);
-  offset_scale = gtk_hscale_new (GTK_ADJUSTMENT (offset_scale_data));
-  gtk_table_attach (GTK_TABLE (table), offset_scale, 1, 2, 1, 2,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL, GTK_SHRINK, 4, 2);
-  gtk_scale_set_value_pos (GTK_SCALE (offset_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (offset_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (offset_scale_data), "value_changed",
-		      (GtkSignalFunc) blend_scale_update,
-		      &options->offset);
-  gtk_widget_show (offset_scale);
+  offset_scale = gimp_hscale_new (offset_scale_data, 1);
+  gimp_table_attach (table, offset_scale, 1, 2, 1, 2,
+		     GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 4, 2);
+  g_signal_connect (offset_scale_data, "value-changed",
+		    G_CALLBACK (blend_scale_update),
+		    &options->offset);
 
   /*  the paint mode menu  */
   label = gtk_label_new ("Mode:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 2, 3,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 0, 2);
-  pm_menu = create_paint_mode_menu (paint_mode_callback);
-  pm_option_menu = gtk_option_menu_new ();
-  gtk_table_attach (GTK_TABLE (table), pm_option_menu, 1, 2, 2, 3,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL, GTK_SHRINK, 4, 2);
-
-  gtk_widget_show (label);
-  gtk_widget_show (pm_option_menu);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 2, 3,
+		     GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 0, 2);
+  pm_option_menu = create_paint_mode_menu (paint_mode_callback);
+  gimp_table_attach (table, pm_option_menu, 1, 2, 2, 3,
+		     GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 4, 2);
 
   /*  the blend mode menu  */
   label = gtk_label_new ("Blend:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 3, 4,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 0, 2);
-  bm_menu = build_menu (blend_option_items, NULL);
-  bm_option_menu = gtk_option_menu_new ();
-  gtk_table_attach (GTK_TABLE (table), bm_option_menu, 1, 2, 3, 4,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL, GTK_SHRINK, 4, 2);
-
-  gtk_widget_show (label);
-  gtk_widget_show (bm_option_menu);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 3, 4,
+		     GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 0, 2);
+  bm_option_menu = build_menu (blend_option_items, NULL);
+  gimp_table_attach (table, bm_option_menu, 1, 2, 3, 4,
+		     GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 4, 2);
 
   /*  the gradient type menu  */
   label = gtk_label_new ("Gradient:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 4, 5,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 0, 2);
-  gt_menu = build_menu (gradient_option_items, NULL);
-  gt_option_menu = gtk_option_menu_new ();
-  gtk_table_attach (GTK_TABLE (table), gt_option_menu, 1, 2, 4, 5,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL, GTK_SHRINK, 4, 2);
-
-  gtk_widget_show (label);
-  gtk_widget_show (gt_option_menu);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 4, 5,
+		     GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 0, 2);
+  gt_option_menu = build_menu (gradient_option_items, NULL);
+  gimp_table_attach (table, gt_option_menu, 1, 2, 4, 5,
+		     GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 4, 2);
 
   /* the repeat option */
 
-  label = gtk_label_new("Repeat:");
-  gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
-  gtk_table_attach(GTK_TABLE(table), label, 0, 1, 5, 6,
-		   GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 0, 2);
-  rt_menu = build_menu(repeat_option_items, NULL);
-  rt_option_menu = gtk_option_menu_new();
-  gtk_table_attach(GTK_TABLE(table), rt_option_menu, 1, 2, 5, 6,
-		   GTK_EXPAND | GTK_SHRINK | GTK_FILL, GTK_SHRINK, 4, 2);
-  gtk_widget_show(label);
-  gtk_widget_show(rt_option_menu);
+  label = gtk_label_new ("Repeat:");
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 5, 6,
+		     GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 0, 2);
+  rt_option_menu = build_menu (repeat_option_items, NULL);
+  gimp_table_attach (table, rt_option_menu, 1, 2, 5, 6,
+		     GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 4, 2);
 
   options->repeat_mode_menu = rt_option_menu;
 
-  /* show the whole table */
-
-  gtk_widget_show (table);
-
   /* supersampling toggle */
 
-  button = gtk_check_button_new_with_label("Adaptive supersampling");
-  gtk_box_pack_start(GTK_BOX(vbox), button, FALSE, FALSE, 0);
-  gtk_signal_connect(GTK_OBJECT(button), "toggled",
-		     (GtkSignalFunc) supersample_toggle_update,
-		     NULL);
-  gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(button), FALSE);
-  gtk_widget_show(button);
+  button = gtk_check_button_new_with_label ("Adaptive supersampling");
+  gimp_box_pack_start (vbox, button, FALSE, FALSE, 0);
+  g_signal_connect (button, "toggled",
+		    G_CALLBACK (supersample_toggle_update),
+		    NULL);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (button), FALSE);
 
   /* frame for supersampling options */
 
-  frame = gtk_frame_new(NULL);
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start(GTK_BOX(vbox), frame, TRUE, TRUE, 0);
+  frame = gimp_frame_new (NULL);
+  gimp_box_pack_start (vbox, frame, TRUE, TRUE, 0);
 
   /* table for supersamplign options */
 
-  table = gtk_table_new(2, 2, FALSE);
-  gtk_container_border_width(GTK_CONTAINER(table), 2);
-  gtk_container_add(GTK_CONTAINER(frame), table);
+  table = gimp_table_new (2, 2, FALSE);
+  gimp_container_set_border_width (table, 2);
+  gtk_frame_set_child (GTK_FRAME (frame), table);
 
   /* max depth scale */
 
-  label = gtk_label_new("Max depth:");
-  gtk_misc_set_alignment(GTK_MISC(label), 0.0, 1.0);
-  gtk_table_attach(GTK_TABLE(table), label, 0, 1, 0, 1,
-		   GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 0, 2);
-  gtk_widget_show(label);
+  label = gtk_label_new ("Max depth:");
+  gimp_misc_set_alignment (label, 0.0, 1.0);
+  gimp_table_attach (table, label, 0, 1, 0, 1,
+		     GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 0, 2);
 
-  depth_scale_data = gtk_adjustment_new(3.0, 1.0, 10.0, 1.0, 1.0, 1.0);
-  depth_scale = gtk_hscale_new(GTK_ADJUSTMENT(depth_scale_data));
-  gtk_scale_set_digits(GTK_SCALE(depth_scale), 0);
-  gtk_table_attach(GTK_TABLE(table), depth_scale, 1, 2, 0, 1,
-		   GTK_EXPAND | GTK_SHRINK | GTK_FILL, GTK_SHRINK, 4, 2);
-  gtk_scale_set_value_pos(GTK_SCALE(depth_scale), GTK_POS_TOP);
-  gtk_signal_connect(GTK_OBJECT(depth_scale_data), "value_changed",
-		     (GtkSignalFunc) max_depth_scale_update,
-		     &options->max_depth);
-  gtk_widget_show(depth_scale);
+  depth_scale_data = gtk_adjustment_new (3.0, 1.0, 10.0, 1.0, 1.0, 1.0);
+  depth_scale = gimp_hscale_new (depth_scale_data, 0);
+  gimp_table_attach (table, depth_scale, 1, 2, 0, 1,
+		     GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 4, 2);
+  g_signal_connect (depth_scale_data, "value-changed",
+		    G_CALLBACK (max_depth_scale_update),
+		    &options->max_depth);
 
   /* threshold scale */
 
-  label = gtk_label_new("Threshold:");
-  gtk_misc_set_alignment(GTK_MISC(label), 0.0, 1.0);
-  gtk_table_attach(GTK_TABLE(table), label, 0, 1, 1, 2,
-		   GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 0, 2);
-  gtk_widget_show(label);
+  label = gtk_label_new ("Threshold:");
+  gimp_misc_set_alignment (label, 0.0, 1.0);
+  gimp_table_attach (table, label, 0, 1, 1, 2,
+		     GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 0, 2);
 
-  threshold_scale_data = gtk_adjustment_new(0.2, 0.0, 4.0, 0.01, 0.01, 0.0);
-  threshold_scale = gtk_hscale_new(GTK_ADJUSTMENT(threshold_scale_data));
-  gtk_scale_set_digits(GTK_SCALE(threshold_scale), 2);
-  gtk_table_attach(GTK_TABLE(table), threshold_scale, 1, 2, 1, 2,
-		   GTK_EXPAND | GTK_SHRINK | GTK_FILL, GTK_SHRINK, 4, 2);
-  gtk_scale_set_value_pos(GTK_SCALE(threshold_scale), GTK_POS_TOP);
-  gtk_signal_connect(GTK_OBJECT(threshold_scale_data), "value_changed",
-		     (GtkSignalFunc) threshold_scale_update,
-		     &options->threshold);
-  gtk_widget_show(threshold_scale);
+  threshold_scale_data = gtk_adjustment_new (0.2, 0.0, 4.0, 0.01, 0.01, 0.0);
+  threshold_scale = gimp_hscale_new (threshold_scale_data, 2);
+  gimp_table_attach (table, threshold_scale, 1, 2, 1, 2,
+		     GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK, 4, 2);
+  g_signal_connect (threshold_scale_data, "value-changed",
+		    G_CALLBACK (threshold_scale_update),
+		    &options->threshold);
 
-  /* show table */
-
-  gtk_widget_show(table);
-
-  /* show frame */
-
-  gtk_widget_show(frame);
-  gtk_widget_set_sensitive(frame, FALSE);
+  gtk_widget_set_sensitive (frame, FALSE);
   options->frame = frame;
 
   /*  Register this selection options widget with the main tools options dialog  */
   tools_register_options (BLEND, vbox);
-
-  /*  Post initialization  */
-  gtk_option_menu_set_menu (GTK_OPTION_MENU (bm_option_menu), bm_menu);
-  gtk_option_menu_set_menu (GTK_OPTION_MENU (gt_option_menu), gt_menu);
-  gtk_option_menu_set_menu (GTK_OPTION_MENU (pm_option_menu), pm_menu);
-  gtk_option_menu_set_menu (GTK_OPTION_MENU (rt_option_menu), rt_menu);
 
   return options;
 }
@@ -538,7 +483,7 @@ create_blend_options ()
 
 static void
 blend_button_press (Tool           *tool,
-		    GdkEventButton *bevent,
+		    GimpButtonEvent *bevent,
 		    gpointer        gdisp_ptr)
 {
   GDisplay * gdisp;
@@ -566,20 +511,16 @@ blend_button_press (Tool           *tool,
   blend_tool->endy = blend_tool->starty;
 
   /*  Make the tool active and set the gdisplay which owns it  */
-  gdk_pointer_grab (gdisp->canvas->window, FALSE,
-		    GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-		    NULL, NULL, bevent->time);
-
   tool->gdisp_ptr = gdisp_ptr;
   tool->state = ACTIVE;
 
   /*  Start drawing the blend tool  */
-  draw_core_start (blend_tool->core, gdisp->canvas->window, tool);
+  draw_core_start (blend_tool->core, gdisp->canvas, tool);
 }
 
 static void
 blend_button_release (Tool           *tool,
-		      GdkEventButton *bevent,
+		      GimpButtonEvent *bevent,
 		      gpointer        gdisp_ptr)
 {
   GImage * gimage;
@@ -590,8 +531,6 @@ blend_button_release (Tool           *tool,
   gimage = ((GDisplay *) gdisp_ptr)->gimage;
   blend_tool = (BlendTool *) tool->private;
 
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
   draw_core_stop (blend_tool->core, tool);
   tool->state = INACTIVE;
 
@@ -630,7 +569,7 @@ blend_button_release (Tool           *tool,
 
 static void
 blend_motion (Tool           *tool,
-	      GdkEventMotion *mevent,
+	      GimpMotionEvent *mevent,
 	      gpointer        gdisp_ptr)
 {
   GDisplay * gdisp;
@@ -652,7 +591,7 @@ blend_motion (Tool           *tool,
 
 static void
 blend_cursor_update (Tool           *tool,
-		     GdkEventMotion *mevent,
+		     GimpMotionEvent *mevent,
 		     gpointer        gdisp_ptr)
 {
   GDisplay * gdisp;
@@ -662,10 +601,10 @@ blend_cursor_update (Tool           *tool,
   switch (drawable_type (gimage_active_drawable (gdisp->gimage)))
     {
     case INDEXED_GIMAGE: case INDEXEDA_GIMAGE:
-      gdisplay_install_tool_cursor (gdisp, GDK_TOP_LEFT_ARROW);
+      gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TOP_LEFT_ARROW);
       break;
     default:
-      gdisplay_install_tool_cursor (gdisp, GDK_TCROSS);
+      gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TCROSS);
       break;
     }
 }
@@ -686,24 +625,24 @@ blend_draw (Tool *tool)
 			     &tx2, &ty2, 1);
 
   /*  Draw start target  */
-  gdk_draw_line (blend_tool->core->win, blend_tool->core->gc,
-		 tx1 - (TARGET_WIDTH >> 1), ty1,
+  draw_core_line (blend_tool->core,
+		  tx1 - (TARGET_WIDTH >> 1), ty1,
 		 tx1 + (TARGET_WIDTH >> 1), ty1);
-  gdk_draw_line (blend_tool->core->win, blend_tool->core->gc,
-		 tx1, ty1 - (TARGET_HEIGHT >> 1),
+  draw_core_line (blend_tool->core,
+		  tx1, ty1 - (TARGET_HEIGHT >> 1),
 		 tx1, ty1 + (TARGET_HEIGHT >> 1));
 
   /*  Draw end target  */
-  gdk_draw_line (blend_tool->core->win, blend_tool->core->gc,
-		 tx2 - (TARGET_WIDTH >> 1), ty2,
+  draw_core_line (blend_tool->core,
+		  tx2 - (TARGET_WIDTH >> 1), ty2,
 		 tx2 + (TARGET_WIDTH >> 1), ty2);
-  gdk_draw_line (blend_tool->core->win, blend_tool->core->gc,
-		 tx2, ty2 - (TARGET_HEIGHT >> 1),
+  draw_core_line (blend_tool->core,
+		  tx2, ty2 - (TARGET_HEIGHT >> 1),
 		 tx2, ty2 + (TARGET_HEIGHT >> 1));
 
   /*  Draw the line between the start and end coords  */
-  gdk_draw_line (blend_tool->core->win, blend_tool->core->gc,
-		 tx1, ty1, tx2, ty2);
+  draw_core_line (blend_tool->core,
+		  tx1, ty1, tx2, ty2);
 }
 
 static void

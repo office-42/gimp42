@@ -35,6 +35,16 @@ typedef void (*datafile_loader_t) (char *filename);
 
 /***** Functions *****/
 
+#include <glib.h>
+#include <time.h>
+
+/*  Splits a gimprc search path into a list of folder names (free with
+ *  datafiles_free_path).  Both ':' and ';' separate, except the colon
+ *  of a Windows drive letter.
+ */
+GList * datafiles_parse_path (const char *path_str);
+void    datafiles_free_path  (GList *path);
+
 void datafiles_read_directories(char *path_str,
 				datafile_loader_t loader_func,
 				int flags);

@@ -18,14 +18,23 @@
 #ifndef __GXIMAGE_H__
 #define __GXIMAGE_H__
 
+#include <cairo.h>
+#include <glib.h>
+
 #define GXIMAGE_WIDTH       256
 #define GXIMAGE_HEIGHT      256
+
+#define GXIMAGE_LSB_FIRST   0
+#define GXIMAGE_MSB_FIRST   1
 
 void     gximage_init           (void);
 void     gximage_free           (void);
 
-void     gximage_put            (GdkWindow *win, int x, int y, int w, int h,
-				 int xdith, int ydith);
+/*  Copies the w x h pixels at the top left of the buffer to (x, y) of
+ *  surface, a CAIRO_FORMAT_RGB24 image surface.
+ */
+void     gximage_put            (cairo_surface_t *surface,
+				 int x, int y, int w, int h);
 guchar*  gximage_get_data       (void);
 int      gximage_get_bpp        (void);
 int      gximage_get_bpl        (void);

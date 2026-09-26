@@ -20,8 +20,9 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,19 +64,19 @@ static void
 gtkW_toggle_update (GtkWidget *widget, gpointer   data);
 static GtkWidget *
 gtkW_dialog_new (char *name,
-		 GtkSignalFunc ok_callback,
-		 GtkSignalFunc close_callback);
+		 GCallback ok_callback,
+		 GCallback close_callback);
 static GtkWidget *
 gtkW_error_dialog_new (char * name);
-static GSList *
+static GtkWidget *
 gtkW_vbox_add_radio_button (GtkWidget *vbox,
 			    gchar	*name,
-			    GSList	*group,
-			    GtkSignalFunc	update,
+			    GtkWidget	*group,
+			    GCallback	update,
 			    gint	*value);
 GtkWidget *gtkW_check_button_new (GtkWidget	*parent,
 				  gchar	*name,
-				  GtkSignalFunc update,
+				  GCallback update,
 				  gint	*value);
 GtkWidget *gtkW_frame_new (GtkWidget *parent, gchar *name);
 GtkWidget *gtkW_table_new (GtkWidget *parent, gint col, gint row);
@@ -267,38 +268,30 @@ DIALOG ()
   GtkWidget	*hbox;
   GtkWidget	*vbox;
   GtkWidget	*frame;
-  GSList	*group = NULL;
-  gchar	**argv;
-  gint	argc;
+  GtkWidget	*group = NULL;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup (PLUG_IN_NAME);
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
   
   dlg = gtkW_dialog_new (PLUG_IN_NAME,
-			 (GtkSignalFunc) OK_CALLBACK,
-			 (GtkSignalFunc) gtkW_close_callback);
+			 G_CALLBACK (OK_CALLBACK),
+			 G_CALLBACK (gtkW_close_callback));
   
-  hbox = gtkW_hbox_new ((GTK_DIALOG (dlg)->vbox));
+  hbox = gtkW_hbox_new ((gimp_dialog_get_vbox (dlg)));
   frame = gtkW_frame_new (hbox, "Parameter Settings");
   /*
   table = gtkW_table_new (frame, 2, 2);
   gtkW_table_add_toggle (table, "Hold the maximal channel", 0, 2, 1,
-			 (GtkSignalFunc) gtkW_toggle_update, &VALS.max_p);
-  gtk_widget_show (table);
+			 G_CALLBACK (gtkW_toggle_update), &VALS.max_p);
   */
   vbox = gtkW_vbox_new (frame);
   group = gtkW_vbox_add_radio_button (vbox, "Hold the maximal channels", group,
-				      (GtkSignalFunc) gtkW_toggle_update,
+				      G_CALLBACK (gtkW_toggle_update),
 				      &hold_max);
   group = gtkW_vbox_add_radio_button (vbox, "Hold the minimal channels", group,
-				      (GtkSignalFunc) gtkW_toggle_update,
+				      G_CALLBACK (gtkW_toggle_update),
 				      &hold_min);
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return INTERFACE.run;
 }
@@ -309,34 +302,25 @@ ERROR_DIALOG (gint gtk_was_not_initialized, gchar *message)
   GtkWidget *dlg;
   GtkWidget *table;
   GtkWidget *label;
-  gchar	**argv;
-  gint	argc;
 
   if (gtk_was_not_initialized)
     {
-      argc = 1;
-      argv = g_new (gchar *, 1);
-      argv[0] = g_strdup (PLUG_IN_NAME);
-      gtk_init (&argc, &argv);
-      gtk_rc_parse (gimp_gtkrc ());
+      gtk_init ();
     }
   
   dlg = gtkW_error_dialog_new (PLUG_IN_NAME);
   
-  table = gtk_table_new (1,1, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), table, TRUE, TRUE, 0);
+  table = gimp_table_new (1,1, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), table, TRUE, TRUE, 0);
 
   label = gtk_label_new (message);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1, GTK_FILL|GTK_EXPAND,
+  gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_FILL|GIMP_EXPAND,
 		    0, 0, 0);
 
-  gtk_widget_show (label);
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
   
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 }
 
 static void
@@ -345,7 +329,7 @@ OK_CALLBACK (GtkWidget *widget,
 {
   VALS.max_p = hold_max;
   INTERFACE.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 /* VFtext interface functions  */
@@ -354,7 +338,7 @@ static void
 gtkW_close_callback (GtkWidget *widget,
 		     gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -365,7 +349,7 @@ gtkW_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -374,36 +358,30 @@ gtkW_toggle_update (GtkWidget *widget,
 /* gtkW is the abbreviation of gtk Wrapper */
 static GtkWidget *
 gtkW_dialog_new (char * name,
-		 GtkSignalFunc ok_callback,
-		 GtkSignalFunc close_callback)
+		 GCallback ok_callback,
+		 GCallback close_callback)
 {
   GtkWidget *dlg, *button;
   
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), name);
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) gtkW_close_callback, NULL);
+  dlg = gimp_dialog_new (name);
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (gtkW_close_callback), NULL);
 
   /* Action Area */
   button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-		      (GtkSignalFunc) ok_callback, dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
+  g_signal_connect (button, "clicked",
+		      G_CALLBACK (ok_callback), dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button,
 		      TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
   button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT(dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
+  g_signal_connect_swapped (button, "clicked",
+			     G_CALLBACK (gtk_window_destroy),
+			     dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button,
 		      TRUE, TRUE, 0);
-  gtk_widget_show (button);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
   return dlg;
 }
@@ -413,21 +391,17 @@ gtkW_error_dialog_new (char * name)
 {
   GtkWidget *dlg, *button;
   
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), name);
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) gtkW_close_callback, NULL);
+  dlg = gimp_dialog_new (name);
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (gtkW_close_callback), NULL);
 
   /* Action Area */
   button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-		      (GtkSignalFunc) gtkW_close_callback, dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
+  g_signal_connect (button, "clicked",
+		      G_CALLBACK (gtkW_close_callback), dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button,
 		      TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
   return dlg;
 }
@@ -437,9 +411,9 @@ gtkW_table_new (GtkWidget *parent, gint col, gint row)
 {
   GtkWidget	*table;
   
-  table = gtk_table_new (col,row, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (parent), table);
+  table = gimp_table_new (col,row, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (parent, table);
   return table;
 }
 
@@ -448,10 +422,9 @@ gtkW_hbox_new (GtkWidget *parent)
 {
   GtkWidget	*hbox;
   
-  hbox = gtk_hbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 5);
-  gtk_box_pack_start (GTK_BOX (parent), hbox, FALSE, TRUE, 0);
-  gtk_widget_show (hbox);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_container_set_border_width (hbox, 5);
+  gimp_box_pack_start (parent, hbox, FALSE, TRUE, 0);
 
   return hbox;
 }
@@ -461,11 +434,10 @@ gtkW_vbox_new (GtkWidget *parent)
 {
   GtkWidget *vbox;
   
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 10);
-  /* gtk_box_pack_start (GTK_BOX (parent), vbox, TRUE, TRUE, 0); */
-  gtk_container_add (GTK_CONTAINER (parent), vbox);
-  gtk_widget_show (vbox);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 10);
+  /* gimp_box_pack_start (parent, vbox, TRUE, TRUE, 0); */
+  gimp_container_add (parent, vbox);
 
   return vbox;
 }
@@ -473,18 +445,17 @@ gtkW_vbox_new (GtkWidget *parent)
 GtkWidget *
 gtkW_check_button_new (GtkWidget	*parent,
 		       gchar	*name,
-		       GtkSignalFunc update,
+		       GCallback update,
 		       gint	*value)
 {
   GtkWidget *toggle;
   
   toggle = gtk_check_button_new_with_label (name);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) update,
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (update),
 		      value);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), *value);
-  gtk_container_add (GTK_CONTAINER (parent), toggle);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), *value);
+  gimp_container_add (parent, toggle);
   return toggle;
 }
 
@@ -495,29 +466,26 @@ gtkW_frame_new (GtkWidget *parent,
   GtkWidget *frame;
   
   frame = gtk_frame_new (name);
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 5);
-  gtk_box_pack_start (GTK_BOX(parent), frame, FALSE, FALSE, 0);
-  gtk_widget_show (frame);
+  gimp_container_set_border_width (frame, 5);
+  gimp_box_pack_start (parent, frame, FALSE, FALSE, 0);
   return frame;
 }
 
-static GSList *
+static GtkWidget *
 gtkW_vbox_add_radio_button (GtkWidget *vbox,
 			    gchar	*name,
-			    GSList	*group,
-			    GtkSignalFunc	update,
+			    GtkWidget	*group,
+			    GCallback	update,
 			    gint	*value)
 {
   GtkWidget *toggle;
   
-  toggle = gtk_radio_button_new_with_label(group, name);
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) update, value);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), *value);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (group, name);
+  group = toggle;
+  gimp_box_pack_start (vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (update), value);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), *value);
   return group;
 }
 /* end of max_rgb.c */

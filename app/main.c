@@ -21,15 +21,14 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
+
+#include <glib.h>
+
+#ifdef G_OS_WIN32
+#include <windows.h>
+#endif
 
 #include "libgimp/gimpfeatures.h"
-
-#ifndef  WAIT_ANY
-#define  WAIT_ANY -1
-#endif   /*  WAIT_ANY  */
 
 #include "appenv.h"
 #include "app_procs.h"
@@ -38,7 +37,6 @@
 #include "tile.h"
 
 static RETSIGTYPE on_signal (int);
-static RETSIGTYPE on_sig_child (int);
 static void       init (void);
 
 /* GLOBAL data */
@@ -60,6 +58,60 @@ char **batch_cmds;
 static int gimp_argc;
 static char **gimp_argv;
 
+#ifdef G_OS_WIN32
+/*  The GIMP is a Windows (not console) program, so it has no console
+ *  of its own; when started from one, it writes there.
+ */
+static void
+attach_parent_console (void)
+{
+  /*  Output already going somewhere (a pipe, a file) stays there.  */
+  if (GetFileType (GetStdHandle (STD_OUTPUT_HANDLE)) != FILE_TYPE_UNKNOWN)
+    return;
+
+  if (AttachConsole (ATTACH_PARENT_PROCESS))
+    {
+      freopen ("CONOUT$", "w", stdout);
+      freopen ("CONOUT$", "w", stderr);
+    }
+}
+
+/*  The plug-ins are programs in their own folder; the DLLs they share
+ *  with the GIMP are next to gimp42.exe.  Putting that folder first on
+ *  PATH lets them find those DLLs, since they inherit the environment.
+ */
+static void
+add_program_folder_to_path (void)
+{
+  char *prefix = g_win32_get_package_installation_directory_of_module (NULL);
+  char *bindir;
+  const char *old_path;
+  char *new_path;
+
+  if (!prefix)
+    return;
+
+  bindir = g_build_filename (prefix, "bin", NULL);
+  old_path = g_getenv ("PATH");
+  new_path = old_path ? g_strconcat (bindir, G_SEARCHPATH_SEPARATOR_S, old_path, NULL)
+		      : g_strdup (bindir);
+  g_setenv ("PATH", new_path, TRUE);
+
+  g_free (new_path);
+  g_free (bindir);
+  g_free (prefix);
+}
+#endif
+
+static void
+log_message_func (const gchar    *log_domain,
+		  GLogLevelFlags  log_level,
+		  const gchar    *message,
+		  gpointer        data)
+{
+  message_func ((char *) message);
+}
+
 /*
  *  argv processing:
  *      Arguments are either switches, their associated
@@ -69,9 +121,7 @@ static char **gimp_argv;
  *      unparsed args are treated as images to load on
  *      startup.
  *
- *      The GTK switches are processed first (X switches are
- *      processed here, not by any X routines).  Then the
- *      general GIMP switches are processed.  Any args
+ *      The general GIMP switches are processed first.  Any args
  *      left are assumed to be image files the GIMP should
  *      display.
  *
@@ -86,38 +136,23 @@ main (int argc, char **argv)
   int show_version;
   int show_help;
   int i, j;
-#ifdef HAVE_PUTENV
-  gchar *display_name, *display_env;
-#endif
 
-  /* ATEXIT (g_mem_profile); */
+#ifdef G_OS_WIN32
+  attach_parent_console ();
+  add_program_folder_to_path ();
+#endif
 
   /* Initialize variables */
   prog_name = argv[0];
 
-  /* Initialize Gtk toolkit */
-  gtk_set_locale ();
-  setlocale(LC_NUMERIC, "C");  /* must use dot, not comma, as decimal separator */
-  gtk_init (&argc, &argv);
-
-#ifdef HAVE_PUTENV
-  display_name = gdk_get_display ();
-  display_env = g_new (gchar, strlen (display_name) + 9);
-  *display_env = 0;
-  strcat (display_env, "DISPLAY=");
-  strcat (display_env, display_name);
-  putenv (display_env);
-#endif
+  setlocale (LC_ALL, "");
+  setlocale (LC_NUMERIC, "C");  /* must use dot, not comma, as decimal separator */
 
   no_interface = FALSE;
   no_data = FALSE;
   no_splash = FALSE;
   no_splash_image = FALSE;
-#ifdef HAVE_SHM_H
-  use_shm = TRUE;
-#else
   use_shm = FALSE;
-#endif
   use_debug_handler = FALSE;
   console_messages = FALSE;
 
@@ -185,7 +220,7 @@ main (int argc, char **argv)
 	}
       else if (strcmp (argv[i], "--no-shm") == 0)
 	{
-	  use_shm = FALSE;
+	  /*  there is no shared memory any more; accepted for scripts  */
 	  argv[i] = NULL;
 	}
       else if (strcmp (argv[i], "--debug-handlers") == 0)
@@ -212,7 +247,7 @@ main (int argc, char **argv)
 
   if (show_help)
     {
-      g_print ("\007Usage: %s [option ...] [files ...]\n", argv[0]);
+      g_print ("Usage: %s [option ...] [files ...]\n", argv[0]);
       g_print ("Valid options are:\n");
       g_print ("  -h --help              Output this help.\n");
       g_print ("  -v --version           Output version info.\n");
@@ -222,32 +257,38 @@ main (int argc, char **argv)
       g_print ("  --verbose              Show startup messages.\n");
       g_print ("  --no-splash            Do not show the startup window.\n");
       g_print ("  --no-splash-image      Do not add an image to the startup window.\n");
-      g_print ("  --no-shm               Do not use shared memory between GIMP and its plugins.\n");
-      g_print ("  --no-xshm              Do not use the X Shared Memory extension.\n");
       g_print ("  --console-messages     Display warnings to console instead of a dialog box.\n");
-      g_print ("  --debug-handlers       Enable debugging signal handlers.\n");
-      g_print ("  --display <display>    Use the designated X display.\n\n");
-
+      g_print ("  --debug-handlers       Enable debugging signal handlers.\n\n");
     }
 
   if (show_version || show_help)
     exit (0);
 
-  g_set_message_handler ((GPrintFunc) message_func);
+  /* Initialize the GTK toolkit */
+  if (!no_interface)
+    {
+      if (!gtk_init_check ())
+	{
+	  g_printerr ("%s: cannot open a display; try --no-interface\n",
+		      prog_name);
+	  exit (1);
+	}
+    }
+
+  g_log_set_handler (NULL, G_LOG_LEVEL_MESSAGE, log_message_func, NULL);
 
   /* Handle some signals */
-  signal (SIGHUP, on_signal);
   signal (SIGINT, on_signal);
-  signal (SIGQUIT, on_signal);
   signal (SIGABRT, on_signal);
-  signal (SIGBUS, on_signal);
   signal (SIGSEGV, on_signal);
-  signal (SIGPIPE, on_signal);
   signal (SIGTERM, on_signal);
   signal (SIGFPE, on_signal);
-
-  /* Handle child exits */
-  signal (SIGCHLD, on_sig_child);
+#ifndef G_OS_WIN32
+  signal (SIGHUP, on_signal);
+  signal (SIGQUIT, on_signal);
+  signal (SIGBUS, on_signal);
+  signal (SIGPIPE, SIG_IGN);
+#endif
 
   /* Keep the command line arguments--for use in gimp_init */
   gimp_argc = argc - 1;
@@ -258,7 +299,7 @@ main (int argc, char **argv)
 
   /* Main application loop */
   if (!app_exit_finish_done ())
-    gtk_main ();
+    gimp_main_loop_run ();
 
   return 0;
 }
@@ -276,32 +317,33 @@ static RETSIGTYPE
 on_signal (int sig_num)
 {
   if (caught_fatal_sig)
-/*    raise (sig_num);*/
-    kill (getpid (), sig_num);
+    {
+      signal (sig_num, SIG_DFL);
+      raise (sig_num);
+    }
   caught_fatal_sig = 1;
 
   switch (sig_num)
     {
+#ifndef G_OS_WIN32
     case SIGHUP:
       terminate ("sighup caught");
-      break;
-    case SIGINT:
-      terminate ("sigint caught");
       break;
     case SIGQUIT:
       terminate ("sigquit caught");
       break;
-    case SIGABRT:
-      terminate ("sigabrt caught");
-      break;
     case SIGBUS:
       fatal_error ("sigbus caught");
       break;
+#endif
+    case SIGINT:
+      terminate ("sigint caught");
+      break;
+    case SIGABRT:
+      terminate ("sigabrt caught");
+      break;
     case SIGSEGV:
       fatal_error ("sigsegv caught");
-      break;
-    case SIGPIPE:
-      terminate ("sigpipe caught");
       break;
     case SIGTERM:
       terminate ("sigterm caught");
@@ -312,19 +354,5 @@ on_signal (int sig_num)
     default:
       fatal_error ("unknown signal");
       break;
-    }
-}
-
-static RETSIGTYPE
-on_sig_child (int sig_num)
-{
-  int pid;
-  int status;
-
-  while (1)
-    {
-      pid = waitpid (WAIT_ANY, &status, WNOHANG);
-      if (pid <= 0)
-	break;
     }
 }

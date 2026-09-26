@@ -33,8 +33,9 @@
 
 
 #include <stdlib.h>
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include "libgimp/gimpui.h"
 
 /* --- Typedefs --- */
 typedef struct {
@@ -53,6 +54,8 @@ static void run (char    *name,
 		 int     *nreturn_vals,
 	         GParam **return_vals);
 static gint glass_dialog (void);
+static void glass_add_scale (GtkWidget *table, gint row, const gchar *text,
+			     gint *value);
 static void glass_close_callback (GtkWidget *widget, gpointer data);
 static void glass_ok_callback (GtkWidget *widget, gpointer data);
 static void glass_scale_update (GtkAdjustment *adjustment, gpointer data);
@@ -198,121 +201,82 @@ static void run (gchar   *name,
 static gint glass_dialog ()
 {
   GtkWidget *dlg;
-  GtkWidget *label;
   GtkWidget *button;
-  GtkWidget *scale;
   GtkWidget *frame;
   GtkWidget *table;
-  GtkObject *adjustment;
-  gchar **argv;
-  gint argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("glasstile");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Glass Tile");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) glass_close_callback,
-		      NULL);
+  dlg = gimp_dialog_new ("Glass Tile");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (glass_close_callback), NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) glass_ok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (glass_ok_callback),
+			  dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  Parameter settings  */
   frame = gtk_frame_new ("Parameter Settings");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  table = gtk_table_new (2, 2, FALSE); /* table height, width */
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  table = gimp_table_new (2, 2, FALSE); /* table height, width */
+  gimp_container_set_border_width (table, 10);
+  gtk_frame_set_child (GTK_FRAME (frame), table);
 
   /* Horizontal scale - Width */
-  label = gtk_label_new ("Tile Width");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1, GTK_FILL, 0, 5, 0);
-  /* xStart, xEnd, yStart, yEnd */
-
-  adjustment = gtk_adjustment_new (gtvals.xblock, 10, 50, 1, 1, 0);
-  gtk_signal_connect (GTK_OBJECT (adjustment), "value_changed",
-		      (GtkSignalFunc) glass_scale_update,
-		      &(gtvals.xblock));
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (adjustment));
-  gtk_widget_set_usize (scale, 150, 30);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 0, 1, GTK_FILL, 0, 0, 0);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_scale_set_digits (GTK_SCALE (scale), 0);
-  gtk_scale_set_draw_value (GTK_SCALE (scale), TRUE);
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_widget_show (label);
-  gtk_widget_show (scale);
+  glass_add_scale (table, 0, "Tile Width", &gtvals.xblock);
 
   /* Horizontal scale - Height */
-  label = gtk_label_new ("Tile Height");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2, GTK_FILL, 0, 5, 0);
+  glass_add_scale (table, 1, "Tile Height", &gtvals.yblock);
 
-  adjustment = gtk_adjustment_new (gtvals.yblock, 10, 50, 1, 1, 0);
-  gtk_signal_connect (GTK_OBJECT (adjustment), "value_changed",
-		      (GtkSignalFunc) glass_scale_update,
-		      &(gtvals.yblock));
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (adjustment));
-  gtk_widget_set_usize (scale, 150, 30);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 1, 2, GTK_FILL, 0, 0, 0);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_scale_set_digits (GTK_SCALE (scale), 0);
-  gtk_scale_set_draw_value (GTK_SCALE (scale), TRUE);
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_widget_show (label);
-  gtk_widget_show (scale);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_widget_show (frame);
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
-
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return gt_int.run;
+}
+
+static void glass_add_scale (GtkWidget   *table,
+			     gint         row,
+			     const gchar *text,
+			     gint        *value)
+{
+  GtkWidget     *label;
+  GtkWidget     *scale;
+  GtkAdjustment *adjustment;
+
+  label = gtk_label_new (text);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, row, row + 1, GIMP_FILL, 0, 5, 0);
+  /* xStart, xEnd, yStart, yEnd */
+
+  adjustment = gtk_adjustment_new (*value, 10, 50, 1, 1, 0);
+  g_signal_connect (adjustment, "value-changed",
+		    G_CALLBACK (glass_scale_update), value);
+  scale = gimp_hscale_new (adjustment, 0);
+  gtk_widget_set_size_request (scale, 150, 30);
+  gimp_table_attach (table, scale, 1, 2, row, row + 1, GIMP_FILL, 0, 0, 0);
 }
 
 /*  -  Interface functions  -  */
 static void glass_close_callback (GtkWidget *widget, gpointer data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void glass_ok_callback (GtkWidget *widget, gpointer data)
 {
   gt_int.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void glass_scale_update (GtkAdjustment *adjustment, gpointer data)
 {
   gint *dptr = (gint*) data;
-  *dptr = (gint) adjustment->value;
+  *dptr = (gint) gtk_adjustment_get_value (adjustment);
 }
 
 /*  -  Filter function  -  */

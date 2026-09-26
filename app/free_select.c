@@ -51,7 +51,7 @@ struct _FreeSelectPoint
 #define YES  1
 
 /*  The global array of XPoints for drawing the polygon...  */
-static GdkPoint *         global_pts = NULL;
+static GimpPoint *         global_pts = NULL;
 static int                max_segs = 0;
 static SelectionOptions * free_options = NULL;
 
@@ -64,7 +64,7 @@ add_point (int num_pts, int x, int y)
     {
       max_segs += DEFAULT_MAX_INC;
 
-      global_pts = (GdkPoint *) g_realloc ((void *) global_pts, sizeof (GdkPoint) * max_segs);
+      global_pts = (GimpPoint *) g_realloc ((void *) global_pts, sizeof (GimpPoint) * max_segs);
 
       if (!global_pts)
 	fatal_error ("Unable to reallocate points array in free_select.");
@@ -86,21 +86,21 @@ insert_into_sorted_list (GSList *list, int x)
   GSList *rest;
 
   if (!list)
-    return g_slist_prepend (list, (gpointer) ((long) x));
+    return g_slist_prepend (list, GINT_TO_POINTER (x));
 
   while (list)
     {
       rest = g_slist_next (list);
-      if (x < (long) list->data)
+      if (x < GPOINTER_TO_INT (list->data))
 	{
 	  rest = g_slist_prepend (rest, list->data);
 	  list->next = rest;
-	  list->data = (gpointer) ((long) x);
+	  list->data = GINT_TO_POINTER (x);
 	  return orig;
 	}
       else if (!rest)
 	{
-	  g_slist_append (list, (gpointer) ((long) x));
+	  list = g_slist_append (list, GINT_TO_POINTER (x));
 	  return orig;
 	}
       list = g_slist_next (list);
@@ -209,7 +209,7 @@ scan_convert (int gimage_ID, int num_pts, FreeSelectPoint *pts,
 
       while (list)
 	{
-	  x = (long) list->data;
+	  x = GPOINTER_TO_INT (list->data);
 	  list = g_slist_next(list);
 	  if (!list)
 	      g_message ("Cannot properly scanline convert polygon!\n");
@@ -217,7 +217,7 @@ scan_convert (int gimage_ID, int num_pts, FreeSelectPoint *pts,
 	    {
 	      /*  bounds checking  */
 	      x = BOUNDS (x, 0, width);
-	      x2 = BOUNDS ((long) list->data, 0, width);
+	      x2 = BOUNDS (GPOINTER_TO_INT (list->data), 0, width);
 
 	      w = x2 - x;
 
@@ -297,7 +297,7 @@ free_select (GImage *gimage, int num_pts, FreeSelectPoint *pts, int op,
 }
 
 void
-free_select_button_press (Tool *tool, GdkEventButton *bevent,
+free_select_button_press (Tool *tool, GimpButtonEvent *bevent,
 			  gpointer gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -306,14 +306,10 @@ free_select_button_press (Tool *tool, GdkEventButton *bevent,
   gdisp = (GDisplay *) gdisp_ptr;
   free_sel = (FreeSelect *) tool->private;
 
-  gdk_pointer_grab (gdisp->canvas->window, FALSE,
-		    GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-		    NULL, NULL, bevent->time);
-
   tool->state = ACTIVE;
   tool->gdisp_ptr = gdisp_ptr;
 
-  if (bevent->state & GDK_MOD1_MASK)
+  if (bevent->state & GDK_ALT_MASK)
     {
       init_edit_selection (tool, gdisp_ptr, bevent, MaskTranslate);
       return;
@@ -339,12 +335,12 @@ free_select_button_press (Tool *tool, GdkEventButton *bevent,
   free_sel->num_pts = 1;
 
   draw_core_start (free_sel->core,
-		   gdisp->canvas->window,
+		   gdisp->canvas,
 		   tool);
 }
 
 void
-free_select_button_release (Tool *tool, GdkEventButton *bevent,
+free_select_button_release (Tool *tool, GimpButtonEvent *bevent,
 			    gpointer gdisp_ptr)
 {
   FreeSelect *free_sel;
@@ -355,8 +351,6 @@ free_select_button_release (Tool *tool, GdkEventButton *bevent,
   gdisp = (GDisplay *) gdisp_ptr;
   free_sel = (FreeSelect *) tool->private;
 
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
 
   draw_core_stop (free_sel->core, tool);
 
@@ -384,25 +378,19 @@ free_select_button_release (Tool *tool, GdkEventButton *bevent,
 }
 
 void
-free_select_motion (Tool *tool, GdkEventMotion *mevent, gpointer gdisp_ptr)
+free_select_motion (Tool *tool, GimpMotionEvent *mevent, gpointer gdisp_ptr)
 {
   FreeSelect *free_sel;
-  GDisplay *gdisp;
 
   if (tool->state != ACTIVE)
     return;
 
-  gdisp = (GDisplay *) gdisp_ptr;
   free_sel = (FreeSelect *) tool->private;
 
   if (add_point (free_sel->num_pts, mevent->x, mevent->y))
     {
-      gdk_draw_line (free_sel->core->win, free_sel->core->gc,
-		     global_pts[free_sel->num_pts - 1].x,
-		     global_pts[free_sel->num_pts - 1].y,
-		     global_pts[free_sel->num_pts].x,
-		     global_pts[free_sel->num_pts].y);
       free_sel->num_pts ++;
+      draw_core_queue_draw (free_sel->core);
     }
 }
 
@@ -431,14 +419,10 @@ void
 free_select_draw (Tool *tool)
 {
   FreeSelect * free_sel;
-  int i;
-
   free_sel = (FreeSelect *) tool->private;
 
-  for (i = 1; i < free_sel->num_pts; i++)
-    gdk_draw_line (free_sel->core->win, free_sel->core->gc,
-		   global_pts[i - 1].x, global_pts[i - 1].y,
-		   global_pts[i].x, global_pts[i].y);
+  if (free_sel->num_pts > 1)
+    draw_core_lines (free_sel->core, global_pts, free_sel->num_pts);
 }
 
 Tool *

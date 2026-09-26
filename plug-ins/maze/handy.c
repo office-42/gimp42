@@ -190,7 +190,7 @@ drawbox( GPixelRgn *dest_rgn,
      if (high_size == 0) {
 	  rowbuf = g_new(guint8, rowsize);
      } else if (rowsize > high_size) {
-	  g_realloc(rowbuf, rowsize * sizeof(guint8) );
+	  rowbuf = g_realloc(rowbuf, rowsize * sizeof(guint8) );
      }
      
      high_size = MAX(high_size, rowsize);

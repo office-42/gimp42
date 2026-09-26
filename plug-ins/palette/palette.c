@@ -10,8 +10,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
+#include <glib/gstdio.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #define PLUG_IN_NAME "plug_in_export_palette"
 
@@ -59,7 +61,7 @@ static void query () {
 
 static GStatusType export_palette(gint32 image_id);
 static void write_palette(FILE *fp, int count, guchar* rgb);
-static int palette_dialog();
+static int palette_dialog(void);
 
 /* AFAIK This should be part of libgimp (sigh) */
 
@@ -142,12 +144,14 @@ static GStatusType export_palette(gint32 image_id) {
   if (gimp_image_base_type(image_id) != 2)
     return STATUS_EXECUTION_ERROR;
 
-  if ((fp= fopen(filename, "w")) == NULL)
+  if ((fp= g_fopen(filename, "w")) == NULL)
     return STATUS_EXECUTION_ERROR;
 
   fprintf(fp, "GIMP Palette\n# Added by the Export Palette plug-in\n");
   palette= gimp_image_get_cmap(image_id, &count);
-  write_palette(fp, count, palette); 
+  write_palette(fp, count, palette);
+  fclose(fp);
+  g_free(palette);
   return STATUS_SUCCESS;
 }
 
@@ -159,57 +163,29 @@ static void write_palette(FILE *fp, int count, guchar* rgb) {
   }
 }
 
-static void palette_close(GtkWidget *widget, GtkWidget **fs) {
-    gtk_main_quit();
+static void palette_file_chosen(const gchar *name, gpointer data) {
+    if (name) {
+      g_free(filename);
+      filename= g_strdup(name);
+      running= TRUE;
+    }
+    gimp_main_loop_quit();
 }
 
-static void palette_ok(GtkWidget *widget, GtkWidget **fs) {
-    g_free(filename);
-    filename= g_strdup( gtk_file_selection_get_filename(
-                             GTK_FILE_SELECTION(fs)));
-    running= TRUE;
-    gtk_widget_destroy(GTK_WIDGET(fs));
-}
-
-static void palette_cancel(GtkWidget *widget, GtkWidget **fs) {
-    gtk_widget_destroy(GTK_WIDGET(fs));
-}
- 
-static int palette_dialog() {
-  gchar **argv;
-  gint argc;
-  GtkWidget *dialog;
+static int palette_dialog(void) {
   gchar *directory, *data;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("export_palette");
-
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
   data= gimp_gimprc_query("gimp_dir");
-  directory= g_malloc(strlen(data) + 11);
-  strcat(strcpy(directory, data), "/palettes/");
+  directory= g_build_filename(data, "palettes", NULL);
   g_free(data);
 
-  dialog= gtk_file_selection_new("Export GIMP Palette");
-  gtk_window_position (GTK_WINDOW (dialog), GTK_WIN_POS_MOUSE);
-  if (*filename == '\0')
-    gtk_file_selection_set_filename(GTK_FILE_SELECTION(dialog), directory);
-  else
-    gtk_file_selection_set_filename(GTK_FILE_SELECTION(dialog), filename);
+  gimp_file_dialog_save(NULL, "Export GIMP Palette",
+                        (filename[0] == 0) ? directory : filename,
+                        palette_file_chosen, NULL);
+  gimp_main_loop_run();
 
-  gtk_signal_connect(GTK_OBJECT(dialog), "destroy",
-                     (GtkSignalFunc) palette_close, NULL);
-  gtk_signal_connect (GTK_OBJECT (GTK_FILE_SELECTION (dialog)->ok_button),
-                      "clicked", (GtkSignalFunc) palette_ok, dialog);
-  gtk_signal_connect (GTK_OBJECT (GTK_FILE_SELECTION (dialog)->cancel_button),
-                      "clicked", (GtkSignalFunc) palette_cancel, dialog);
-
-  gtk_widget_show(dialog);
-  gtk_main();
-  gdk_flush();
-
+  g_free(directory);
   return running;
 }

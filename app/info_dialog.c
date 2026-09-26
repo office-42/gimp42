@@ -25,7 +25,7 @@
 /*  static functions  */
 static InfoField * info_field_new (InfoDialog *, char *, char *);
 static void        update_field (InfoField *);
-static gint        info_dialog_delete_callback (GtkWidget *, GdkEvent *, gpointer);
+static gboolean    info_dialog_delete_callback (GtkWindow *, gpointer);
 
 static InfoField *
 info_field_new (InfoDialog *idialog,
@@ -38,17 +38,16 @@ info_field_new (InfoDialog *idialog,
   field = (InfoField *) g_malloc (sizeof (InfoField));
 
   label = gtk_label_new (title);
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (idialog->labels), label, FALSE, FALSE, 0);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gtk_label_set_yalign (GTK_LABEL (label), 0.5);
+  gtk_box_append (GTK_BOX (idialog->labels), label);
 
   field->w = gtk_label_new (text_ptr);
-  gtk_misc_set_alignment (GTK_MISC (field->w), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (idialog->values), field->w, FALSE, FALSE, 0);
+  gtk_label_set_xalign (GTK_LABEL (field->w), 0.0);
+  gtk_label_set_yalign (GTK_LABEL (field->w), 0.5);
+  gtk_box_append (GTK_BOX (idialog->values), field->w);
 
   field->text_ptr = text_ptr;
-
-  gtk_widget_show (field->w);
-  gtk_widget_show (label);
 
   return field;
 }
@@ -56,15 +55,15 @@ info_field_new (InfoDialog *idialog,
 static void
 update_field (InfoField *field)
 {
-  gchar *old_text;
+  const gchar *old_text;
 
   /*  only update the field if its new value differs from the old  */
-  gtk_label_get (GTK_LABEL (field->w), &old_text);
+  old_text = gtk_label_get_text (GTK_LABEL (field->w));
 
   if (strcmp (old_text, field->text_ptr))
     {
       /* set the new value and update somehow */
-      gtk_label_set (GTK_LABEL (field->w), field->text_ptr);
+      gtk_label_set_text (GTK_LABEL (field->w), field->text_ptr);
     }
 }
 
@@ -81,40 +80,37 @@ info_dialog_new (char *title)
 
   idialog = (InfoDialog *) g_malloc (sizeof (InfoDialog));
   idialog->field_list = NULL;
+  idialog->user_data = NULL;
 
-  shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (shell), "info_dialog", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (shell), title);
-  gtk_widget_set_uposition (shell, info_x, info_y);
+  /*  The window position (info_x, info_y from gimprc) can no longer be
+   *  chosen by the application in GTK 4.
+   */
+  shell = gimp_dialog_new (title);
+  gtk_window_set_hide_on_close (GTK_WINDOW (shell), FALSE);
 
-  gtk_signal_connect (GTK_OBJECT (shell), "delete_event",
-		      GTK_SIGNAL_FUNC (info_dialog_delete_callback),
-		      idialog);
+  g_signal_connect (shell, "close-request",
+		    G_CALLBACK (info_dialog_delete_callback),
+		    idialog);
 
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (shell)->vbox), vbox, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (vbox, 1);
+  gimp_box_pack_start (gimp_dialog_get_vbox (shell), vbox, TRUE, TRUE, 0);
 
-  info_area = gtk_hbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (info_area), 5);
-  gtk_box_pack_start (GTK_BOX (vbox), info_area, TRUE, TRUE, 0);
+  info_area = gimp_hbox_new (FALSE, 1);
+  gimp_container_set_border_width (info_area, 5);
+  gimp_box_pack_start (vbox, info_area, TRUE, TRUE, 0);
 
-  labels = gtk_vbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (info_area), labels, TRUE, TRUE, 0);
+  labels = gimp_vbox_new (FALSE, 1);
+  gimp_box_pack_start (info_area, labels, TRUE, TRUE, 0);
 
-  values = gtk_vbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (info_area), values, TRUE, TRUE, 0);
+  values = gimp_vbox_new (FALSE, 1);
+  gimp_box_pack_start (info_area, values, TRUE, TRUE, 0);
 
   idialog->shell = shell;
   idialog->vbox = vbox;
   idialog->info_area = info_area;
   idialog->labels = labels;
   idialog->values = values;
-
-  gtk_widget_show (idialog->labels);
-  gtk_widget_show (idialog->values);
-  gtk_widget_show (idialog->info_area);
-  gtk_widget_show (idialog->vbox);
 
   return idialog;
 }
@@ -140,7 +136,7 @@ info_dialog_free (InfoDialog *idialog)
   g_slist_free (idialog->field_list);
 
   /*  Destroy the associated widgets  */
-  gtk_widget_destroy (idialog->shell);
+  gtk_window_destroy (GTK_WINDOW (idialog->shell));
 
   /*  Free the info dialog memory  */
   g_free (idialog);
@@ -166,8 +162,8 @@ info_dialog_popup (InfoDialog *idialog)
   if (!idialog)
     return;
 
-  if (!GTK_WIDGET_VISIBLE (idialog->shell))
-    gtk_widget_show (idialog->shell);
+  if (!gtk_widget_get_visible (idialog->shell))
+    gtk_window_present (GTK_WINDOW (idialog->shell));
 }
 
 void
@@ -175,9 +171,9 @@ info_dialog_popdown (InfoDialog *idialog)
 {
   if (!idialog)
     return;
-  
-  if (GTK_WIDGET_VISIBLE (idialog->shell))
-    gtk_widget_hide (idialog->shell);
+
+  if (gtk_widget_get_visible (idialog->shell))
+    gtk_widget_set_visible (idialog->shell, FALSE);
 }
 
 void
@@ -197,17 +193,11 @@ info_dialog_update (InfoDialog *idialog)
     }
 }
 
-static gint
-info_dialog_delete_callback (GtkWidget *w,
-			     GdkEvent *e,
-			     gpointer client_data)
+static gboolean
+info_dialog_delete_callback (GtkWindow *w,
+			     gpointer   client_data)
 {
   info_dialog_popdown ((InfoDialog *) client_data);
 
   return TRUE;
 }
-
-
-
-
-

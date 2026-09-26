@@ -17,6 +17,7 @@
  */
 #include <stdlib.h>
 #include <stdio.h>
+#include <glib/gstdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <dirent.h>
@@ -165,7 +166,7 @@ load_pattern (char *filename)
   pattern->mask = NULL;
 
   /*  Open the requested file  */
-  if (! (fp = fopen (filename, "r")))
+  if (! (fp = g_fopen (filename, "rb")))
     {
       free_pattern (pattern);
       return;
@@ -288,10 +289,7 @@ create_pattern_dialog ()
   else
     {
       /*  Popup the dialog  */
-      if (!GTK_WIDGET_VISIBLE (pattern_select_dialog->shell))
-	gtk_widget_show (pattern_select_dialog->shell);
-      else
-	gdk_window_raise(pattern_select_dialog->shell->window);
+      gtk_window_present (GTK_WINDOW (pattern_select_dialog->shell));
     }
 }
 

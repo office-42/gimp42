@@ -95,8 +95,7 @@ ellipse_select_draw (tool)
   gdisplay_transform_coords (gdisp, x1, y1, &x1, &y1, 0);
   gdisplay_transform_coords (gdisp, x2, y2, &x2, &y2, 0);
 
-  gdk_draw_arc (ellipse_sel->core->win,
-		ellipse_sel->core->gc, 0,
+  draw_core_arc (ellipse_sel->core, 0,
 		x1, y1, (x2 - x1), (y2 - y1), 0, 23040);
 }
 

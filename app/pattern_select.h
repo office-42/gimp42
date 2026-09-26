@@ -23,18 +23,18 @@ typedef struct _PatternSelect _PatternSelect, *PatternSelectP;
 struct _PatternSelect {
   GtkWidget         *shell;
   GtkWidget         *frame;
-  GtkWidget         *preview;
+  GtkWidget         *preview;          /*  the grid: a GtkDrawingArea  */
+  cairo_surface_t   *grid_surface;     /*  what the grid shows        */
   GtkWidget         *pattern_name;
   GtkWidget         *pattern_size;
   GtkWidget         *options_box;
-  GdkGC             *gc;
   GtkAdjustment     *sbar_data;
   int                width, height;
   int                cell_width, cell_height;
   int                scroll_offset;
   /*  Pattern popup  */
-  GtkWidget *pattern_popup;
-  GtkWidget *pattern_preview;
+  GtkWidget *pattern_popup;            /*  a GtkPopover on the grid    */
+  GtkWidget *pattern_preview;          /*  a GimpPreview in it         */
 };
 
 PatternSelectP  pattern_select_new     (void);

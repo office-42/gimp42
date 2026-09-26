@@ -33,9 +33,6 @@
 #define DEFAULT_FUZZINESS 15
 #define PREVIEW_WIDTH   256
 #define PREVIEW_HEIGHT  256
-#define PREVIEW_EVENT_MASK  GDK_EXPOSURE_MASK | \
-                            GDK_BUTTON_PRESS_MASK | \
-                            GDK_ENTER_NOTIFY_MASK
 
 
 typedef struct _ByColorSelect ByColorSelect;
@@ -61,22 +58,22 @@ struct _ByColorDialog
 
 /*  by_color select action functions  */
 
-static void   by_color_select_button_press   (Tool *, GdkEventButton *, gpointer);
-static void   by_color_select_button_release (Tool *, GdkEventButton *, gpointer);
-static void   by_color_select_motion         (Tool *, GdkEventMotion *, gpointer);
-static void   by_color_select_cursor_update  (Tool *, GdkEventMotion *, gpointer);
+static void   by_color_select_button_press   (Tool *, GimpButtonEvent *, gpointer);
+static void   by_color_select_button_release (Tool *, GimpButtonEvent *, gpointer);
+static void   by_color_select_motion         (Tool *, GimpMotionEvent *, gpointer);
+static void   by_color_select_cursor_update  (Tool *, GimpMotionEvent *, gpointer);
 static void   by_color_select_control        (Tool *, int, gpointer);
 
 static ByColorDialog *  by_color_select_new_dialog     (void);
 static void             by_color_select_render         (ByColorDialog *, GImage *);
 static void             by_color_select_draw           (ByColorDialog *, GImage *);
-static gint             by_color_select_preview_events (GtkWidget *, GdkEventButton *, ByColorDialog *);
+static void             by_color_select_preview_events (GtkGestureClick *, int, double, double, gpointer);
 static void             by_color_select_type_callback  (GtkWidget *, gpointer);
 static void             by_color_select_reset_callback (GtkWidget *, gpointer);
 static void             by_color_select_close_callback (GtkWidget *, gpointer);
-static gint             by_color_select_delete_callback (GtkWidget *, GdkEvent *, gpointer);
+static gint             by_color_select_delete_callback (GtkWidget *, gpointer);
 static void             by_color_select_fuzzy_update   (GtkAdjustment *, gpointer);
-static void             by_color_select_preview_button_press (ByColorDialog *, GdkEventButton *);
+static void             by_color_select_preview_button_press (ByColorDialog *, GimpButtonEvent *);
 
 
 static SelectionOptions *by_color_options = NULL;
@@ -283,7 +280,7 @@ by_color_select (GImage        *gimage,
 
 static void
 by_color_select_button_press (Tool           *tool,
-			      GdkEventButton *bevent,
+			      GimpButtonEvent *bevent,
 			      gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -317,8 +314,8 @@ by_color_select_button_press (Tool           *tool,
     by_color_sel->operation = by_color_dialog->operation;
 
   /*  Make sure the "by color" select dialog is visible  */
-  if (! GTK_WIDGET_VISIBLE (by_color_dialog->shell))
-    gtk_widget_show (by_color_dialog->shell);
+  if (! gtk_widget_get_visible (by_color_dialog->shell))
+    gtk_window_present (GTK_WINDOW (by_color_dialog->shell));
 
   /*  Update the by_color_dialog's active gdisp pointer  */
   if (by_color_dialog->gimage)
@@ -329,7 +326,7 @@ by_color_select_button_press (Tool           *tool,
 
 static void
 by_color_select_button_release (Tool           *tool,
-				GdkEventButton *bevent,
+				GimpButtonEvent *bevent,
 				gpointer        gdisp_ptr)
 {
   ByColorSelect * by_color_sel;
@@ -395,14 +392,14 @@ by_color_select_button_release (Tool           *tool,
 
 static void
 by_color_select_motion (Tool           *tool,
-			GdkEventMotion *mevent,
+			GimpMotionEvent *mevent,
 			gpointer        gdisp_ptr)
 {
 }
 
 static void
 by_color_select_cursor_update (Tool           *tool,
-			       GdkEventMotion *mevent,
+			       GimpMotionEvent *mevent,
 			       gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -415,10 +412,10 @@ by_color_select_cursor_update (Tool           *tool,
   if ((layer = gimage_pick_correlate_layer (gdisp->gimage, x, y)))
     if (layer == gdisp->gimage->active_layer)
       {
-	gdisplay_install_tool_cursor (gdisp, GDK_TCROSS);
+	gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TCROSS);
 	return;
       }
-  gdisplay_install_tool_cursor (gdisp, GDK_TOP_LEFT_ARROW);
+  gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TOP_LEFT_ARROW);
 }
 
 static void
@@ -462,8 +459,8 @@ tools_new_by_color_select ()
   if (!by_color_dialog)
     by_color_dialog = by_color_select_new_dialog ();
   else
-    if (!GTK_WIDGET_VISIBLE (by_color_dialog->shell))
-      gtk_widget_show (by_color_dialog->shell);
+    if (!gtk_widget_get_visible (by_color_dialog->shell))
+      gtk_window_present (GTK_WINDOW (by_color_dialog->shell));
 
   tool = (Tool *) g_malloc (sizeof (Tool));
   private = (ByColorSelect *) g_malloc (sizeof (ByColorSelect));
@@ -536,12 +533,12 @@ by_color_select_new_dialog ()
   GtkWidget *options_box;
   GtkWidget *label;
   GtkWidget *util_box;
-  GtkWidget *push_button;
   GtkWidget *slider;
   GtkWidget *radio_box;
   GtkWidget *radio_button;
-  GtkObject *data;
-  GSList *group = NULL;
+  GtkGesture *click;
+  GtkAdjustment *data;
+  GtkWidget *group = NULL;
   int i;
   char *button_names[4] =
   {
@@ -564,119 +561,86 @@ by_color_select_new_dialog ()
   bcd->threshold = DEFAULT_FUZZINESS;
 
   /*  The shell and main vbox  */
-  bcd->shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (bcd->shell), "by_color_selection", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (bcd->shell), "By Color Selection");
-  gtk_container_border_width (GTK_CONTAINER (GTK_DIALOG (bcd->shell)->action_area), 2);
+  bcd->shell = gimp_dialog_new ("By Color Selection");
 
   /*  handle the wm close signal */
-  gtk_signal_connect (GTK_OBJECT (bcd->shell), "delete_event",
-		      (GtkSignalFunc) by_color_select_delete_callback,
+  g_signal_connect (bcd->shell, "close-request", G_CALLBACK (by_color_select_delete_callback),
 		      bcd);
 
   /*  The vbox */
-  vbox = gtk_vbox_new (FALSE, 2);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 2);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (bcd->shell)->vbox), vbox, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 2);
+  gimp_container_set_border_width (vbox, 2);
+  gimp_box_pack_start (gimp_dialog_get_vbox (bcd->shell), vbox, TRUE, TRUE, 0);
 
   /*  The horizontal box containing preview  & options box */
-  hbox = gtk_hbox_new (FALSE, 2);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (FALSE, 2);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
 
   /*  The preview  */
-  util_box = gtk_vbox_new (FALSE, 2);
-  gtk_box_pack_start (GTK_BOX (hbox), util_box, FALSE, FALSE, 0);
+  util_box = gimp_vbox_new (FALSE, 2);
+  gimp_box_pack_start (hbox, util_box, FALSE, FALSE, 0);
   frame = gtk_frame_new (NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_IN);
-  gtk_box_pack_start (GTK_BOX (util_box), frame, FALSE, FALSE, 0);
-  bcd->preview = gtk_preview_new (GTK_PREVIEW_GRAYSCALE);
-  gtk_preview_size (GTK_PREVIEW (bcd->preview), PREVIEW_WIDTH, PREVIEW_HEIGHT);
-  gtk_widget_set_events (bcd->preview, PREVIEW_EVENT_MASK);
-  gtk_signal_connect (GTK_OBJECT (bcd->preview), "button_press_event",
-		      (GtkSignalFunc) by_color_select_preview_events,
-		      bcd);
-  gtk_container_add (GTK_CONTAINER (frame), bcd->preview);
+  gimp_box_pack_start (util_box, frame, FALSE, FALSE, 0);
+  bcd->preview = gimp_preview_new (GIMP_PREVIEW_GRAYSCALE);
+  gimp_preview_size (GIMP_PREVIEW (bcd->preview), PREVIEW_WIDTH, PREVIEW_HEIGHT);
+  click = gtk_gesture_click_new ();
+  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (click), 0);
+  g_signal_connect (click, "pressed", G_CALLBACK (by_color_select_preview_events),
+		    bcd);
+  gtk_widget_add_controller (bcd->preview, GTK_EVENT_CONTROLLER (click));
+  gimp_container_add (frame, bcd->preview);
 
-  gtk_widget_show (bcd->preview);
-  gtk_widget_show (frame);
-  gtk_widget_show (util_box);
 
   /*  options box  */
-  options_box = gtk_vbox_new (FALSE, 2);
-  gtk_container_border_width (GTK_CONTAINER (options_box), 5);
-  gtk_box_pack_start (GTK_BOX (hbox), options_box, TRUE, TRUE, 0);
+  options_box = gimp_vbox_new (FALSE, 2);
+  gimp_container_set_border_width (options_box, 5);
+  gimp_box_pack_start (hbox, options_box, TRUE, TRUE, 0);
 
   /*  Create the active image label  */
-  util_box = gtk_hbox_new (FALSE, 2);
-  gtk_box_pack_start (GTK_BOX (options_box), util_box, FALSE, FALSE, 0);
+  util_box = gimp_hbox_new (FALSE, 2);
+  gimp_box_pack_start (options_box, util_box, FALSE, FALSE, 0);
   bcd->gimage_name = gtk_label_new ("Inactive");
-  gtk_box_pack_start (GTK_BOX (util_box), bcd->gimage_name, FALSE, FALSE, 2);
+  gimp_box_pack_start (util_box, bcd->gimage_name, FALSE, FALSE, 2);
 
-  gtk_widget_show (bcd->gimage_name);
-  gtk_widget_show (util_box);
 
   /*  Create the selection mode radio box  */
   frame = gtk_frame_new ("Selection Mode");
-  gtk_box_pack_start (GTK_BOX (options_box), frame, FALSE, FALSE, 0);
+  gimp_box_pack_start (options_box, frame, FALSE, FALSE, 0);
 
-  radio_box = gtk_vbox_new (FALSE, 2);
-  gtk_container_add (GTK_CONTAINER (frame), radio_box);
+  radio_box = gimp_vbox_new (FALSE, 2);
+  gimp_container_add (frame, radio_box);
 
   /*  the radio buttons  */
   for (i = 0; i < (sizeof(button_names) / sizeof(button_names[0])); i++)
     {
-      radio_button = gtk_radio_button_new_with_label (group, button_names[i]);
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (radio_button));
-      gtk_box_pack_start (GTK_BOX (radio_box), radio_button, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (radio_button), "toggled",
-			  (GtkSignalFunc) by_color_select_type_callback,
-			  (gpointer) ((long) button_values[i]));
-      gtk_widget_show (radio_button);
+      radio_button = gimp_radio_button_new (group, button_names[i]);
+      if (group == NULL)
+        gtk_check_button_set_active (GTK_CHECK_BUTTON (radio_button), TRUE);
+      group = radio_button;
+      gimp_box_pack_start (radio_box, radio_button, FALSE, FALSE, 0);
+      g_signal_connect (radio_button, "toggled", G_CALLBACK (by_color_select_type_callback),
+			  GINT_TO_POINTER (button_values[i]));
     }
-  gtk_widget_show (radio_box);
-  gtk_widget_show (frame);
 
   /*  Create the opacity scale widget  */
-  util_box = gtk_vbox_new (FALSE, 2);
-  gtk_box_pack_start (GTK_BOX (options_box), util_box, FALSE, FALSE, 0);
+  util_box = gimp_vbox_new (FALSE, 2);
+  gimp_box_pack_start (options_box, util_box, FALSE, FALSE, 0);
   label = gtk_label_new ("Fuzziness Threshold");
-  gtk_box_pack_start (GTK_BOX (util_box), label, FALSE, FALSE, 2);
+  gimp_box_pack_start (util_box, label, FALSE, FALSE, 2);
   data = gtk_adjustment_new (bcd->threshold, 0.0, 255.0, 1.0, 1.0, 0.0);
-  slider = gtk_hscale_new (GTK_ADJUSTMENT (data));
-  gtk_box_pack_start (GTK_BOX (util_box), slider, TRUE, TRUE, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (slider), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (slider), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (data), "value_changed",
-		      (GtkSignalFunc) by_color_select_fuzzy_update,
+  slider = gimp_hscale_new (GTK_ADJUSTMENT (data), 0);
+  gimp_box_pack_start (util_box, slider, TRUE, TRUE, 0);
+  g_signal_connect (data, "value-changed", G_CALLBACK (by_color_select_fuzzy_update),
 		      bcd);
 
-  gtk_widget_show (label);
-  gtk_widget_show (slider);
-  gtk_widget_show (util_box);
 
-  /*  The reset push button  */
-  push_button = gtk_button_new_with_label ("Reset");
-  GTK_WIDGET_SET_FLAGS (push_button, GTK_CAN_DEFAULT);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (bcd->shell)->action_area), push_button, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (push_button), "clicked",
-		      (GtkSignalFunc) by_color_select_reset_callback,
-		      bcd);
-  gtk_widget_grab_default (push_button);
-  gtk_widget_show (push_button);
+  /*  The reset and close push buttons  */
+  gimp_dialog_add_button (bcd->shell, "Reset",
+			  G_CALLBACK (by_color_select_reset_callback), bcd, TRUE);
+  gimp_dialog_add_button (bcd->shell, "Close",
+			  G_CALLBACK (by_color_select_close_callback), bcd, FALSE);
 
-  /*  The close push button  */
-  push_button = gtk_button_new_with_label ("Close");
-  GTK_WIDGET_SET_FLAGS (push_button, GTK_CAN_DEFAULT);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (bcd->shell)->action_area), push_button, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (push_button), "clicked",
-		      (GtkSignalFunc) by_color_select_close_callback,
-		      bcd);
-  gtk_widget_show (push_button);
-
-  gtk_widget_show (options_box);
-  gtk_widget_show (hbox);
-  gtk_widget_show (vbox);
-  gtk_widget_show (bcd->shell);
+  gtk_window_present (GTK_WINDOW (bcd->shell));
 
   return bcd;
 }
@@ -722,15 +686,15 @@ by_color_select_render (ByColorDialog *bcd,
       scale = FALSE;
     }
 
-  if ((width != bcd->preview->requisition.width) ||
-      (height != bcd->preview->requisition.height))
-    gtk_preview_size (GTK_PREVIEW (bcd->preview), width, height);
+  if ((width != gimp_preview_get_width (GIMP_PREVIEW (bcd->preview))) ||
+      (height != gimp_preview_get_height (GIMP_PREVIEW (bcd->preview))))
+    gimp_preview_size (GIMP_PREVIEW (bcd->preview), width, height);
 
   /*  clear the image buf  */
-  buf = (unsigned char *) g_malloc (bcd->preview->requisition.width);
-  memset (buf, 0, bcd->preview->requisition.width);
-  for (i = 0; i < bcd->preview->requisition.height; i++)
-    gtk_preview_draw_row (GTK_PREVIEW (bcd->preview), buf, 0, i, bcd->preview->requisition.width);
+  buf = (unsigned char *) g_malloc (width);
+  memset (buf, 0, width);
+  for (i = 0; i < height; i++)
+    gimp_preview_draw_row (GIMP_PREVIEW (bcd->preview), buf, 0, i, width);
   g_free (buf);
 
   /*  if the mask is empty, no need to scale and update again  */
@@ -786,7 +750,7 @@ by_color_select_render (ByColorDialog *bcd,
   srcwidth = scaled_buf->width;
   for (i = 0; i < height; i++)
     {
-      gtk_preview_draw_row (GTK_PREVIEW (bcd->preview), src, 0, i, width);
+      gimp_preview_draw_row (GIMP_PREVIEW (bcd->preview), src, 0, i, width);
       src += srcwidth;
     }
 
@@ -798,36 +762,44 @@ by_color_select_draw (ByColorDialog *bcd,
 		      GImage        *gimage)
 {
   /*  Draw the image buf to the preview window  */
-  gtk_widget_draw (bcd->preview, NULL);
+  gtk_widget_queue_draw (bcd->preview);
 
   /*  Update the gimage label to reflect the displayed gimage name  */
-  gtk_label_set (GTK_LABEL (bcd->gimage_name), prune_filename (gimage_filename (gimage)));
+  gtk_label_set_text (GTK_LABEL (bcd->gimage_name), prune_filename (gimage_filename (gimage)));
 }
 
-static gint
-by_color_select_preview_events (GtkWidget      *widget,
-				GdkEventButton *bevent,
-				ByColorDialog  *bcd)
+static void
+by_color_select_preview_events (GtkGestureClick *gesture,
+				int              n_press,
+				double           x,
+				double           y,
+				gpointer         data)
 {
-  switch (bevent->type)
-    {
-    case GDK_BUTTON_PRESS:
-      by_color_select_preview_button_press (bcd, bevent);
-      break;
+  ByColorDialog *bcd;
+  GimpButtonEvent bevent;
 
-    default:
-      break;
-    }
+  bcd = (ByColorDialog *) data;
 
-  return FALSE;
+  bevent.type = GIMP_BUTTON_PRESS;
+  bevent.time = gtk_event_controller_get_current_event_time (GTK_EVENT_CONTROLLER (gesture));
+  bevent.x = x;
+  bevent.y = y;
+  bevent.pressure = 1.0;
+  bevent.state = gtk_event_controller_get_current_event_state (GTK_EVENT_CONTROLLER (gesture));
+  bevent.button = gtk_gesture_single_get_current_button (GTK_GESTURE_SINGLE (gesture));
+
+  by_color_select_preview_button_press (bcd, &bevent);
 }
 
 static void
 by_color_select_type_callback (GtkWidget *widget,
 			       gpointer   client_data)
 {
+  if (!gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
+    return;
+
   if (by_color_dialog)
-    by_color_dialog->operation = (long) client_data;
+    by_color_dialog->operation = GPOINTER_TO_INT (client_data);
 }
 
 static void
@@ -858,7 +830,6 @@ by_color_select_reset_callback (GtkWidget *widget,
 
 static gint
 by_color_select_delete_callback (GtkWidget *w,
-				 GdkEvent  *e,
 				 gpointer   client_data)
 {
   by_color_select_close_callback (w, client_data);
@@ -873,8 +844,8 @@ by_color_select_close_callback (GtkWidget *widget,
   ByColorDialog *bcd;
 
   bcd = (ByColorDialog *) client_data;
-  if (GTK_WIDGET_VISIBLE (bcd->shell))
-    gtk_widget_hide (bcd->shell);
+  if (gtk_widget_get_visible (bcd->shell))
+    gtk_widget_set_visible (bcd->shell, FALSE);
 }
 
 static void
@@ -884,12 +855,12 @@ by_color_select_fuzzy_update (GtkAdjustment *adjustment,
   ByColorDialog *bcd;
 
   bcd = (ByColorDialog *) data;
-  bcd->threshold = (int) adjustment->value;
+  bcd->threshold = (int) gtk_adjustment_get_value (adjustment);
 }
 
 static void
 by_color_select_preview_button_press (ByColorDialog  *bcd,
-				      GdkEventButton *bevent)
+				      GimpButtonEvent *bevent)
 {
   int x, y;
   int replace, operation;
@@ -925,8 +896,8 @@ by_color_select_preview_button_press (ByColorDialog  *bcd,
   /*  Get the start color  */
   if (by_color_options->sample_merged)
     {
-      x = bcd->gimage->width * bevent->x / bcd->preview->requisition.width;
-      y = bcd->gimage->height * bevent->y / bcd->preview->requisition.height;
+      x = bcd->gimage->width * bevent->x / gimp_preview_get_width (GIMP_PREVIEW (bcd->preview));
+      y = bcd->gimage->height * bevent->y / gimp_preview_get_height (GIMP_PREVIEW (bcd->preview));
       if (x < 0 || y < 0 || x >= bcd->gimage->width || y >= bcd->gimage->height)
 	return;
       tile = tile_manager_get_tile (gimage_composite (bcd->gimage), x, y, 0);
@@ -938,8 +909,8 @@ by_color_select_preview_button_press (ByColorDialog  *bcd,
       int offx, offy;
 
       drawable_offsets (drawable, &offx, &offy);
-      x = drawable_width (drawable) * bevent->x / bcd->preview->requisition.width - offx;
-      y = drawable_height (drawable) * bevent->y / bcd->preview->requisition.height - offy;
+      x = drawable_width (drawable) * bevent->x / gimp_preview_get_width (GIMP_PREVIEW (bcd->preview)) - offx;
+      y = drawable_height (drawable) * bevent->y / gimp_preview_get_height (GIMP_PREVIEW (bcd->preview)) - offy;
       if (x < 0 || y < 0 || x >= drawable_width (drawable) || y >= drawable_height (drawable))
 	return;
       tile = tile_manager_get_tile (drawable_data (drawable), x, y, 0);

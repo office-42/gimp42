@@ -64,7 +64,7 @@ void tile_init (Tile *tile,
 #if defined (TILE_DEBUG) && defined (__GNUC__)
 
 #define tile_ref(t) _tile_ref (t, __PRETTY_FUNCTION__)
-void _tile_ref (Tile *tile, char *func_name);
+void _tile_ref (Tile *tile, const char *func_name);
 
 #else
 
@@ -85,7 +85,7 @@ void tile_ref (Tile *tile);
 #if defined (TILE_DEBUG) && defined (__GNUC__)
 
 #define tile_unref(t,d) _tile_unref (t, d, __PRETTY_FUNCTION__)
-void _tile_unref (Tile *tile, int dirty, char *func_name);
+void _tile_unref (Tile *tile, int dirty, const char *func_name);
 
 #else
 

@@ -61,9 +61,8 @@ static void  offset_ok_callback       (GtkWidget *widget,
 static void  offset_cancel_callback   (GtkWidget *widget,
 				       gpointer   data);
 
-static gint  offset_delete_callback   (GtkWidget *widget,
-				       GdkEvent  *event,
-				       gpointer   data);
+static gboolean offset_delete_callback (GtkWindow *window,
+					gpointer   data);
 
 static void  offset_toggle_update     (GtkWidget *widget,
 				       gpointer   data);
@@ -79,7 +78,6 @@ void
 channel_ops_offset (void *gimage_ptr)
 {
   OffsetDialog *off_d;
-  GtkWidget *button;
   GtkWidget *label;
   GtkWidget *check;
   GtkWidget *push;
@@ -87,7 +85,7 @@ channel_ops_offset (void *gimage_ptr)
   GtkWidget *vbox;
   GtkWidget *toggle_vbox;
   GtkWidget *table;
-  GSList *group = NULL;
+  GtkWidget *group = NULL;
   GimpDrawable *drawable;
   GImage *gimage;
 
@@ -100,117 +98,91 @@ channel_ops_offset (void *gimage_ptr)
   off_d->background = !off_d->transparent;
   off_d->gimage_id = gimage->ID;
 
-  off_d->dlg = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (off_d->dlg), "offset", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (off_d->dlg), "Offset");
+  off_d->dlg = gimp_dialog_new ("Offset");
 
   /* handle the wm close signal */
-  gtk_signal_connect (GTK_OBJECT (off_d->dlg), "delete_event",
-		      GTK_SIGNAL_FUNC (offset_delete_callback),
-		      off_d);
+  g_signal_connect (off_d->dlg, "close-request",
+		    G_CALLBACK (offset_delete_callback),
+		    off_d);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) offset_ok_callback,
-                      off_d);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (off_d->dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) offset_cancel_callback,
-                      off_d);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (off_d->dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (off_d->dlg, "OK",
+			  G_CALLBACK (offset_ok_callback), off_d, TRUE);
+  gimp_dialog_add_button (off_d->dlg, "Cancel",
+				   G_CALLBACK (offset_cancel_callback), off_d,
+				   FALSE);
 
   /*  The vbox for first column of options  */
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (off_d->dlg)->vbox), vbox, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (vbox, 1);
+  gimp_box_pack_start (gimp_dialog_get_vbox (off_d->dlg), vbox, TRUE, TRUE, 0);
 
   /*  the table for offsets  */
-  table = gtk_table_new (2, 2, FALSE);
-  gtk_box_pack_start (GTK_BOX (vbox), table, TRUE, TRUE, 0);
+  table = gimp_table_new (2, 2, FALSE);
+  gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
   label = gtk_label_new ("Offset X:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1, GTK_FILL, GTK_FILL, 2, 2);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_FILL, GIMP_FILL, 2, 2);
   off_d->off_x_entry = gtk_entry_new ();
-  gtk_entry_set_text (GTK_ENTRY (off_d->off_x_entry), "0");
-  gtk_widget_set_usize (off_d->off_x_entry, ENTRY_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), off_d->off_x_entry, 1, 2, 0, 1, GTK_FILL | GTK_EXPAND, GTK_FILL, 2, 2);
-  gtk_widget_show (label);
-  gtk_widget_show (off_d->off_x_entry);
+  gtk_editable_set_text (GTK_EDITABLE (off_d->off_x_entry), "0");
+  gtk_widget_set_size_request (off_d->off_x_entry, ENTRY_WIDTH, -1);
+  gimp_table_attach (table, off_d->off_x_entry, 1, 2, 0, 1, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 2, 2);
 
   label = gtk_label_new ("Offset Y:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2, GTK_FILL, GTK_FILL, 2, 2);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 1, 2, GIMP_FILL, GIMP_FILL, 2, 2);
   off_d->off_y_entry = gtk_entry_new ();
-  gtk_entry_set_text (GTK_ENTRY (off_d->off_y_entry), "0");
-  gtk_widget_set_usize (off_d->off_y_entry, ENTRY_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), off_d->off_y_entry, 1, 2, 1, 2, GTK_FILL | GTK_EXPAND, GTK_FILL, 2, 2);
-  gtk_widget_show (label);
-  gtk_widget_show (off_d->off_y_entry);
-  gtk_widget_show (table);
+  gtk_editable_set_text (GTK_EDITABLE (off_d->off_y_entry), "0");
+  gtk_widget_set_size_request (off_d->off_y_entry, ENTRY_WIDTH, -1);
+  gimp_table_attach (table, off_d->off_y_entry, 1, 2, 1, 2, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 2, 2);
 
   /*  the wrap around option  */
   check = gtk_check_button_new_with_label ("Wrap-Around");
-  gtk_box_pack_start (GTK_BOX (vbox), check, FALSE, FALSE, 0);
-  gtk_widget_show (check);
+  gimp_box_pack_start (vbox, check, FALSE, FALSE, 0);
 
   /*  The fill options  */
   off_d->fill_options = gtk_frame_new ("Fill Options");
-  gtk_frame_set_shadow_type (GTK_FRAME (off_d->fill_options), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start (GTK_BOX (vbox), off_d->fill_options, FALSE, TRUE, 0);
-  toggle_vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (toggle_vbox), 5);
-  gtk_container_add (GTK_CONTAINER (off_d->fill_options), toggle_vbox);
+  gimp_box_pack_start (vbox, off_d->fill_options, FALSE, TRUE, 0);
+  toggle_vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (toggle_vbox, 5);
+  gtk_frame_set_child (GTK_FRAME (off_d->fill_options), toggle_vbox);
 
-  toggle = gtk_radio_button_new_with_label (group, "Background");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) offset_toggle_update,
-		      &off_d->background);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), off_d->background);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (group, "Background");
+  group = toggle;
+  gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), off_d->background);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (offset_toggle_update),
+		    &off_d->background);
 
   if (drawable_has_alpha (drawable))
     {
-      toggle = gtk_radio_button_new_with_label (group, "Transparent");
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-      gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-			  (GtkSignalFunc) offset_toggle_update,
-			  &off_d->transparent);
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), off_d->transparent);
-      gtk_widget_show (toggle);
+      toggle = gimp_radio_button_new (group, "Transparent");
+      gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+      gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), off_d->transparent);
+      g_signal_connect (toggle, "toggled",
+			G_CALLBACK (offset_toggle_update),
+			&off_d->transparent);
     }
 
   /*  the by half height and half width offtion */
   push = gtk_button_new_with_label ("Offset by (x/2),(y/2)");
-  gtk_box_pack_start (GTK_BOX (vbox), push, FALSE, FALSE,0);
-  gtk_widget_show (push);
-
-  gtk_widget_show (toggle_vbox);
-  gtk_widget_show (off_d->fill_options);
-  gtk_widget_show (vbox);
-  gtk_widget_show (off_d->dlg);
+  gimp_box_pack_start (vbox, push, FALSE, FALSE,0);
 
   /*  Hook up the wrap around  */
-  gtk_signal_connect (GTK_OBJECT (check), "toggled",
-		      (GtkSignalFunc) offset_wraparound_update,
-		      off_d);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (check), off_d->wrap_around);
+  g_signal_connect (check, "toggled",
+		    G_CALLBACK (offset_wraparound_update),
+		    off_d);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (check), off_d->wrap_around);
+  gtk_widget_set_sensitive (off_d->fill_options, !off_d->wrap_around);
 
   /* Hook up the by half */
-  gtk_signal_connect (GTK_OBJECT (push), "clicked",
-		      (GtkSignalFunc) offset_halfheight_update,
-		      off_d);
+  g_signal_connect (push, "clicked",
+		    G_CALLBACK (offset_halfheight_update),
+		    off_d);
+
+  gtk_window_present (GTK_WINDOW (off_d->dlg));
 }
 
 
@@ -462,8 +434,8 @@ offset_ok_callback (GtkWidget *widget,
     {
       drawable = gimage_active_drawable (gimage);
 
-      offset_x = (int) atof (gtk_entry_get_text (GTK_ENTRY (off_d->off_x_entry)));
-      offset_y = (int) atof (gtk_entry_get_text (GTK_ENTRY (off_d->off_y_entry)));
+      offset_x = (int) atof (gtk_editable_get_text (GTK_EDITABLE (off_d->off_x_entry)));
+      offset_y = (int) atof (gtk_editable_get_text (GTK_EDITABLE (off_d->off_y_entry)));
 
       if (off_d->transparent)
 	fill_type = OFFSET_TRANSPARENT;
@@ -474,16 +446,15 @@ offset_ok_callback (GtkWidget *widget,
       gdisplays_flush ();
     }
 
-  gtk_widget_destroy (off_d->dlg);
+  gtk_window_destroy (GTK_WINDOW (off_d->dlg));
   g_free (off_d);
 }
 
-static gint
-offset_delete_callback (GtkWidget *widget,
-			GdkEvent *event,
-			gpointer data)
+static gboolean
+offset_delete_callback (GtkWindow *window,
+			gpointer   data)
 {
-  offset_cancel_callback (widget, data);
+  offset_cancel_callback (GTK_WIDGET (window), data);
 
   return TRUE;
 }
@@ -495,7 +466,7 @@ offset_cancel_callback (GtkWidget *widget,
   OffsetDialog *off_d;
 
   off_d = (OffsetDialog *) data;
-  gtk_widget_destroy (off_d->dlg);
+  gtk_window_destroy (GTK_WINDOW (off_d->dlg));
   g_free (off_d);
 }
 
@@ -507,7 +478,7 @@ offset_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -521,7 +492,7 @@ offset_wraparound_update (GtkWidget *widget,
 
   off_d = (OffsetDialog *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     off_d->wrap_around = TRUE;
   else
     off_d->wrap_around = FALSE;
@@ -540,11 +511,11 @@ offset_halfheight_update (GtkWidget *widget,
   off_d = (OffsetDialog *) data;
   gimage = gimage_get_ID (off_d->gimage_id);
 
-  sprintf (buffer, "%d", gimage->width / 2);
-  gtk_entry_set_text (GTK_ENTRY (off_d->off_x_entry), buffer);
+  g_snprintf (buffer, sizeof (buffer), "%d", gimage->width / 2);
+  gtk_editable_set_text (GTK_EDITABLE (off_d->off_x_entry), buffer);
 
-  sprintf (buffer, "%d", gimage->height / 2);
-  gtk_entry_set_text (GTK_ENTRY (off_d->off_y_entry), buffer);
+  g_snprintf (buffer, sizeof (buffer), "%d", gimage->height / 2);
+  gtk_editable_set_text (GTK_EDITABLE (off_d->off_y_entry), buffer);
 }
 
 

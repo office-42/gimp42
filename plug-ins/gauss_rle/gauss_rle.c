@@ -18,8 +18,9 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #define ENTRY_WIDTH 100
 
@@ -98,7 +99,7 @@ static BlurInterface bint =
 MAIN ()
 
 static void
-query ()
+query (void)
 {
   static GParamDef args[] =
   {
@@ -229,7 +230,7 @@ run (gchar   *name,
 }
 
 static gint
-gauss_rle_dialog ()
+gauss_rle_dialog (void)
 {
   GtkWidget *dlg;
   GtkWidget *label;
@@ -240,90 +241,67 @@ gauss_rle_dialog ()
   GtkWidget *vbox;
   GtkWidget *hbox;
   gchar buffer[12];
-  gchar **argv;
-  gint argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("gauss");
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "RLE Gaussian Blur");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) gauss_close_callback,
+  dlg = gimp_dialog_new ("RLE Gaussian Blur");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (gauss_close_callback),
 		      NULL);
 
   /*  Action area  */
   button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) gauss_ok_callback,
+  g_signal_connect (button, "clicked",
+                      G_CALLBACK (gauss_ok_callback),
                       dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
+  gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
   button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  g_signal_connect_swapped (button, "clicked", G_CALLBACK (gtk_window_destroy), dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Parameter Settings");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 10);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 10);
+  gimp_container_add (frame, vbox);
 
   toggle = gtk_check_button_new_with_label ("Blur Horizontally");
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) gauss_toggle_update,
+  gimp_box_pack_start (vbox, toggle, TRUE, TRUE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (gauss_toggle_update),
 		      &bvals.horizontal);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), bvals.horizontal);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), bvals.horizontal);
 
   toggle = gtk_check_button_new_with_label ("Blur Vertically");
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) gauss_toggle_update,
+  gimp_box_pack_start (vbox, toggle, TRUE, TRUE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (gauss_toggle_update),
 		      &bvals.vertical);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), bvals.vertical);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), bvals.vertical);
 
-  hbox = gtk_hbox_new (FALSE, 5);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, TRUE, TRUE, 0);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_box_pack_start (vbox, hbox, TRUE, TRUE, 0);
 
   label = gtk_label_new ("Blur Radius: ");
-  gtk_box_pack_start (GTK_BOX (hbox), label, TRUE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_box_pack_start (hbox, label, TRUE, FALSE, 0);
 
   entry = gtk_entry_new ();
-  gtk_box_pack_start (GTK_BOX (hbox), entry, TRUE, TRUE, 0);
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
+  gimp_box_pack_start (hbox, entry, TRUE, TRUE, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
   sprintf (buffer, "%f", bvals.radius);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) gauss_entry_callback,
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (gauss_entry_callback),
 		      NULL);
-  gtk_widget_show (entry);
 
-  gtk_widget_show (hbox);
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return bint.run;
 }
@@ -639,7 +617,7 @@ static void
 gauss_close_callback (GtkWidget *widget,
 		      gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -647,7 +625,7 @@ gauss_ok_callback (GtkWidget *widget,
 		   gpointer   data)
 {
   bint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -658,7 +636,7 @@ gauss_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -668,7 +646,7 @@ static void
 gauss_entry_callback (GtkWidget *widget,
 		      gpointer   data)
 {
-  bvals.radius = atof (gtk_entry_get_text (GTK_ENTRY (widget)));
+  bvals.radius = atof (gtk_editable_get_text (GTK_EDITABLE (widget)));
   if (bvals.radius < 1.0)
     bvals.radius = 1.0;
 }

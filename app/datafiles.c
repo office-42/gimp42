@@ -23,12 +23,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <sys/types.h>
-#include <dirent.h>
+#include <sys/stat.h>
 
 #include <glib.h>
+#include <glib/gstdio.h>
 #include "datafiles.h"
 #include "errors.h"
 #include "general.h"
@@ -37,99 +36,141 @@
 
 /***** Functions *****/
 
-/*****/
+/*  A search path from gimprc: folders separated by the platform's
+ *  separator (';' on Windows) or by ':', the separator the GIMP always
+ *  used.  A ':' that is the colon of a drive letter ("C:\...") does not
+ *  separate anything.  A leading '~' is the home folder.
+ */
+GList *
+datafiles_parse_path (const char *path_str)
+{
+  GList *list = NULL;
+  const char *start;
+  const char *p;
+
+  if (!path_str)
+    return NULL;
+
+  start = p = path_str;
+  while (TRUE)
+    {
+      gboolean end = (*p == '\0');
+      gboolean sep = (*p == G_SEARCHPATH_SEPARATOR);
+
+      if (*p == ':' && !sep)
+	{
+	  /*  a drive letter: exactly one letter since the last separator,
+	   *  followed by a slash
+	   */
+	  gboolean drive = ((p - start) == 1 &&
+			    g_ascii_isalpha (start[0]) &&
+			    (p[1] == '/' || p[1] == '\\'));
+	  sep = !drive;
+	}
+
+      if (end || sep)
+	{
+	  if (p > start)
+	    {
+	      char *dir = g_strndup (start, p - start);
+
+	      if (dir[0] == '~')
+		{
+		  char *expanded = g_build_filename (g_get_home_dir (),
+						     dir + 1, NULL);
+		  g_free (dir);
+		  dir = expanded;
+		}
+
+	      list = g_list_append (list, dir);
+	    }
+
+	  if (end)
+	    break;
+
+	  start = p + 1;
+	}
+
+      p++;
+    }
+
+  return list;
+}
+
+void
+datafiles_free_path (GList *path)
+{
+  g_list_free_full (path, g_free);
+}
 
 static int filestat_valid = 0;
-static struct stat filestat;
+static GStatBuf filestat;
+
+static gboolean
+datafiles_is_executable (const char *filename)
+{
+#ifdef G_OS_WIN32
+  /*  Windows marks nothing executable; programs are known by name.  */
+  const char *ext = strrchr (filename, '.');
+
+  return (ext && (g_ascii_strcasecmp (ext, ".exe") == 0 ||
+		  g_ascii_strcasecmp (ext, ".com") == 0));
+#else
+  return g_file_test (filename, G_FILE_TEST_IS_EXECUTABLE);
+#endif
+}
 
 void
 datafiles_read_directories (char *path_str,
 			    datafile_loader_t loader_func,
 			    int flags)
 {
-  char          *home;
-  char 	        *local_path;
-  char          *path;
-  char 	        *filename;
-  char 	        *token;
-  char          *next_token;
-  int            err;
-  DIR           *dir;
-  struct dirent *dir_ent;
+  GList *path;
+  GList *list;
 
   if (path_str == NULL)
     return;
 
-  /* Set local path to contain temp_path, where (supposedly)
-   * there may be working files.
-   */
-  home = getenv("HOME");
-  local_path = g_strdup (path_str);
+  path = datafiles_parse_path (path_str);
 
-  /* Search through all directories in the local path */
-
-  next_token = local_path;
-
-  token = xstrsep(&next_token, ":");
-
-  while (token)
+  /* Search through all directories in the path */
+  for (list = path; list; list = list->next)
     {
-      if (*token == '~')
+      const char *dirname = list->data;
+      const char *name;
+      GDir *dir;
+
+      if (!g_file_test (dirname, G_FILE_TEST_IS_DIR))
+	continue;
+
+      dir = g_dir_open (dirname, 0, NULL);
+      if (!dir)
 	{
-	  path = g_malloc(strlen(home) + strlen(token) + 2);
-	  sprintf(path, "%s%s", home, token + 1);
+	  g_message ("error reading datafiles directory \"%s\"", dirname);
+	  continue;
 	}
-      else
+
+      while ((name = g_dir_read_name (dir)))
 	{
-	  path = g_malloc(strlen(token) + 2);
-	  strcpy(path, token);
-	} /* else */
+	  char *filename = g_build_filename (dirname, name, NULL);
 
-      /* Check if directory exists and if it has any items in it */
-      err = stat(path, &filestat);
-
-      if (!err && S_ISDIR(filestat.st_mode))
-	{
-	  if (path[strlen(path) - 1] != '/')
-	    strcat(path, "/");
-
-	  /* Open directory */
-	  dir = opendir(path);
-
-	  if (!dir)
-	    g_message ("error reading datafiles directory \"%s\"", path);
-	  else
+	  /* Check the file and see that it is not a sub-directory */
+	  if (g_stat (filename, &filestat) == 0 &&
+	      S_ISREG (filestat.st_mode) &&
+	      (!(flags & MODE_EXECUTABLE) || datafiles_is_executable (filename)))
 	    {
-	      while ((dir_ent = readdir(dir)))
-		{
-		  filename = g_malloc(strlen(path) + strlen(dir_ent->d_name) + 1);
+	      filestat_valid = 1;
+	      (*loader_func) (filename);
+	      filestat_valid = 0;
+	    }
 
-		  sprintf(filename, "%s%s", path, dir_ent->d_name);
+	  g_free (filename);
+	}
 
-		  /* Check the file and see that it is not a sub-directory */
-		  err = stat(filename, &filestat);
+      g_dir_close (dir);
+    }
 
-		  if (!err && S_ISREG(filestat.st_mode) &&
-		      (!(flags & MODE_EXECUTABLE) || (filestat.st_mode & S_IXUSR)))
-		    {
-		      filestat_valid = 1;
-		      (*loader_func) (filename);
-		      filestat_valid = 0;
-		    }
-
-		  g_free(filename);
-		} /* while */
-
-	      closedir(dir);
-	    } /* else */
-	} /* if */
-
-      g_free(path);
-
-      token = xstrsep(&next_token, ":");
-    } /* while */
-
-  g_free(local_path);
+  datafiles_free_path (path);
 } /* datafiles_read_directories */
 
 time_t

@@ -85,7 +85,7 @@ clone_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -95,7 +95,8 @@ static void
 clone_type_callback (GtkWidget *w,
 		     gpointer   client_data)
 {
-  clone_options->type =(CloneType) client_data;
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
+    clone_options->type = (CloneType) GPOINTER_TO_INT (client_data);
 }
 
 static CloneOptions *
@@ -108,7 +109,7 @@ create_clone_options (void)
   GtkWidget *radio_frame;
   GtkWidget *radio_box;
   GtkWidget *radio_button;
-  GSList *group = NULL;
+  GtkWidget *group = NULL;
   int i;
   char *button_names[2] =
   {
@@ -122,42 +123,40 @@ create_clone_options (void)
   options->aligned = TRUE;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
+  vbox = gimp_vbox_new (FALSE, 1);
 
   /*  the main label  */
   label = gtk_label_new ("Clone Tool Options");
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (vbox), label);
 
   /*  the radio frame and box  */
-  radio_frame = gtk_frame_new ("Source");
-  gtk_box_pack_start (GTK_BOX (vbox), radio_frame, FALSE, FALSE, 0);
+  radio_frame = gimp_frame_new ("Source");
+  gtk_box_append (GTK_BOX (vbox), radio_frame);
 
-  radio_box = gtk_vbox_new (FALSE, 1);
-  gtk_container_add (GTK_CONTAINER (radio_frame), radio_box);
+  radio_box = gimp_vbox_new (FALSE, 1);
+  gtk_frame_set_child (GTK_FRAME (radio_frame), radio_box);
 
   /*  the radio buttons  */
   for (i = 0; i < 2; i++)
     {
-      radio_button = gtk_radio_button_new_with_label (group, button_names[i]);
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (radio_button));
-      gtk_signal_connect (GTK_OBJECT (radio_button), "toggled",
-			  (GtkSignalFunc) clone_type_callback,
-			  (void *)((long) i));
-      gtk_box_pack_start (GTK_BOX (radio_box), radio_button, FALSE, FALSE, 0);
-      gtk_widget_show (radio_button);
+      radio_button = gimp_radio_button_new (group, button_names[i]);
+      if (group == NULL)
+	group = radio_button;
+      if (i == options->type)
+	gtk_check_button_set_active (GTK_CHECK_BUTTON (radio_button), TRUE);
+      g_signal_connect (radio_button, "toggled",
+			G_CALLBACK (clone_type_callback),
+			GINT_TO_POINTER (i));
+      gtk_box_append (GTK_BOX (radio_box), radio_button);
     }
-  gtk_widget_show (radio_box);
-  gtk_widget_show (radio_frame);
 
   /*  the aligned toggle button  */
   aligned_toggle = gtk_check_button_new_with_label ("Aligned");
-  gtk_box_pack_start (GTK_BOX (vbox), aligned_toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (aligned_toggle), "toggled",
-		      (GtkSignalFunc) clone_toggle_update,
-		      &options->aligned);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (aligned_toggle), options->aligned);
-  gtk_widget_show (aligned_toggle);
+  gtk_box_append (GTK_BOX (vbox), aligned_toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (aligned_toggle), options->aligned);
+  g_signal_connect (aligned_toggle, "toggled",
+		    G_CALLBACK (clone_toggle_update),
+		    &options->aligned);
 
   /*  Register this selection options widget with the main tools options dialog  */
   tools_register_options (CLONE, vbox);
@@ -172,7 +171,7 @@ clone_paint_func (PaintCore *paint_core,
 {
   GDisplay * gdisp;
   GDisplay * src_gdisp;
-  int x1, y1, x2, y2;
+  int x1, y1;
 
   gdisp = (GDisplay *) active_tool->gdisp_ptr;
 
@@ -181,11 +180,9 @@ clone_paint_func (PaintCore *paint_core,
     case MOTION_PAINT :
       x1 = paint_core->curx;
       y1 = paint_core->cury;
-      x2 = paint_core->lastx;
-      y2 = paint_core->lasty;
 
       /*  If the control key is down, move the src target and return */
-      if (paint_core->state & ControlMask)
+      if (paint_core->state & GDK_CONTROL_MASK)
 	{
 	  src_x = x1;
 	  src_y = y1;
@@ -215,7 +212,7 @@ clone_paint_func (PaintCore *paint_core,
       break;
 
     case INIT_PAINT :
-      if (paint_core->state & ControlMask)
+      if (paint_core->state & GDK_CONTROL_MASK)
 	{
 	  src_gdisp_ID = gdisp->ID;
 	  src_drawable_ = drawable;
@@ -254,7 +251,7 @@ clone_paint_func (PaintCore *paint_core,
   if (state == INIT_PAINT)
     /*  Initialize the tool drawing core  */
     draw_core_start (paint_core->core,
-		     src_gdisp->canvas->window,
+		     src_gdisp->canvas,
 		     active_tool);
   else if (state == MOTION_PAINT)
     draw_core_resume (paint_core->core, active_tool);
@@ -295,12 +292,12 @@ clone_draw (Tool *tool)
 
   if (clone_options->type == ImageClone)
     {
-      gdk_draw_line (paint_core->core->win, paint_core->core->gc,
-		     trans_tx - (TARGET_WIDTH >> 1), trans_ty,
-		     trans_tx + (TARGET_WIDTH >> 1), trans_ty);
-      gdk_draw_line (paint_core->core->win, paint_core->core->gc,
-		     trans_tx, trans_ty - (TARGET_HEIGHT >> 1),
-		     trans_tx, trans_ty + (TARGET_HEIGHT >> 1));
+      draw_core_line (paint_core->core,
+		      trans_tx - (TARGET_WIDTH >> 1), trans_ty,
+		      trans_tx + (TARGET_WIDTH >> 1), trans_ty);
+      draw_core_line (paint_core->core,
+		      trans_tx, trans_ty - (TARGET_HEIGHT >> 1),
+		      trans_tx, trans_ty + (TARGET_HEIGHT >> 1));
     }
 }
 

@@ -46,6 +46,11 @@
  * 
  ****************************************************************************/
 
+#ifndef __GPC_H__
+#define __GPC_H__
+
+#include <gtk/gtk.h>
+
 void
 gpc_close_callback(GtkWidget *widget, gpointer data);
 
@@ -65,7 +70,7 @@ void
 gpc_set_tooltip(GtkWidget *widget, const char *tip);
 
 void
-gpc_add_action_button(char *label, GtkSignalFunc callback, GtkWidget *dialog,
+gpc_add_action_button(char *label, GCallback callback, GtkWidget *dialog,
     char *tip);
 
 void
@@ -79,3 +84,5 @@ gpc_add_label(char *value, GtkWidget *parent, int left, int right,
 void
 gpc_add_hscale(GtkWidget *table, int width, float low, float high,
     gdouble *val, int left, int right, int top, int bottom, char *tip);
+
+#endif /* __GPC_H__ */

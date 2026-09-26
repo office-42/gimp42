@@ -24,6 +24,7 @@
 #include <glib.h>
 
 #include "app_procs.h"
+#include <glib/gstdio.h>
 #include "appenv.h"
 #include "errors.h"
 #include "fileops.h"
@@ -100,7 +101,7 @@ int       allow_resize_windows = 0;
 int       no_cursor_updating = 0;
 int       preview_size = 64;
 int       show_rulers = TRUE;
-int       ruler_units = GTK_PIXELS;
+int       ruler_units = GIMP_PIXELS;
 int       auto_save = TRUE;
 int       cubic_interpolation = FALSE;
 int       toolbox_x = 0, toolbox_y = 0;
@@ -226,68 +227,125 @@ static ParseFunc funcs[] =
 };
 static int nfuncs = sizeof (funcs) / sizeof (funcs[0]);
 
-#define MAX_GIMPDIR_LEN 500
-
+/*  The per-user GIMP folder: $GIMP_DIRECTORY if set (relative to the
+ *  home folder unless absolute), otherwise ~/.gimp42 on Unix and
+ *  %APPDATA%\gimp42 on Windows.
+ */
 char *
 gimp_directory ()
 {
-  static char gimp_dir[MAX_GIMPDIR_LEN + 1] = "";
-  char *env_gimp_dir;
-  char *env_home_dir;
-  size_t len_env_home_dir = 0;
+  static char *gimp_dir = NULL;
+  const char *env_gimp_dir;
 
-  if ('\000' != gimp_dir[0])
+  if (gimp_dir)
     return gimp_dir;
 
-  env_gimp_dir = getenv ("GIMP_DIRECTORY");
-  env_home_dir = getenv ("HOME");
-  if (NULL != env_home_dir)
-    len_env_home_dir = strlen (env_home_dir);
+  env_gimp_dir = g_getenv ("GIMP_DIRECTORY");
 
-  if (NULL != env_gimp_dir)
+  if (env_gimp_dir)
     {
-      if ('/' == env_gimp_dir[0])
-	  strncpy (gimp_dir, env_gimp_dir, MAX_GIMPDIR_LEN);
+      if (g_path_is_absolute (env_gimp_dir))
+	gimp_dir = g_strdup (env_gimp_dir);
       else
-	{
-	  if (NULL != env_home_dir)
-	    {
-	      strncpy (gimp_dir, env_home_dir, MAX_GIMPDIR_LEN);
-	      gimp_dir[len_env_home_dir] = '/';
-	    }
-	  else
-	    g_message ("warning: no home directory.");
-
-	  strncpy (&gimp_dir[len_env_home_dir+1],
-		   env_gimp_dir,
-		   MAX_GIMPDIR_LEN - len_env_home_dir - 1);
-	}
+	gimp_dir = g_build_filename (g_get_home_dir (), env_gimp_dir, NULL);
     }
   else
     {
-      if (NULL != env_home_dir)
-	{
-	  strncpy (gimp_dir, env_home_dir, MAX_GIMPDIR_LEN);
-	  gimp_dir[len_env_home_dir] = '/';
-	}
-      else
-	g_message ("warning: no home directory.");
-
-      strncpy (&gimp_dir[len_env_home_dir+1],
-	       GIMPDIR,
-	       MAX_GIMPDIR_LEN - len_env_home_dir - 1);
+#ifdef G_OS_WIN32
+      gimp_dir = g_build_filename (g_get_user_config_dir (), GIMPDIR, NULL);
+#else
+      gimp_dir = g_build_filename (g_get_home_dir (), GIMPDIR, NULL);
+#endif
     }
 
-  gimp_dir[MAX_GIMPDIR_LEN] = '\000';
   return gimp_dir;
+}
+
+/*  The folder the program was installed into: the parent of the folder
+ *  the executable is in on Windows, so that the installation can be
+ *  moved; the configured prefix elsewhere.
+ */
+static char *
+gimp_installation_directory (void)
+{
+  static char *prefix = NULL;
+
+  if (prefix)
+    return prefix;
+
+#ifdef G_OS_WIN32
+  prefix = g_win32_get_package_installation_directory_of_module (NULL);
+#endif
+  if (!prefix)
+    prefix = g_strdup (GIMP42_PREFIX);
+
+  return prefix;
+}
+
+static char *
+gimp_installed_path (const char *env_name,
+		     const char *relative)
+{
+  const char *env = g_getenv (env_name);
+
+  if (env && *env)
+    return g_strdup (env);
+
+  if (g_path_is_absolute (relative))
+    return g_strdup (relative);
+
+  return g_build_filename (gimp_installation_directory (), relative, NULL);
+}
+
+char *
+gimp_data_directory ()
+{
+  static char *data_dir = NULL;
+
+  if (!data_dir)
+    {
+      /*  GIMP_DATADIR was the name in GIMP 1.0  */
+      if (g_getenv ("GIMP_DATADIR") && !g_getenv ("GIMP42_DATADIR"))
+	data_dir = g_strdup (g_getenv ("GIMP_DATADIR"));
+      else
+	data_dir = gimp_installed_path ("GIMP42_DATADIR", GIMP42_DATADIR_REL);
+    }
+
+  return data_dir;
+}
+
+char *
+gimp_plugin_directory ()
+{
+  static char *plugin_dir = NULL;
+
+  if (!plugin_dir)
+    plugin_dir = gimp_installed_path ("GIMP42_PLUGINDIR", GIMP42_PLUGINDIR_REL);
+
+  return plugin_dir;
+}
+
+static void
+add_directory_token (const char *name,
+		     const char *value)
+{
+  UnknownToken *ut;
+
+  if (NULL != gimprc_find_token ((char *) name))
+    return;
+
+  ut = g_new (UnknownToken, 1);
+  ut->token = g_strdup (name);
+  ut->value = g_strdup (value);
+
+  unknown_tokens = g_list_append (unknown_tokens, ut);
 }
 
 void
 parse_gimprc ()
 {
-  char libfilename[512];
-  char filename[512];
-  char *gimp_data_dir;
+  char *libfilename;
+  char *filename;
   char *gimp_dir;
 
   parse_info.buffer = g_new (char, 4096);
@@ -298,38 +356,40 @@ parse_gimprc ()
   gimp_dir = gimp_directory ();
   add_gimp_directory_token (gimp_dir);
 
-  if ((gimp_data_dir = getenv ("GIMP_DATADIR")) != NULL)
-    sprintf (libfilename, "%s/gimprc", gimp_data_dir);
-  else
-    sprintf (libfilename, "%s/gimprc", DATADIR);
+  /*  Where the program found itself; the system gimprc uses these.  */
+  add_directory_token ("gimp_data_dir", gimp_data_directory ());
+  add_directory_token ("gimp_plugin_dir", gimp_plugin_directory ());
+
+  libfilename = g_build_filename (gimp_data_directory (), "gimprc", NULL);
 
   app_init_update_status("Resource configuration", libfilename, -1);
   parse_gimprc_file (libfilename);
 
-  sprintf (filename, "%s/gimprc", gimp_dir);
+  filename = g_build_filename (gimp_dir, "gimprc", NULL);
   if (strcmp (filename, libfilename) != 0)
     {
       app_init_update_status(NULL, filename, -1);
       parse_gimprc_file (filename);
     }
+
+  g_free (filename);
+  g_free (libfilename);
 }
 
 void
 parse_gimprc_file (char *filename)
 {
-  static char *home_dir = NULL;
   int status;
-  char rfilename[512];
+  char *rfilename = NULL;
 
-  if (filename[0] != '/')
+  if (!g_path_is_absolute (filename))
     {
-      if (!home_dir)
-	home_dir = g_strdup (getenv ("HOME"));
-      sprintf (rfilename, "%s/%s", home_dir, filename);
+      rfilename = g_build_filename (g_get_home_dir (), filename, NULL);
       filename = rfilename;
     }
 
-  parse_info.fp = fopen (filename, "rt");
+  parse_info.fp = g_fopen (filename, "rt");
+  g_free (rfilename);
   if (!parse_info.fp)
     return;
 
@@ -392,7 +452,7 @@ save_gimprc (GList **updated_options,
   g_assert(conflicting_options != NULL);
 
   gimp_dir = gimp_directory ();
-  sprintf (name, "%s/gimprc", gimp_dir);
+  g_snprintf (name, sizeof (name), "%s%c%s", gimp_dir, G_DIR_SEPARATOR, "gimprc");
 
   error_msg = open_backup_file (name, &fp_new, &fp_old);
   if (error_msg != NULL)
@@ -959,13 +1019,13 @@ parse_ruler_units (gpointer val1p,
   token = get_next_token ();
 
   if (strcmp (token_sym, "pixels") == 0)
-    ruler_units = GTK_PIXELS;
+    ruler_units = GIMP_PIXELS;
   else if (strcmp (token_sym, "inches") == 0)
-    ruler_units = GTK_INCHES;
+    ruler_units = GIMP_INCHES;
   else if (strcmp (token_sym, "centimeters") == 0)
-    ruler_units = GTK_CENTIMETERS;
+    ruler_units = GIMP_CENTIMETERS;
   else
-    ruler_units = GTK_PIXELS;
+    ruler_units = GIMP_PIXELS;
 
   token = peek_next_token ();
   if (!token || (token != TOKEN_RIGHT_PAREN))
@@ -1365,7 +1425,7 @@ transform_path (char *path,
   int  is_env;
   UnknownToken *ut;
 
-  home = getenv ("HOME");
+  home = (char *) g_get_home_dir ();
   length = 0;
   substituted = FALSE;
   is_env = FALSE;
@@ -1722,11 +1782,11 @@ ruler_units_to_str (gpointer val1p,
 {
   switch (ruler_units)
     {
-    case GTK_INCHES:
+    case GIMP_INCHES:
       return g_strdup ("inches");
-    case GTK_CENTIMETERS:
+    case GIMP_CENTIMETERS:
       return g_strdup ("centimeters");
-    case GTK_PIXELS:
+    case GIMP_PIXELS:
       return g_strdup ("pixels");
     }
   return NULL;
@@ -1774,19 +1834,14 @@ open_backup_file (char *filename,
 
   /*
     Rename the file to *.old, open it for reading and create the new file.
+    (Windows cannot rename a file that is open, so it is renamed first.)
   */
-  if ((*fp_old = fopen (filename, "rt")) == NULL)
-    {
-      if (errno == EACCES)
-        return "Can't open gimprc; permission problems";
-      if (errno == ENOENT)
-        return "Can't open gimprc; file does not exist";
-      return "Can't open gimprc, reason unknown";
-    }
+  if (!g_file_test (filename, G_FILE_TEST_EXISTS))
+    return "Can't open gimprc; file does not exist";
 
-  oldfilename = g_malloc (strlen (filename) + 5);
-  sprintf (oldfilename, "%s.old", filename);
-  if (rename (filename, oldfilename) < 0)
+  oldfilename = g_strconcat (filename, ".old", NULL);
+  (void) g_remove (oldfilename);
+  if (g_rename (filename, oldfilename) < 0)
     {
       g_free (oldfilename);
       if (errno == EACCES)
@@ -1796,9 +1851,17 @@ open_backup_file (char *filename,
       return "Can't rename gimprc to gimprc.old, reason unknown";
     }
 
-  if ((*fp_new = fopen (filename, "wt")) == NULL)
+  if ((*fp_old = g_fopen (oldfilename, "rt")) == NULL)
     {
-      (void) rename (oldfilename, filename);
+      (void) g_rename (oldfilename, filename);
+      g_free (oldfilename);
+      return "Can't open gimprc, reason unknown";
+    }
+
+  if ((*fp_new = g_fopen (filename, "wt")) == NULL)
+    {
+      fclose (*fp_old);
+      (void) g_rename (oldfilename, filename);
       g_free (oldfilename);
       if (errno == EACCES)
         return "Can't write to gimprc; permission problems";

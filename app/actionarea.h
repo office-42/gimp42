@@ -18,6 +18,8 @@
 #ifndef __ACTIONAREA_H__
 #define __ACTIONAREA_H__
 
+#include <gtk/gtk.h>
+
 
 typedef void (*ActionCallback) (GtkWidget *, gpointer);
 
@@ -28,7 +30,10 @@ typedef struct {
   GtkWidget *widget;
 } ActionAreaItem;
 
-void build_action_area (GtkDialog *      dlg,
+/*  Adds a button per action to the action area of dlg, a dialog made
+ *  with gimp_dialog_new ().
+ */
+void build_action_area (GtkWidget *      dlg,
 			ActionAreaItem * actions,
 			int              num_actions,
 			int              default_action);

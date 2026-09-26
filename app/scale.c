@@ -19,6 +19,7 @@
 #include "appenv.h"
 #include "errors.h"
 #include "gdisplay.h"
+#include "gimpruler.h"
 #include "gdisplay_ops.h"
 #include "gimprc.h"
 #include "info_window.h"
@@ -160,67 +161,63 @@ change_scale (GDisplay *gdisp,
 void
 setup_scale (GDisplay *gdisp)
 {
-  GtkRuler *hruler;
-  GtkRuler *vruler;
-  gfloat sx, sy;
-  gfloat step;
+  gdouble sx, sy;
+  gdouble step;
+  gdouble hlower, hupper, vlower, vupper;
+  gdouble max_size;
 
   sx = SCALE(gdisp, gdisp->gimage->width);
   sy = SCALE(gdisp, gdisp->gimage->height);
   step = SCALE(gdisp, 1);
 
-  gdisp->hsbdata->value = gdisp->offset_x;
-  gdisp->hsbdata->upper = sx;
-  gdisp->hsbdata->page_size = MIN (sx, gdisp->disp_width);
-  gdisp->hsbdata->page_increment = (gdisp->disp_width / 2);
-  gdisp->hsbdata->step_increment = step;
+  gtk_adjustment_configure (gdisp->hsbdata,
+			    gdisp->offset_x,
+			    0, sx,
+			    step,
+			    (gdisp->disp_width / 2),
+			    MIN (sx, gdisp->disp_width));
 
-  gdisp->vsbdata->value = gdisp->offset_y;
-  gdisp->vsbdata->upper = sy;
-  gdisp->vsbdata->page_size = MIN (sy, gdisp->disp_height);
-  gdisp->vsbdata->page_increment = (gdisp->disp_height / 2);
-  gdisp->vsbdata->step_increment = step;
+  gtk_adjustment_configure (gdisp->vsbdata,
+			    gdisp->offset_y,
+			    0, sy,
+			    step,
+			    (gdisp->disp_height / 2),
+			    MIN (sy, gdisp->disp_height));
 
-  gtk_signal_emit_by_name (GTK_OBJECT (gdisp->hsbdata), "changed");
-  gtk_signal_emit_by_name (GTK_OBJECT (gdisp->vsbdata), "changed");
+  max_size = MAXIMUM (gdisp->gimage->width, gdisp->gimage->height);
 
-  hruler = GTK_RULER (gdisp->hrule);
-  vruler = GTK_RULER (gdisp->vrule);
+  hlower = 0;
+  hupper = UNSCALE (gdisp, gdisp->disp_width);
 
-  hruler->lower = 0;
-  hruler->upper = UNSCALE (gdisp, gdisp->disp_width);
-  hruler->max_size = MAXIMUM (gdisp->gimage->width, gdisp->gimage->height);
-
-  vruler->lower = 0;
-  vruler->upper = UNSCALE (gdisp, gdisp->disp_height);
-  vruler->max_size = MAXIMUM (gdisp->gimage->width, gdisp->gimage->height);
+  vlower = 0;
+  vupper = UNSCALE (gdisp, gdisp->disp_height);
 
   if (sx < gdisp->disp_width)
     {
       gdisp->disp_xoffset = (gdisp->disp_width - sx) / 2;
-      hruler->lower -= UNSCALE (gdisp, (double) gdisp->disp_xoffset);
-      hruler->upper -= UNSCALE (gdisp, (double) gdisp->disp_xoffset);
+      hlower -= UNSCALE (gdisp, (double) gdisp->disp_xoffset);
+      hupper -= UNSCALE (gdisp, (double) gdisp->disp_xoffset);
     }
   else
     {
       gdisp->disp_xoffset = 0;
-      hruler->lower += UNSCALE (gdisp, (double) gdisp->offset_x);
-      hruler->upper += UNSCALE (gdisp, (double) gdisp->offset_x);
+      hlower += UNSCALE (gdisp, (double) gdisp->offset_x);
+      hupper += UNSCALE (gdisp, (double) gdisp->offset_x);
     }
 
   if (sy < gdisp->disp_height)
     {
       gdisp->disp_yoffset = (gdisp->disp_height - sy) / 2;
-      vruler->lower -= UNSCALE (gdisp, (double) gdisp->disp_yoffset);
-      vruler->upper -= UNSCALE (gdisp, (double) gdisp->disp_yoffset);
+      vlower -= UNSCALE (gdisp, (double) gdisp->disp_yoffset);
+      vupper -= UNSCALE (gdisp, (double) gdisp->disp_yoffset);
     }
   else
     {
       gdisp->disp_yoffset = 0;
-      vruler->lower += UNSCALE (gdisp, (double) gdisp->offset_y);
-      vruler->upper += UNSCALE (gdisp, (double) gdisp->offset_y);
+      vlower += UNSCALE (gdisp, (double) gdisp->offset_y);
+      vupper += UNSCALE (gdisp, (double) gdisp->offset_y);
     }
 
-  gtk_widget_draw (GTK_WIDGET (hruler), NULL);
-  gtk_widget_draw (GTK_WIDGET (vruler), NULL);
+  gimp_ruler_set_range (GIMP_RULER (gdisp->hrule), hlower, hupper, max_size);
+  gimp_ruler_set_range (GIMP_RULER (gdisp->vrule), vlower, vupper, max_size);
 }

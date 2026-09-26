@@ -10,10 +10,8 @@
 # the path in GIMP_DIRECTORY is relative, it is considered
 # relative to your home directory.
 
-(prefix "@prefix@")
-(exec_prefix "@exec_prefix@")
-(gimp_data_dir "@gimpdatadir@")
-(gimp_plugin_dir "@gimpplugindir@")
+# ${gimp_data_dir} and ${gimp_plugin_dir} are the folders the GIMP finds
+# next to itself when it starts, so the installation can be moved.
 
 # Set the temporary storage directory...files will appear here
 # during the course of running the gimp.  Most files will disappear

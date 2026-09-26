@@ -51,8 +51,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #include "fli.h"
 
@@ -634,44 +635,25 @@ int save_image(gchar *filename, gint32 image_id, gint32 from_frame, gint32 to_fr
  */
 gint result;
 
-static void cb_cancel(GtkWidget *widget, gpointer data)
+static void cb_destroy(GtkWidget *widget, gpointer data)
 {
-	result=FALSE;
-	gtk_main_quit();
+	gimp_main_loop_quit ();
 }
 
 static void cb_ok(GtkWidget *widget, gpointer data)
 {
         result=TRUE;
-        gtk_main_quit();
+        gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void cb_change(GtkWidget *widget, gpointer data)
 {
-	*((gint32 *)data)=atoi(gtk_entry_get_text(GTK_ENTRY(widget)));
+	*((gint32 *)data)=atoi(gtk_editable_get_text (GTK_EDITABLE (widget)));
 }
 
-void init_gui()
+static void init_gui(void)
 {
-        guchar *color_cube;
-        gchar **argv;
-        gint argc;
-
-        argc = 1;
-        argv = g_new (gchar *, 1);
-        argv[0] = g_strdup ("gfli");
-
-        gtk_init (&argc, &argv);
-        gtk_rc_parse (gimp_gtkrc());
-
-        gdk_set_use_xshm (gimp_use_xshm ());
-        gtk_preview_set_gamma (gimp_gamma ());
-        gtk_preview_set_install_cmap (gimp_install_cmap ());
-        color_cube = gimp_color_cube ();
-        gtk_preview_set_color_cube (color_cube[0], color_cube[1],
-                color_cube[2], color_cube[3]);
-	gtk_widget_set_default_visual (gtk_preview_get_visual ());
-	gtk_widget_set_default_colormap (gtk_preview_get_cmap ());
+        gtk_init ();
 }
 
 gint32 interactive_load_image(gchar *name)
@@ -690,70 +672,53 @@ gint32 interactive_load_image(gchar *name)
 
 	init_gui();
 	
-        dialog=gtk_dialog_new ();
-        gtk_window_set_title (GTK_WINDOW(dialog), "GFLI 1.2 - Load framestack");
-        gtk_signal_connect (GTK_OBJECT (dialog), "destroy",
-                (GtkSignalFunc)cb_cancel,
+        dialog = gimp_dialog_new ("GFLI 1.2 - Load framestack");
+        g_signal_connect (dialog, "destroy",
+                G_CALLBACK (cb_destroy),
                 NULL);
 
-	table=gtk_table_new (2, 2, FALSE);
-	gtk_table_set_row_spacings(GTK_TABLE(table), 5);
-	gtk_table_set_col_spacings(GTK_TABLE(table), 5);
-	gtk_container_border_width (GTK_CONTAINER (table), 5);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->vbox), table, TRUE, TRUE, 0);
-	gtk_widget_show(table);
+	table=gimp_table_new (2, 2, FALSE);
+	gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+	gtk_grid_set_column_spacing (GTK_GRID (table), 5);
+	gimp_container_set_border_width (table, 5);
+	gimp_box_pack_start (gimp_dialog_get_vbox (dialog), table, TRUE, TRUE, 0);
 
 	/*
  	 * Maybe I add on-the-fly RGB conversion, to keep palettechanges...
  	 * But for now you can set a start- and a end-frame:
  	 */
 	label = gtk_label_new ("From:");
-	gtk_table_attach(GTK_TABLE(table), label, 0, 1, 0, 1, GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_show(label);
+	gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
 	entry = gtk_entry_new ();
-	gtk_entry_set_text(GTK_ENTRY(entry), "1");
-        gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                (GtkSignalFunc)cb_change,
+	gtk_editable_set_text (GTK_EDITABLE (entry), "1");
+        g_signal_connect (entry, "changed",
+                G_CALLBACK (cb_change),
                 (gpointer)&from_frame);
-	gtk_table_attach(GTK_TABLE(table), entry, 1, 2, 0, 1, GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_show(entry);
+	gimp_table_attach (table, entry, 1, 2, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
 	label = gtk_label_new ("To:");
-	gtk_table_attach(GTK_TABLE(table), label, 0, 1, 1, 2, GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_show(label);
+	gimp_table_attach (table, label, 0, 1, 1, 2, GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
 	entry = gtk_entry_new ();
 	sprintf(buffer, "%i", to_frame);
-	gtk_entry_set_text(GTK_ENTRY(entry), buffer);
-        gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                (GtkSignalFunc)cb_change,
+	gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+        g_signal_connect (entry, "changed",
+                G_CALLBACK (cb_change),
                 (gpointer)&to_frame);
-	gtk_table_attach(GTK_TABLE(table), entry, 1, 2, 1, 2, GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_show(entry);
+	gimp_table_attach (table, entry, 1, 2, 1, 2, GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
-        button = gtk_button_new_with_label ("OK");
-        gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                (GtkSignalFunc) cb_ok,
-                (gpointer) NULL);
-        GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-        gtk_widget_grab_default (button);
-        gtk_box_pack_start (GTK_BOX (GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-        gtk_widget_show (button);
-        button = gtk_button_new_with_label ("Cancel");
-        gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                (GtkSignalFunc) cb_cancel,
-                (gpointer) NULL);
-        gtk_box_pack_end (GTK_BOX (GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-        GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-        gtk_widget_show (button);
+        gimp_dialog_add_button (dialog, "OK", G_CALLBACK (cb_ok),
+                dialog, TRUE);
+        button = gimp_dialog_add_button (dialog, "Cancel", NULL, NULL, FALSE);
+        g_signal_connect_swapped (button, "clicked",
+                G_CALLBACK (gtk_window_destroy), dialog);
 
-        gtk_widget_show(dialog);
+  gtk_window_present (GTK_WINDOW (dialog));
 
         result=FALSE;
 
-        gtk_main();
-        gdk_flush();
+        gimp_main_loop_run ();
 
 	if (result) {
 		return load_image (name, from_frame, to_frame);
@@ -779,18 +744,16 @@ int interactive_save_image(gchar *name, gint32 image_id)
 
 	init_gui();
 	
-        dialog=gtk_dialog_new ();
-        gtk_window_set_title (GTK_WINDOW(dialog), "GFLI 1.2 - Save framestack");
-        gtk_signal_connect (GTK_OBJECT (dialog), "destroy",
-                (GtkSignalFunc)cb_cancel,
+        dialog = gimp_dialog_new ("GFLI 1.2 - Save framestack");
+        g_signal_connect (dialog, "destroy",
+                G_CALLBACK (cb_destroy),
                 NULL);
 
-	table=gtk_table_new (2, 2, FALSE);
-	gtk_table_set_row_spacings(GTK_TABLE(table), 5);
-	gtk_table_set_col_spacings(GTK_TABLE(table), 5);
-	gtk_container_border_width (GTK_CONTAINER (table), 5);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->vbox), table, TRUE, TRUE, 0);
-	gtk_widget_show(table);
+	table=gimp_table_new (2, 2, FALSE);
+	gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+	gtk_grid_set_column_spacing (GTK_GRID (table), 5);
+	gimp_container_set_border_width (table, 5);
+	gimp_box_pack_start (gimp_dialog_get_vbox (dialog), table, TRUE, TRUE, 0);
 
 	/*
  	 * Maybe I'll add some functions to influence compression
@@ -798,52 +761,37 @@ int interactive_save_image(gchar *name, gint32 image_id)
  	 */
 
 	label = gtk_label_new ("From:");
-	gtk_table_attach(GTK_TABLE(table), label, 0, 1, 0, 1, GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_show(label);
+	gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 	
 	entry = gtk_entry_new();
-	gtk_entry_set_text(GTK_ENTRY(entry), "1");
-        gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                (GtkSignalFunc)cb_change,
+	gtk_editable_set_text (GTK_EDITABLE (entry), "1");
+        g_signal_connect (entry, "changed",
+                G_CALLBACK (cb_change),
                 (gpointer)&from_frame);
-	gtk_table_attach(GTK_TABLE(table), entry, 1, 2, 0, 1, GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_show(entry);
+	gimp_table_attach (table, entry, 1, 2, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
 	label = gtk_label_new ("To:");
-	gtk_table_attach(GTK_TABLE(table), label, 0, 1, 1, 2, GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_show(label);
+	gimp_table_attach (table, label, 0, 1, 1, 2, GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
 	entry = gtk_entry_new ();
 	sprintf(buffer, "%i", to_frame);
-	gtk_entry_set_text(GTK_ENTRY(entry), buffer);
-        gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                (GtkSignalFunc)cb_change,
+	gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+        g_signal_connect (entry, "changed",
+                G_CALLBACK (cb_change),
                 (gpointer)&to_frame);
-	gtk_table_attach(GTK_TABLE(table), entry, 1, 2, 1, 2, GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_show(entry);
+	gimp_table_attach (table, entry, 1, 2, 1, 2, GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
-        button = gtk_button_new_with_label ("OK");
-        gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                (GtkSignalFunc) cb_ok,
-                (gpointer) NULL);
-        GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-        gtk_widget_grab_default (button);
-        gtk_box_pack_start (GTK_BOX (GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-        gtk_widget_show (button);
-        button = gtk_button_new_with_label ("Cancel");
-        gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                (GtkSignalFunc) cb_cancel,
-                (gpointer) NULL);
-        gtk_box_pack_end (GTK_BOX (GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-        GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-        gtk_widget_show (button);
+        gimp_dialog_add_button (dialog, "OK", G_CALLBACK (cb_ok),
+                dialog, TRUE);
+        button = gimp_dialog_add_button (dialog, "Cancel", NULL, NULL, FALSE);
+        g_signal_connect_swapped (button, "clicked",
+                G_CALLBACK (gtk_window_destroy), dialog);
 
-        gtk_widget_show(dialog);
+  gtk_window_present (GTK_WINDOW (dialog));
 
         result=FALSE;
 
-        gtk_main();
-        gdk_flush();
+        gimp_main_loop_run ();
         
         if (result) {
 		return save_image(name, image_id, from_frame, to_frame);

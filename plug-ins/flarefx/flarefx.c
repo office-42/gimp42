@@ -39,14 +39,12 @@
 #include <stdlib.h>
 #include <math.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include "libgimp/gimpui.h"
+#include <gtk/gtk.h>
 
 /* --- Defines --- */
 #define ENTRY_WIDTH 75
 #define PREVIEW_SIZE 100
-#define PREVIEW_MASK   GDK_EXPOSURE_MASK | \
-		       GDK_BUTTON_PRESS_MASK | \
-		       GDK_BUTTON1_MOTION_MASK
 #define PREVIEW	  0x1
 #define CURSOR	  0x2
 #define ALL	  0xf
@@ -91,6 +89,8 @@ typedef struct
   gint		bpp;
   GtkWidget	*xentry, *yentry;
   GtkWidget	*preview;
+  GtkWidget	*cross;			 /* drawn over the preview */
+  gdouble	drag_x, drag_y;		 /* where the drag started */
   gint		pwidth, pheight;
   gint		cursor;
   gint		curx, cury;		 /* x,y of cursor in preview */
@@ -117,10 +117,20 @@ static void	   flare_center_draw ( FlareCenter *center, gint update );
 static void	   flare_center_entry_update ( GtkWidget *widget,
 					      gpointer data );
 static void	   flare_center_cursor_update ( FlareCenter *center );
-static gint	   flare_center_preview_expose ( GtkWidget *widget,
-						GdkEvent *event );
-static gint	   flare_center_preview_events ( GtkWidget *widget,
-						GdkEvent *event );
+static void	   flare_center_cross_draw ( GtkDrawingArea *area,
+					     cairo_t *cr,
+					     int width,
+					     int height,
+					     gpointer data );
+static void	   flare_center_drag_begin ( GtkGestureDrag *gesture,
+					     gdouble x,
+					     gdouble y,
+					     gpointer data );
+static void	   flare_center_drag_update ( GtkGestureDrag *gesture,
+					      gdouble offset_x,
+					      gdouble offset_y,
+					      gpointer data );
+static void	   flare_center_mouse ( FlareCenter *center );
 
 
 
@@ -285,68 +295,40 @@ static gint flare_dialog( GDrawable *drawable )
   GtkWidget *dlg;
   GtkWidget *frame;
   GtkWidget *button;
-  guchar *color_cube;
-  gchar **argv;
-  gint  argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("flarefx");
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  gdk_set_use_xshm (gimp_use_xshm ());
-  gtk_preview_set_gamma (gimp_gamma ());
-  gtk_preview_set_install_cmap (gimp_install_cmap ());
-  color_cube = gimp_color_cube ();
-  gtk_preview_set_color_cube (color_cube[0], color_cube[1],
-                              color_cube[2], color_cube[3]);
 
-  gtk_widget_set_default_visual (gtk_preview_get_visual ());
-  gtk_widget_set_default_colormap (gtk_preview_get_cmap ());
 
 #if 0
   printf("Waiting... (pid %d)\n", getpid());
   kill(getpid(), 19); /* SIGSTOP */
 #endif
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "FlareFX");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) flare_close_callback,
+  dlg = gimp_dialog_new ("FlareFX");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (flare_close_callback),
 		      NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) flare_ok_callback,
+  button = gimp_dialog_add_button (dlg, "OK", NULL, NULL, TRUE);
+  g_signal_connect (button, "clicked",
+                      G_CALLBACK (flare_ok_callback),
                       dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			     G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  parameter settings  */
   frame = flare_center_create ( drawable );
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
 
-  gtk_widget_show (frame);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return fint.run;
 }
@@ -354,13 +336,13 @@ static gint flare_dialog( GDrawable *drawable )
 /* --- Interface functions --- */
 static void flare_close_callback (GtkWidget *widget, gpointer data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void flare_ok_callback (GtkWidget *widget, gpointer data)
 {
   fint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 /* --- Filter functions --- */
@@ -666,6 +648,8 @@ flare_center_create ( GDrawable *drawable )
   GtkWidget	 *entry;
   GtkWidget	 *pframe;
   GtkWidget	 *preview;
+  GtkWidget	 *overlay;
+  GtkGesture	 *gesture;
   gchar		 buf[256];
 
   center = g_new( FlareCenter, 1 );
@@ -683,62 +667,68 @@ flare_center_create ( GDrawable *drawable )
   center->in_call = TRUE;  /* to avoid side effects while initialization */
 
   frame = gtk_frame_new ( "Center of FlareFX" );
-  gtk_signal_connect( GTK_OBJECT( frame ), "destroy",
-		      (GtkSignalFunc) flare_center_destroy,
+  g_signal_connect (frame, "destroy",
+		      G_CALLBACK (flare_center_destroy),
 		      center );
-  gtk_frame_set_shadow_type( GTK_FRAME( frame ) ,GTK_SHADOW_ETCHED_IN );
-  gtk_container_border_width( GTK_CONTAINER( frame ), 10 );
+  gimp_container_set_border_width (frame, 10 );
 
-  table = gtk_table_new ( 2, 4, FALSE );
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 3);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 5);
+  table = gimp_table_new ( 2, 4, FALSE );
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (frame, table);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 3);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 5);
 
   label = gtk_label_new ( "X: " );
-  gtk_misc_set_alignment( GTK_MISC(label), 0.0, 0.5 );
-  gtk_table_attach( GTK_TABLE(table), label, 0, 1, 0, 1, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0 );
-  gtk_widget_show(label);
+  gimp_misc_set_alignment (label, 0.0, 0.5 );
+  gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0 );
 
   center->xentry = entry = gtk_entry_new ();
-  gtk_object_set_user_data( GTK_OBJECT(entry), center );
-  gtk_signal_connect( GTK_OBJECT(entry), "changed",
-		      (GtkSignalFunc) flare_center_entry_update,
+  g_object_set_data (G_OBJECT (entry), "user_data", center );
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (flare_center_entry_update),
 		      &fvals.posx );
-  gtk_widget_set_usize( GTK_WIDGET(entry), ENTRY_WIDTH,0 );
-  gtk_table_attach( GTK_TABLE(table), entry, 1, 2, 0, 1, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0 );
-  gtk_widget_show(entry);
+  gtk_widget_set_size_request( GTK_WIDGET(entry), ENTRY_WIDTH, -1 );
+  gimp_table_attach (table, entry, 1, 2, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0 );
 
   label = gtk_label_new ( "Y: " );
-  gtk_misc_set_alignment( GTK_MISC(label), 0.0, 0.5 );
-  gtk_table_attach( GTK_TABLE(table), label, 2, 3, 0, 1, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0 );
-  gtk_widget_show(label);
+  gimp_misc_set_alignment (label, 0.0, 0.5 );
+  gimp_table_attach (table, label, 2, 3, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0 );
 
   center->yentry = entry = gtk_entry_new ();
-  gtk_object_set_user_data( GTK_OBJECT(entry), center );
-  gtk_signal_connect( GTK_OBJECT(entry), "changed",
-		      (GtkSignalFunc) flare_center_entry_update,
+  g_object_set_data (G_OBJECT (entry), "user_data", center );
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (flare_center_entry_update),
 		      &fvals.posy );
-  gtk_widget_set_usize( GTK_WIDGET(entry), ENTRY_WIDTH, 0 );
-  gtk_table_attach( GTK_TABLE(table), entry, 3, 4, 0, 1, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0 );
-  gtk_widget_show(entry);
+  gtk_widget_set_size_request( GTK_WIDGET(entry), ENTRY_WIDTH, -1 );
+  gimp_table_attach (table, entry, 3, 4, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0 );
 
   /* frame (shadow_in) that contains preview */
   pframe = gtk_frame_new ( NULL );
-  gtk_frame_set_shadow_type( GTK_FRAME( pframe ), GTK_SHADOW_IN );
-  gtk_table_attach( GTK_TABLE(table), pframe, 0, 4, 1, 2, 0, 0, 0, 0 );
+  gimp_table_attach (table, pframe, 0, 4, 1, 2, 0, 0, 0, 0 );
 
-  /* PREVIEW */
-  center->preview = preview = gtk_preview_new( center->bpp==3 ? GTK_PREVIEW_COLOR : GTK_PREVIEW_GRAYSCALE );
-  gtk_object_set_user_data( GTK_OBJECT(preview), center );
-  gtk_widget_set_events( GTK_WIDGET(preview), PREVIEW_MASK );
-  gtk_signal_connect_after( GTK_OBJECT(preview), "expose_event",
-		      (GtkSignalFunc) flare_center_preview_expose,
-		      center );
-  gtk_signal_connect( GTK_OBJECT(preview), "event",
-		      (GtkSignalFunc) flare_center_preview_events,
-		      center );
-  gtk_container_add( GTK_CONTAINER( pframe ), center->preview );
+  /* PREVIEW, with the cross cursor drawn on a transparent area above it */
+  center->preview = preview = gimp_preview_new( center->bpp==3 ? GIMP_PREVIEW_COLOR : GIMP_PREVIEW_GRAYSCALE );
+  g_object_set_data (G_OBJECT (preview), "user_data", center );
+
+  center->cross = gtk_drawing_area_new ();
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (center->cross),
+				  flare_center_cross_draw, center, NULL);
+  gtk_widget_set_cursor_from_name (center->cross, "crosshair");
+
+  gesture = gtk_gesture_drag_new ();
+  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), 0);
+  g_signal_connect (gesture, "drag-begin",
+		    G_CALLBACK (flare_center_drag_begin), center);
+  g_signal_connect (gesture, "drag-update",
+		    G_CALLBACK (flare_center_drag_update), center);
+  gtk_widget_add_controller (center->cross, GTK_EVENT_CONTROLLER (gesture));
+
+  overlay = gtk_overlay_new ();
+  gtk_widget_set_halign (overlay, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (overlay, GTK_ALIGN_CENTER);
+  gtk_overlay_set_child (GTK_OVERLAY (overlay), preview);
+  gtk_overlay_add_overlay (GTK_OVERLAY (overlay), center->cross);
+  gtk_frame_set_child (GTK_FRAME (pframe), overlay);
 
   /*
    * Resize the greater one of dwidth and dheight to PREVIEW_SIZE
@@ -750,24 +740,24 @@ flare_center_create ( GDrawable *drawable )
     center->pwidth = center->dwidth * PREVIEW_SIZE / center->dheight;
     center->pheight = PREVIEW_SIZE;
   }
-  gtk_preview_size( GTK_PREVIEW( preview ), center->pwidth, center->pheight );
+  gimp_preview_size (GIMP_PREVIEW (preview ), center->pwidth, center->pheight );
+  gtk_drawing_area_set_content_width (GTK_DRAWING_AREA (center->cross),
+				      center->pwidth);
+  gtk_drawing_area_set_content_height (GTK_DRAWING_AREA (center->cross),
+				       center->pheight);
 
   /* Draw the contents of preview, that is saved in the preview widget */
   flare_center_preview_init( center );
-  gtk_widget_show(preview);
 
-  gtk_widget_show( pframe );
-  gtk_widget_show( table );
-  gtk_widget_show( frame );
 
   sprintf( buf, "%d", fvals.posx );
-  gtk_entry_set_text( GTK_ENTRY(center->xentry), buf );
+  gtk_editable_set_text (GTK_EDITABLE (center->xentry), buf );
   sprintf( buf, "%d", fvals.posy );
-  gtk_entry_set_text( GTK_ENTRY(center->yentry), buf );
+  gtk_editable_set_text (GTK_EDITABLE (center->yentry), buf );
 
   flare_center_cursor_update( center );
 
-  center->cursor = FALSE;    /* Make sure that the cursor has not been drawn */
+  center->cursor = TRUE;     /* the cross is drawn from the start, as the first expose did */
   center->in_call = FALSE;   /* End of initialization */
   DEBUG1("fvals center=%d,%d\n", fvals.posx, fvals.posy );
   DEBUG1("center cur=%d,%d\n", center->curx, center->cury );
@@ -831,16 +821,8 @@ render_preview ( GtkWidget *preview, GPixelRgn *srcrgn )
 
   dwidth  = srcrgn->w;
   dheight = srcrgn->h;
-  if( GTK_PREVIEW(preview)->buffer )
-    {
-      pwidth  = GTK_PREVIEW(preview)->buffer_width;
-      pheight = GTK_PREVIEW(preview)->buffer_height;
-    }
-  else
-    {
-      pwidth  = preview->requisition.width;
-      pheight = preview->requisition.height;
-    }
+  pwidth  = gimp_preview_get_width (GIMP_PREVIEW (preview));
+  pheight = gimp_preview_get_height (GIMP_PREVIEW (preview));
 
   bpp = srcrgn->bpp;
   alpha = bpp;
@@ -894,7 +876,7 @@ render_preview ( GtkWidget *preview, GPixelRgn *srcrgn )
 	    }
 	  dest += alpha;
 	}
-      gtk_preview_draw_row( GTK_PREVIEW( preview ), dest_row,
+      gimp_preview_draw_row (GIMP_PREVIEW (preview ), dest_row,
 			    0, row, pwidth );
     }
 
@@ -926,28 +908,39 @@ flare_center_draw ( FlareCenter *center, gint update )
     {
       DEBUG1("draw-cursor %d old=%d,%d cur=%d,%d\n",
 	     center->cursor, center->oldx, center->oldy, center->curx, center->cury);
-      gdk_gc_set_function ( center->preview->style->black_gc, GDK_INVERT);
-      if( center->cursor )
-	{
-	  gdk_draw_line ( center->preview->window,
-			  center->preview->style->black_gc,
-			  center->oldx, 1, center->oldx, center->pheight-1 );
-	  gdk_draw_line ( center->preview->window,
-			  center->preview->style->black_gc,
-			  1, center->oldy, center->pwidth-1, center->oldy );
-	}
-      gdk_draw_line ( center->preview->window,
-		      center->preview->style->black_gc,
-		      center->curx, 1, center->curx, center->pheight-1 );
-      gdk_draw_line ( center->preview->window,
-		      center->preview->style->black_gc,
-		      1, center->cury, center->pwidth-1, center->cury );
-      /* current position of cursor is updated */
+      /* the cross itself is drawn by flare_center_cross_draw () */
       center->oldx = center->curx;
       center->oldy = center->cury;
       center->cursor = TRUE;
-      gdk_gc_set_function ( center->preview->style->black_gc, GDK_COPY);
+      gtk_widget_queue_draw (center->cross);
     }
+}
+
+/*
+ *  Draws the cross cursor over the preview, inverting what is below it
+ *  the way the old GDK_INVERT lines did.
+ */
+
+static void
+flare_center_cross_draw ( GtkDrawingArea *area,
+			  cairo_t *cr,
+			  int width,
+			  int height,
+			  gpointer data )
+{
+  FlareCenter *center = data;
+
+  if( !center->cursor )
+    return;
+
+  cairo_set_operator (cr, CAIRO_OPERATOR_DIFFERENCE);
+  cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
+  cairo_set_line_width (cr, 1.0);
+  cairo_move_to (cr, center->curx + 0.5, 1);
+  cairo_line_to (cr, center->curx + 0.5, center->pheight - 1);
+  cairo_move_to (cr, 1, center->cury + 0.5);
+  cairo_line_to (cr, center->pwidth - 1, center->cury + 0.5);
+  cairo_stroke (cr);
 }
 
 
@@ -964,12 +957,12 @@ flare_center_entry_update ( GtkWidget *widget,
 
   DEBUG1("entry\n");
   val = data;
-  new_val = atoi ( gtk_entry_get_text( GTK_ENTRY(widget) ) );
+  new_val = atoi ( gtk_editable_get_text (GTK_EDITABLE (widget) ) );
 
   if( *val != new_val )
     {
       *val = new_val;
-      center = gtk_object_get_user_data( GTK_OBJECT(widget) );
+      center = g_object_get_data (G_OBJECT (widget), "user_data");
       DEBUG1("entry:newval in_call=%d\n", center->in_call );
       if( !center->in_call )
 	{
@@ -998,64 +991,47 @@ flare_center_cursor_update ( FlareCenter *center )
 }
 
 /*
- *    Handle the expose event on the preview
+ *    Handle mouse clicks and drags on the preview
  */
-static gint
-flare_center_preview_expose( GtkWidget *widget,
-			    GdkEvent *event )
-{
-  FlareCenter *center;
 
-  center = gtk_object_get_user_data( GTK_OBJECT(widget) );
-  flare_center_draw( center, ALL );
-  return FALSE;
+static void
+flare_center_drag_begin ( GtkGestureDrag *gesture,
+			  gdouble x,
+			  gdouble y,
+			  gpointer data )
+{
+  FlareCenter *center = data;
+
+  center->drag_x = x;
+  center->drag_y = y;
+  center->curx = x;
+  center->cury = y;
+  flare_center_mouse (center);
 }
 
-
-/*
- *    Handle other events on the preview
- */
-
-static gint
-flare_center_preview_events ( GtkWidget *widget,
-			     GdkEvent *event )
+static void
+flare_center_drag_update ( GtkGestureDrag *gesture,
+			   gdouble offset_x,
+			   gdouble offset_y,
+			   gpointer data )
 {
-  FlareCenter *center;
-  GdkEventButton *bevent;
-  GdkEventMotion *mevent;
+  FlareCenter *center = data;
+
+  center->curx = center->drag_x + offset_x;
+  center->cury = center->drag_y + offset_y;
+  flare_center_mouse (center);
+}
+
+static void
+flare_center_mouse ( FlareCenter *center )
+{
   gchar buf[256];
 
-  center = gtk_object_get_user_data ( GTK_OBJECT(widget) );
-
-  switch (event->type)
-    {
-    case GDK_EXPOSE:
-      break;
-
-    case GDK_BUTTON_PRESS:
-      bevent = (GdkEventButton *) event;
-      center->curx = bevent->x;
-      center->cury = bevent->y;
-      goto mouse;
-
-    case GDK_MOTION_NOTIFY:
-      mevent = (GdkEventMotion *) event;
-      if ( !mevent->state ) break;
-      center->curx = mevent->x;
-      center->cury = mevent->y;
-    mouse:
-      flare_center_draw( center, CURSOR );
-      center->in_call = TRUE;
-      sprintf(buf, "%d", center->curx * center->dwidth / center->pwidth );
-      gtk_entry_set_text( GTK_ENTRY(center->xentry), buf );
-      sprintf(buf, "%d", center->cury * center->dheight / center->pheight );
-      gtk_entry_set_text( GTK_ENTRY(center->yentry), buf );
-      center->in_call = FALSE;
-      break;
-
-    default:
-      break;
-    }
-
-  return FALSE;
+  flare_center_draw( center, CURSOR );
+  center->in_call = TRUE;
+  sprintf(buf, "%d", center->curx * center->dwidth / center->pwidth );
+  gtk_editable_set_text (GTK_EDITABLE (center->xentry), buf );
+  sprintf(buf, "%d", center->cury * center->dheight / center->pheight );
+  gtk_editable_set_text (GTK_EDITABLE (center->yentry), buf );
+  center->in_call = FALSE;
 }

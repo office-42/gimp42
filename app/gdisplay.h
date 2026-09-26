@@ -18,6 +18,7 @@
 #ifndef __GDISPLAY_H__
 #define __GDISPLAY_H__
 
+#include "cursorutil.h"
 #include "gimage.h"
 #include "info_dialog.h"
 #include "selection.h"
@@ -55,9 +56,9 @@ struct _GDisplay
   GtkWidget *shell;               /*  shell widget for this gdisplay          */
   GtkWidget *canvas;              /*  canvas widget for this gdisplay         */
   GtkWidget *hsb, *vsb;           /*  widgets for scroll bars                 */
-  GtkWidget *hrule, *vrule;       /*  widgets for rulers                      */
-  GtkWidget *origin;              /*  widgets for rulers                      */
-  GtkWidget *popup;               /*  widget for popup menu                   */
+  GtkWidget *hrule, *vrule;       /*  widgets for rulers (GimpRuler)          */
+  GtkWidget *origin;              /*  menu button in the rulers' corner       */
+  GtkWidget *popup;               /*  popover for the image menu              */
 
   InfoDialog *window_info_dialog; /*  dialog box for image information        */
 
@@ -80,15 +81,16 @@ struct _GDisplay
   int scale;        	          /*  scale factor from original raw image    */
   short draw_guides;              /*  should the guides be drawn?             */
   short snap_to_guides;           /*  should the guides be snapped to?        */
+  Guide *active_guide;            /*  guide drawn highlighted, or NULL        */
 
   Selection *select;              /*  Selection object                        */
 
-  GdkGC *scroll_gc;               /*  GC for scrolling */
+  cairo_surface_t *backing;       /*  the rendered image, canvas-sized        */
 
   GSList *update_areas;           /*  Update areas list                       */
   GSList *display_areas;          /*  Display areas list                      */
 
-  GdkCursorType current_cursor;   /*  Currently installed cursor              */
+  GimpCursorType current_cursor;   /*  Currently installed cursor              */
 };
 
 
@@ -106,7 +108,7 @@ void       gdisplay_transform_coords_f     (GDisplay *, double, double, double *
 					    double *, int);
 void       gdisplay_untransform_coords_f   (GDisplay *, double, double, double *,
 					    double *, int);
-void       gdisplay_install_tool_cursor    (GDisplay *, GdkCursorType);
+void       gdisplay_install_tool_cursor    (GDisplay *, GimpCursorType);
 void       gdisplay_remove_tool_cursor     (GDisplay *);
 void       gdisplay_set_menu_sensitivity   (GDisplay *);
 void       gdisplay_expose_area            (GDisplay *, int, int, int, int);
@@ -119,9 +121,16 @@ Guide*     gdisplay_find_guide             (GDisplay *, int, int);
 void       gdisplay_snap_point             (GDisplay *, int , int, int *, int *);
 void       gdisplay_snap_rectangle         (GDisplay *, int, int, int, int, int *, int *);
 
+/*  The canvas' draw function: the image, then guides, the selection and
+ *  the active tool's feedback on top.
+ */
+void       gdisplay_canvas_draw            (GDisplay *, cairo_t *, int, int);
+
 /*  function declarations  */
 
 GDisplay * gdisplay_active                 (void);
+/*  Remembers gdisp as the one menu commands and accelerators act on.  */
+void       gdisplay_set_active             (GDisplay *);
 GDisplay * gdisplay_get_ID                 (int);
 void       gdisplays_update_title          (int);
 void       gdisplays_update_area           (int, int, int, int, int);

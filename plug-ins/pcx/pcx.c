@@ -17,7 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "gtk/gtk.h"
+#include <glib/gstdio.h>
 #include "libgimp/gimp.h"
 
 /* Declare plug-in functions.  */
@@ -203,7 +203,7 @@ static gint32 load_image (char *filename) {
   gimp_progress_init (message);
   g_free (message);
 
-  fd = fopen (filename, "rb");
+  fd = g_fopen (filename, "rb");
   if (!fd) {
     g_message("PCX Can't open\n%s", filename);
     return -1;
@@ -419,7 +419,7 @@ gint save_image (char *filename, gint32 image, gint32 layer) {
       break;
   }
   
-  if ((fp = fopen(filename, "wb")) == NULL) {
+  if ((fp = g_fopen (filename, "wb")) == NULL) {
     g_message("PCX Can't open \n%s", filename);
     return -1;
   }

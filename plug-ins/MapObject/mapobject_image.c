@@ -11,7 +11,7 @@ GDrawable *input_drawable,*output_drawable;
 GPixelRgn source_region,dest_region;
 
 guchar *preview_rgb_data = NULL;
-GdkImage *image = NULL;
+cairo_surface_t *image = NULL;
 
 glong maxcounter,old_depth,max_depth;
 gint imgtype,width,height,in_channels,out_channels;
@@ -182,19 +182,23 @@ gint image_setup(GDrawable *drawable,gint interactive)
     
       numbytes=PREVIEW_HEIGHT*PREVIEW_WIDTH*3;
     
-      image=gdk_image_new(GDK_IMAGE_FASTEST,appwin->visinfo->visual,PREVIEW_WIDTH,PREVIEW_HEIGHT);
-      if (image==NULL)
-        return(FALSE);
+      image=gck_cairo_surface_new(PREVIEW_WIDTH,PREVIEW_HEIGHT);
+      if (cairo_surface_status(image)!=CAIRO_STATUS_SUCCESS)
+        {
+          cairo_surface_destroy(image);
+          image=NULL;
+          return(FALSE);
+        }
 
       preview_rgb_data=(guchar *)malloc((size_t)numbytes);
       if (preview_rgb_data==NULL)
         return(FALSE);
       memset(preview_rgb_data,0,numbytes);
     
-      /* Convert from raw RGB to GdkImage */
-      /* ================================ */
+      /* Convert from raw RGB to the preview surface */
+      /* =========================================== */
 
-      gck_rgb_to_gdkimage(appwin->visinfo,preview_rgb_data,image,PREVIEW_WIDTH,PREVIEW_HEIGHT);
+      gck_rgb_to_cairo_surface(appwin->visinfo,preview_rgb_data,image,PREVIEW_WIDTH,PREVIEW_HEIGHT);
     }
 
   return(TRUE);

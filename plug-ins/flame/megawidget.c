@@ -46,6 +46,7 @@
 #include <stdlib.h>
 #include <gtk/gtk.h>
 #include <libgimp/gimp.h>
+#include <libgimp/gimpui.h>
 
 #include "megawidget.h"
 
@@ -56,14 +57,14 @@ static void mw_scale_entry_new(GtkWidget *table, gchar *name,
                                gfloat pg_inc, gfloat pgsiz,
                                gpointer variablep, gchar *fmtvar,
                                gint left_a, gint right_a, gint top_a,
-                               gint bottom_a, GtkCallback scale_cb,
-                               GtkCallback entry_cb);
+                               gint bottom_a, GCallback scale_cb,
+                               GCallback entry_cb);
 static void ui_ok_callback(GtkWidget *widget, gpointer data);
 static void ui_close_callback(GtkWidget *widget, gpointer data);
 static void ui_fscale_callback(GtkAdjustment *adj, gpointer data);
-static void ui_fentry_callback(GtkWidget *widget, gpointer data);
+static void ui_fentry_callback(GtkEditable *widget, gpointer data);
 static void ui_iscale_callback(GtkAdjustment *adj, gpointer data);
-static void ui_ientry_callback(GtkWidget *widget, gpointer data);
+static void ui_ientry_callback(GtkEditable *widget, gpointer data);
 
 
 mw_callback mw_update_cb;
@@ -75,45 +76,27 @@ static gint do_preview = 1;
 
 GtkWidget *
 mw_app_new(gchar *resname, gchar *appname, gint *runpp){
-   gchar **argv;
-   gint argc;
    GtkWidget *dlg;
    GtkWidget *button;
-   
-   argc = 1;
-   argv = g_new(gchar *, 1);
+
    *runpp = 0;
 
-   argv[0] = g_strdup(resname);
-   gtk_init(&argc, &argv);
+   gtk_init();
 
-   dlg = gtk_dialog_new();
-   gtk_object_set_data(GTK_OBJECT(dlg), "runp", runpp);
+   dlg = gimp_dialog_new(appname);
+   g_object_set_data(G_OBJECT(dlg), "runp", runpp);
 
-   gtk_window_set_title(GTK_WINDOW(dlg), appname);
-   gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-   gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-                      (GtkSignalFunc) ui_close_callback,
-                      NULL);
+   g_signal_connect(dlg, "destroy",
+                    G_CALLBACK (ui_close_callback),
+                    NULL);
 
-   button = gtk_button_new_with_label("OK");
-   GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-   gtk_signal_connect(GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) ui_ok_callback,
-                      dlg);
-   gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button,
-                      TRUE, TRUE, 0);
-   gtk_widget_grab_default(button);
-   gtk_widget_show(button);
+   gimp_dialog_add_button(dlg, "OK", G_CALLBACK (ui_ok_callback),
+                          dlg, TRUE);
 
-   button = gtk_button_new_with_label("Cancel");
-   GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-   gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-                             (GtkSignalFunc) gtk_widget_destroy,
-                             GTK_OBJECT(dlg));
-   gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button,
-                      TRUE, TRUE, 0);
-   gtk_widget_show(button);
+   button = gimp_dialog_add_button(dlg, "Cancel", NULL, NULL, FALSE);
+   g_signal_connect_swapped(button, "clicked",
+                            G_CALLBACK (gtk_window_destroy),
+                            dlg);
 
    return dlg;
 }
@@ -126,12 +109,12 @@ mw_fscale_entry_new(GtkWidget *table, gchar *name,
                     gdouble *var) {
    gchar buffer[40];
 
-   sprintf(buffer, "%0.3f", *var);
+   g_snprintf(buffer, sizeof(buffer), "%0.3f", *var);
    mw_scale_entry_new(table, name, *var, lorange, hirange,
                       st_inc, pg_inc, pgsiz, var, buffer,
                       left_a,  right_a,  top_a,  bottom_a,
-                      (GtkCallback)ui_fscale_callback,
-                      (GtkCallback)ui_fentry_callback);
+                      G_CALLBACK (ui_fscale_callback),
+                      G_CALLBACK (ui_fentry_callback));
 }
 
 void
@@ -142,14 +125,14 @@ mw_iscale_entry_new(GtkWidget *table, gchar *name,
                     gint *varp) {
    gchar buffer[40];
 
-   sprintf(buffer, "%d", *varp);
-   
+   g_snprintf(buffer, sizeof(buffer), "%d", *varp);
+
    mw_scale_entry_new(table, name, (gfloat)*varp, (gfloat)lorange,
                       (gfloat)hirange, (gfloat)st_inc, (gfloat)pg_inc,
                       (gfloat)pgsiz, varp, buffer,
                       left_a,  right_a,  top_a,  bottom_a,
-                      (GtkCallback)ui_iscale_callback,
-                      (GtkCallback)ui_ientry_callback);
+                      G_CALLBACK (ui_iscale_callback),
+                      G_CALLBACK (ui_ientry_callback));
 }
 
 #ifndef NO_PREVIEW
@@ -198,6 +181,12 @@ mw_preview_build(GDrawable *drw) {
    return(mwp);
 }
 
+static void
+ui_toggle_callback(GtkCheckButton *button, gpointer data){
+   gint *toggle_val = (gint *) data;
+
+   *toggle_val = gtk_check_button_get_active(button);
+}
 
 GtkWidget *
 mw_preview_new(GtkWidget *parent, struct mwPreview *mwp, mw_preview_t *fcn){
@@ -206,47 +195,30 @@ mw_preview_new(GtkWidget *parent, struct mwPreview *mwp, mw_preview_t *fcn){
    GtkWidget *pframe;
    GtkWidget *vbox;
    GtkWidget *button;
-   guchar *color_cube;
-   
-   gtk_preview_set_gamma (gimp_gamma ());
-   gtk_preview_set_install_cmap (gimp_install_cmap ());
-   color_cube = gimp_color_cube ();
-   gtk_preview_set_color_cube (color_cube[0], color_cube[1],
-                               color_cube[2], color_cube[3]);
-
-   gtk_widget_set_default_visual (gtk_preview_get_visual ());
-   gtk_widget_set_default_colormap (gtk_preview_get_cmap ());
 
    frame = gtk_frame_new("Preview");
-   gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-   gtk_container_border_width(GTK_CONTAINER(frame), 10);
-   gtk_box_pack_start(GTK_BOX(parent), frame, FALSE, FALSE, 0);
-   gtk_widget_show(frame);
+   gimp_container_set_border_width(frame, 10);
+   gimp_box_pack_start(parent, frame, FALSE, FALSE, 0);
 
-   vbox = gtk_vbox_new(FALSE, 2);
-   gtk_container_border_width(GTK_CONTAINER(vbox), 2);
-   gtk_container_add(GTK_CONTAINER(frame), vbox);
-   gtk_widget_show(vbox);
+   vbox = gimp_vbox_new(FALSE, 2);
+   gimp_container_set_border_width(vbox, 2);
+   gtk_frame_set_child(GTK_FRAME(frame), vbox);
 
    pframe = gtk_frame_new(NULL);
-   gtk_frame_set_shadow_type(GTK_FRAME(pframe), GTK_SHADOW_IN);
-   gtk_container_border_width(GTK_CONTAINER(pframe), 3);
-   gtk_box_pack_start(GTK_BOX(vbox), pframe, FALSE, FALSE, 0);
-   gtk_widget_show(pframe);
+   gimp_container_set_border_width(pframe, 3);
+   gimp_box_pack_start(vbox, pframe, FALSE, FALSE, 0);
 
-   preview = gtk_preview_new(GTK_PREVIEW_COLOR);
-   gtk_preview_size(GTK_PREVIEW(preview), mwp->width, mwp->height);
-   gtk_container_add(GTK_CONTAINER(pframe), preview);
-   gtk_widget_show(preview);
+   preview = gimp_preview_new(GIMP_PREVIEW_COLOR);
+   gimp_preview_size(GIMP_PREVIEW(preview), mwp->width, mwp->height);
+   gtk_frame_set_child(GTK_FRAME(pframe), preview);
    mw_do_preview = fcn;
 
    button=gtk_check_button_new_with_label("Do Preview");
-   gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(button), do_preview);
-   gtk_signal_connect(GTK_OBJECT(button), "toggled",
-                      (GtkSignalFunc) ui_toggle_callback,
-                      &do_preview);
-   gtk_box_pack_start(GTK_BOX(vbox), button, FALSE, FALSE, 0);
-   gtk_widget_show(button);
+   gtk_check_button_set_active(GTK_CHECK_BUTTON(button), do_preview);
+   g_signal_connect(button, "toggled",
+                    G_CALLBACK (ui_toggle_callback),
+                    &do_preview);
+   gimp_box_pack_start(vbox, button, FALSE, FALSE, 0);
 
    return preview;
 }
@@ -259,67 +231,64 @@ mw_scale_entry_new(GtkWidget *table, gchar *name,
                    gfloat st_inc, gfloat pg_inc, gfloat pgsiz,
                    gpointer variablep, gchar *fmtvar,
                    gint left_a, gint right_a, gint top_a, gint bottom_a,
-                   GtkCallback scale_cb, GtkCallback entry_cb) {
+                   GCallback scale_cb, GCallback entry_cb) {
    GtkWidget *label;
    GtkWidget *hbox;
    GtkWidget *scale;
    GtkWidget *entry;
-   GtkObject *adjustment;
+   GtkAdjustment *adjustment;
 
    label = gtk_label_new(name);
-   gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
+   gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+   gtk_label_set_yalign(GTK_LABEL(label), 0.5);
 
-   gtk_table_attach(GTK_TABLE(table), label,
-                    left_a, right_a, top_a, bottom_a,
-                    GTK_FILL, GTK_FILL, 0, 0);
-   gtk_widget_show(label);
+   gimp_table_attach(table, label,
+                     left_a, right_a, top_a, bottom_a,
+                     GIMP_FILL, GIMP_FILL, 0, 0);
 
-   hbox = gtk_hbox_new(FALSE, 5);
-   gtk_table_attach(GTK_TABLE(table), hbox,
-                    left_a+1, right_a+1, top_a, bottom_a, 
-                    GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0);
-   gtk_widget_show(hbox);
-   
+   hbox = gimp_hbox_new(FALSE, 5);
+   gimp_table_attach(table, hbox,
+                     left_a+1, right_a+1, top_a, bottom_a,
+                     GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0);
+
    adjustment = gtk_adjustment_new(defval, lorange, hirange, st_inc,
                                    pg_inc, pgsiz);
-   gtk_signal_connect(GTK_OBJECT(adjustment), "value_changed",
-                      (GtkSignalFunc) scale_cb,
-                      variablep);
+   g_signal_connect(adjustment, "value-changed",
+                    scale_cb,
+                    variablep);
 
-   scale = gtk_hscale_new(GTK_ADJUSTMENT(adjustment));
-   gtk_widget_set_usize(GTK_WIDGET(scale), 140, 0);
+   scale = gtk_scale_new(GTK_ORIENTATION_HORIZONTAL, adjustment);
+   gtk_widget_set_size_request(scale, 140, -1);
    gtk_scale_set_digits(GTK_SCALE(scale), 2);
    gtk_scale_set_draw_value(GTK_SCALE(scale), FALSE);
-   gtk_box_pack_start(GTK_BOX(hbox), scale, TRUE, TRUE, 0);
-   gtk_widget_show(scale);
+   gimp_box_pack_start(hbox, scale, TRUE, TRUE, 0);
 
    entry = gtk_entry_new();
-   gtk_object_set_user_data(GTK_OBJECT(entry), adjustment);
-   gtk_object_set_user_data(adjustment, entry);
-   gtk_box_pack_start(GTK_BOX(hbox), entry, FALSE, TRUE, 0);
-   gtk_widget_set_usize(entry, 75, 0);
+   g_object_set_data(G_OBJECT(entry), "user_data", adjustment);
+   g_object_set_data(G_OBJECT(adjustment), "user_data", entry);
+   gimp_box_pack_start(hbox, entry, FALSE, TRUE, 0);
+   gtk_widget_set_size_request(entry, 75, -1);
+   gtk_editable_set_width_chars(GTK_EDITABLE(entry), 6);
 
-   gtk_entry_set_text(GTK_ENTRY(entry), fmtvar);
-   gtk_signal_connect(GTK_OBJECT(entry), "changed",
-                      (GtkSignalFunc) entry_cb,
-                      variablep);
-   gtk_widget_show(entry);
-
+   gtk_editable_set_text(GTK_EDITABLE(entry), fmtvar);
+   g_signal_connect(entry, "changed",
+                    entry_cb,
+                    variablep);
 }
 
 
 
 static void
 ui_close_callback(GtkWidget *widget, gpointer data){
-   gtk_main_quit();
+   gimp_main_loop_quit();
 }
 
 static void
 ui_ok_callback(GtkWidget *widget, gpointer data){
    gint *rp;
-   rp = gtk_object_get_data(GTK_OBJECT(data), "runp");
+   rp = g_object_get_data(G_OBJECT(data), "runp");
    *rp=1;
-   gtk_widget_destroy(GTK_WIDGET(data));
+   gtk_window_destroy(GTK_WINDOW(data));
 }
 
 static void
@@ -327,17 +296,20 @@ ui_fscale_callback(GtkAdjustment *adj, gpointer data){
   GtkWidget *ent;
   double *nval;
   gchar buf[40];
+  double value = gtk_adjustment_get_value(adj);
 
   nval = (double*)data;
 
-  if (*nval != adj->value) {
-    *nval = adj->value;
-    ent = gtk_object_get_user_data(GTK_OBJECT(adj));
-    sprintf(buf, "%0.2f", adj->value);
+  if (*nval != value) {
+    *nval = value;
+    ent = g_object_get_data(G_OBJECT(adj), "user_data");
+    g_snprintf(buf, sizeof(buf), "%0.2f", value);
 
-    gtk_signal_handler_block_by_data(GTK_OBJECT(ent), data);
-    gtk_entry_set_text(GTK_ENTRY(ent), buf);
-    gtk_signal_handler_unblock_by_data(GTK_OBJECT(ent), data);
+    g_signal_handlers_block_matched(ent, G_SIGNAL_MATCH_DATA,
+                                    0, 0, NULL, NULL, data);
+    gtk_editable_set_text(GTK_EDITABLE(ent), buf);
+    g_signal_handlers_unblock_matched(ent, G_SIGNAL_MATCH_DATA,
+                                      0, 0, NULL, NULL, data);
 
     if (mw_update_cb) (*mw_update_cb)(data);
 
@@ -348,22 +320,21 @@ ui_fscale_callback(GtkAdjustment *adj, gpointer data){
 }
 
 static void
-ui_fentry_callback(GtkWidget *widget, gpointer data){
+ui_fentry_callback(GtkEditable *widget, gpointer data){
   GtkAdjustment *adjustment;
   double new_val;
   double *val;
 
   val = (double*)data;
-  new_val = atof(gtk_entry_get_text(GTK_ENTRY(widget)));
+  new_val = atof(gtk_editable_get_text(widget));
 
   if (*val != new_val) {
-    adjustment = gtk_object_get_user_data(GTK_OBJECT(widget));
+    adjustment = g_object_get_data(G_OBJECT(widget), "user_data");
 
-    if ((new_val >= adjustment->lower) &&
-	(new_val <= adjustment->upper)) {
+    if ((new_val >= gtk_adjustment_get_lower(adjustment)) &&
+	(new_val <= gtk_adjustment_get_upper(adjustment))) {
       *val = new_val;
-      adjustment->value = new_val;
-      gtk_signal_emit_by_name(GTK_OBJECT(adjustment), "value_changed");
+      gtk_adjustment_set_value(adjustment, new_val);
     }
     if (mw_update_cb) (*mw_update_cb)(data);
 #ifndef NO_PREVIEW
@@ -377,14 +348,15 @@ ui_iscale_callback(GtkAdjustment *adj, gpointer data){
   GtkWidget *ent;
   gint *nval;
   gchar buf[40];
+  gint value = (gint) gtk_adjustment_get_value(adj);
 
   nval = (gint*)data;
 
-  if (*nval != (gint)adj->value) {
-    *nval = (gint)adj->value;
-    ent = gtk_object_get_user_data(GTK_OBJECT(adj));
-    sprintf(buf, "%d", (gint)adj->value);
-    gtk_entry_set_text(GTK_ENTRY(ent), buf);
+  if (*nval != value) {
+    *nval = value;
+    ent = g_object_get_data(G_OBJECT(adj), "user_data");
+    g_snprintf(buf, sizeof(buf), "%d", value);
+    gtk_editable_set_text(GTK_EDITABLE(ent), buf);
     if (mw_update_cb) (*mw_update_cb)(data);
 #ifndef NO_PREVIEW
     if (do_preview && mw_do_preview!=NULL) (*mw_do_preview)(NULL);
@@ -393,22 +365,21 @@ ui_iscale_callback(GtkAdjustment *adj, gpointer data){
 }
 
 static void
-ui_ientry_callback(GtkWidget *widget, gpointer data){
+ui_ientry_callback(GtkEditable *widget, gpointer data){
   GtkAdjustment *adj;
   gint new_val;
   gint *val;
 
   val = (gint *)data;
-  new_val = strtol(gtk_entry_get_text(GTK_ENTRY(widget)), NULL, 0);
+  new_val = strtol(gtk_editable_get_text(widget), NULL, 0);
 
   if (*val != new_val) {
-    adj = gtk_object_get_user_data(GTK_OBJECT(widget));
+    adj = g_object_get_data(G_OBJECT(widget), "user_data");
 
-    if ((new_val >= adj->lower) &&
-	(new_val <= adj->upper)) {
+    if ((new_val >= gtk_adjustment_get_lower(adj)) &&
+	(new_val <= gtk_adjustment_get_upper(adj))) {
       *val = new_val;
-      adj->value = new_val;
-      gtk_signal_emit_by_name(GTK_OBJECT(adj), "value_changed");
+      gtk_adjustment_set_value(adj, new_val);
     }
     if (mw_update_cb) (*mw_update_cb)(data);
 #ifndef NO_PREVIEW
@@ -420,5 +391,3 @@ ui_ientry_callback(GtkWidget *widget, gpointer data){
 
 
 /* end of megawidget/megawidget.c */
-
-

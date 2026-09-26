@@ -18,11 +18,8 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <sys/time.h>
-#include <sys/times.h>
-#include <sys/types.h>
+#include <stdlib.h>
 #include <time.h>
-#include <unistd.h>
 
 #include <gtk/gtk.h>
 #include "appenv.h"
@@ -52,7 +49,8 @@ fatal_error (char *fmt, ...)
   printf ("\n");
   va_end (args);
 
-  g_on_error_query (prog_name);
+  if (use_debug_handler)
+    g_on_error_query (prog_name);
   app_exit (1);
 }
 
@@ -69,5 +67,5 @@ terminate (char *fmt, ...)
 
   if (use_debug_handler)
     g_on_error_query (prog_name);
-  gdk_exit (1);
+  exit (1);
 }

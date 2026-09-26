@@ -34,13 +34,15 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <sys/param.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
 #include <string.h>
-#include <unistd.h>
 #include <errno.h>
-#include "gtk/gtk.h"
+#include <glib.h>
+#include <glib/gstdio.h>
+#ifdef HAVE_LIBBZ2
+#include <bzlib.h>
+#else
+#include <gio/gio.h>
+#endif
 #include "libgimp/gimp.h"
 
 
@@ -59,6 +61,8 @@ static gint save_image (char   *filename,
 
 static int valid_file (char* filename) ;
 static char* find_extension (char* filename) ;
+static gboolean bz2_compress   (const char *src, const char *dest);
+static gboolean bz2_decompress (const char *src, const char *dest);
 
 GPlugInInfo PLUG_IN_INFO =
 {
@@ -71,7 +75,7 @@ GPlugInInfo PLUG_IN_INFO =
 MAIN ()
 
 static void
-query ()
+query (void)
 {
   static GParamDef load_args[] =
   {
@@ -204,15 +208,12 @@ save_image (char   *filename,
 	    gint32  drawable_ID,
 	    gint32  run_mode)
 {
-  FILE* f;
   GParam* params;
   gint retvals;
   char* ext;
   char* tmpname;
-  int pid;
-  int status;
 
-  if (NULL == (ext = find_extension(filename))) return -1;
+  if (NULL == (ext = find_extension(filename))) return FALSE;
 
   /* get a temp name with the right extension and save into it. */
 
@@ -233,51 +234,24 @@ save_image (char   *filename,
 			       PARAM_END);
 
   if (params[0].data.d_status == FALSE || !valid_file(tmpname)) {
-    unlink (tmpname);
-    return -1;
+    g_unlink (tmpname);
+    return FALSE;
   }
 
 /*   if (! file_save(image_ID, tmpname, tmpname)) { */
-/*     unlink (tmpname); */
+/*     g_unlink (tmpname); */
 /*     return -1; */
 /*   } */
 
-  /* fork off a bzip2 process */
-  if ((pid = fork()) < 0)
+  /* and bzip2 it into the real file */
+  if (! bz2_compress (tmpname, filename))
     {
-      g_message ("bz2: fork failed: %s\n", g_strerror(errno));
-      return -1;
-    }
-  else if (pid == 0)
-    {
-
-      if (!(f = fopen(filename,"w"))){
-	      g_message("bz2: fopen failed: %s\n", g_strerror(errno));
-	      _exit(127);
-      }
-
-      /* make stdout for this process be the output file */
-      if (-1 == dup2(fileno(f),fileno(stdout)))
-	g_message ("bz2: dup2 failed: %s\n", g_strerror(errno));
-
-      /* and bzip2 into it */
-      execlp ("bzip2", "bzip2", "-cf", tmpname, NULL);
-      g_message ("bz2: exec failed: bzip2: %s\n", g_strerror(errno));
-      _exit(127);
-    }
-  else
-    {
-      waitpid (pid, &status, 0);
-
-      if (!WIFEXITED(status) ||
-	  WEXITSTATUS(status) != 0)
-	{
-	  g_message ("bz2: bzip2 exited abnormally on file %s\n", tmpname);
-	  return 0;
-	}
+      g_message ("bz2: could not compress %s into %s\n", tmpname, filename);
+      g_unlink (tmpname);
+      return 0;
     }
 
-  unlink (tmpname);
+  g_unlink (tmpname);
 
   return TRUE;
 }
@@ -289,8 +263,6 @@ load_image (char *filename, gint32 run_mode)
   gint retvals;
   char* ext;
   char* tmpname;
-  int pid;
-  int status;
 
   if (NULL == (ext = find_extension(filename))) return -1;
 
@@ -302,39 +274,12 @@ load_image (char *filename, gint32 run_mode)
 
   tmpname = params[1].data.d_string;
 
-  /* fork off a g(un)zip and wait for it */
-  if ((pid = fork()) < 0)
+  /* un-bzip2 into it */
+  if (! bz2_decompress (filename, tmpname))
     {
-      g_message ("bz2: fork failed: %s\n", g_strerror(errno));
+      g_message ("bz2: could not decompress %s\n", filename);
+      g_unlink (tmpname);
       return -1;
-    }
-  else if (pid == 0)  /* child process */
-    {
-      FILE* f;
-       if (!(f = fopen(tmpname,"w"))){
-	      g_message("bz2: fopen failed: %s\n", g_strerror(errno));
-	      _exit(127);
-      }
-
-      /* make stdout for this child process be the temp file */
-      if (-1 == dup2(fileno(f),fileno(stdout)))
-	g_message ("bz2: dup2 failed: %s\n", g_strerror(errno));
-
-      /* and unzip into it */
-      execlp ("bzip2", "bzip2", "-cfd", filename, NULL);
-      g_message ("bz2: exec failed: bunzip2: %s\n", g_strerror(errno));
-      _exit(127);
-    }
-  else  /* parent process */
-    {
-      waitpid (pid, &status, 0);
-
-      if (!WIFEXITED(status) ||
-	  WEXITSTATUS(status) != 0)
-	{
-	  g_message ("bz2: bzip2 exited abnormally on file %s\n", filename);
-	  return -1;
-	}
     }
 
   /* now that we un-bzip2ed it, load the temp file */
@@ -346,7 +291,7 @@ load_image (char *filename, gint32 run_mode)
 			       PARAM_STRING, tmpname,
 			       PARAM_END);
 
-  unlink (tmpname);
+  g_unlink (tmpname);
 
   if (params[0].data.d_status == FALSE)
     return -1;
@@ -361,9 +306,9 @@ load_image (char *filename, gint32 run_mode)
 static int valid_file (char* filename)
 {
   int stat_res;
-  struct stat buf;
+  GStatBuf buf;
 
-  stat_res = stat(filename, &buf);
+  stat_res = g_stat(filename, &buf);
 
   if ((0 == stat_res) && (buf.st_size > 0))
     return 1;
@@ -384,7 +329,7 @@ static char* find_extension (char* filename)
   ext = strrchr (filename_copy, '.');
 
   while (1) {
-    if (!ext || ext[1] == 0 || strchr(ext, '/'))
+    if (!ext || ext[1] == 0 || strchr(ext, '/') || strchr(ext, '\\'))
       {
 	g_message ("bz2: can't open bzip2ed file without a sensible extension\n");
 	return NULL;
@@ -401,3 +346,215 @@ static char* find_extension (char* filename)
     }
   }
 }
+
+/* The original forked "bzip2 -cf" / "bzip2 -cfd" with stdout redirected
+ * into the destination file.  With libbz2 the (de)compression happens in
+ * this process, so nothing has to be installed and nothing is spawned;
+ * without it the bzip2 program is run through GSubprocess.
+ */
+
+#ifdef HAVE_LIBBZ2
+
+static gboolean
+bz2_compress (const char *src,
+	      const char *dest)
+{
+  FILE    *in;
+  FILE    *out;
+  BZFILE  *bz;
+  int      bzerror;
+  char     buf[16384];
+  size_t   n;
+  gboolean ok = TRUE;
+
+  if (! (in = g_fopen (src, "rb")))
+    {
+      g_message ("bz2: can't open %s: %s\n", src, g_strerror (errno));
+      return FALSE;
+    }
+  if (! (out = g_fopen (dest, "wb")))
+    {
+      g_message ("bz2: can't open %s: %s\n", dest, g_strerror (errno));
+      fclose (in);
+      return FALSE;
+    }
+
+  bz = BZ2_bzWriteOpen (&bzerror, out, 9, 0, 0);
+  if (bzerror != BZ_OK)
+    ok = FALSE;
+
+  while (ok && (n = fread (buf, 1, sizeof (buf), in)) > 0)
+    {
+      BZ2_bzWrite (&bzerror, bz, buf, (int) n);
+      if (bzerror != BZ_OK)
+	ok = FALSE;
+    }
+  if (ferror (in))
+    ok = FALSE;
+
+  if (bz)
+    BZ2_bzWriteClose (&bzerror, bz, ! ok, NULL, NULL);
+  if (bzerror != BZ_OK)
+    ok = FALSE;
+
+  fclose (in);
+  if (fclose (out) != 0)
+    ok = FALSE;
+
+  return ok;
+}
+
+static gboolean
+bz2_decompress (const char *src,
+		const char *dest)
+{
+  FILE    *in;
+  FILE    *out;
+  BZFILE  *bz;
+  int      bzerror = BZ_OK;
+  char     buf[16384];
+  int      n;
+  gboolean ok = TRUE;
+
+  if (! (in = g_fopen (src, "rb")))
+    {
+      g_message ("bz2: can't open %s: %s\n", src, g_strerror (errno));
+      return FALSE;
+    }
+  if (! (out = g_fopen (dest, "wb")))
+    {
+      g_message ("bz2: can't open %s: %s\n", dest, g_strerror (errno));
+      fclose (in);
+      return FALSE;
+    }
+
+  /*  Like bzip2 -d, handle files made of several concatenated streams.  */
+  while (ok)
+    {
+      void *unused;
+      int   nunused;
+
+      bz = BZ2_bzReadOpen (&bzerror, in, 0, 0, NULL, 0);
+      if (bzerror != BZ_OK)
+	{
+	  ok = FALSE;
+	  break;
+	}
+
+      do
+	{
+	  n = BZ2_bzRead (&bzerror, bz, buf, sizeof (buf));
+	  if ((bzerror == BZ_OK || bzerror == BZ_STREAM_END) && n > 0)
+	    if (fwrite (buf, 1, n, out) != (size_t) n)
+	      ok = FALSE;
+	}
+      while (ok && bzerror == BZ_OK);
+
+      if (bzerror != BZ_STREAM_END)
+	{
+	  ok = FALSE;
+	  BZ2_bzReadClose (&bzerror, bz);
+	  break;
+	}
+
+      BZ2_bzReadGetUnused (&bzerror, bz, &unused, &nunused);
+      BZ2_bzReadClose (&bzerror, bz);
+
+      if (nunused == 0)
+	{
+	  int c = fgetc (in);
+
+	  if (c == EOF)
+	    break;
+	  ungetc (c, in);
+	}
+      else
+	{
+	  /*  Put the bytes read past the end of the stream back.  */
+	  if (fseek (in, -(long) nunused, SEEK_CUR) != 0)
+	    ok = FALSE;
+	}
+    }
+
+  fclose (in);
+  if (fclose (out) != 0)
+    ok = FALSE;
+
+  return ok;
+}
+
+#else  /* ! HAVE_LIBBZ2 */
+
+static gboolean
+bz2_run (const char *flags,
+	 const char *src,
+	 const char *dest)
+{
+  GSubprocess       *proc;
+  GFile             *file;
+  GFileOutputStream *out = NULL;
+  GError            *error = NULL;
+  gchar             *bzip2;
+  gboolean           ok = FALSE;
+
+  bzip2 = g_find_program_in_path ("bzip2");
+  if (! bzip2)
+    {
+      g_message ("bz2: the bzip2 program was not found in the PATH\n");
+      return FALSE;
+    }
+
+  /*  bzip2 writes to its stdout, which is copied into dest (setting a
+   *  subprocess's stdout to a file path only exists on Unix).
+   */
+  proc = g_subprocess_new (G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error,
+			   bzip2, flags, src, NULL);
+  if (proc)
+    {
+      file = g_file_new_for_path (dest);
+      out = g_file_replace (file, NULL, FALSE, G_FILE_CREATE_NONE,
+			    NULL, &error);
+      g_object_unref (file);
+
+      if (out &&
+	  g_output_stream_splice (G_OUTPUT_STREAM (out),
+				  g_subprocess_get_stdout_pipe (proc),
+				  G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE |
+				  G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET,
+				  NULL, &error) >= 0 &&
+	  g_subprocess_wait_check (proc, NULL, &error))
+	ok = TRUE;
+
+      if (! out)
+	g_subprocess_force_exit (proc);
+      g_clear_object (&out);
+      g_object_unref (proc);
+    }
+
+  if (! ok)
+    {
+      g_message ("bz2: bzip2 failed on %s: %s\n", src,
+		 error ? error->message : "unknown error");
+      g_clear_error (&error);
+    }
+
+  g_free (bzip2);
+
+  return ok;
+}
+
+static gboolean
+bz2_compress (const char *src,
+	      const char *dest)
+{
+  return bz2_run ("-cf", src, dest);
+}
+
+static gboolean
+bz2_decompress (const char *src,
+		const char *dest)
+{
+  return bz2_run ("-cfd", src, dest);
+}
+
+#endif /* HAVE_LIBBZ2 */

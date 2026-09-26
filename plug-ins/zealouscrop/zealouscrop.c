@@ -14,7 +14,6 @@
 #include <stdio.h>
 #include <time.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"

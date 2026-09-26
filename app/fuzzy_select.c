@@ -48,19 +48,19 @@ struct _fuzzy_select
 
 /*  fuzzy select action functions  */
 
-static void   fuzzy_select_button_press   (Tool *, GdkEventButton *, gpointer);
-static void   fuzzy_select_button_release (Tool *, GdkEventButton *, gpointer);
-static void   fuzzy_select_motion         (Tool *, GdkEventMotion *, gpointer);
+static void   fuzzy_select_button_press   (Tool *, GimpButtonEvent *, gpointer);
+static void   fuzzy_select_button_release (Tool *, GimpButtonEvent *, gpointer);
+static void   fuzzy_select_motion         (Tool *, GimpMotionEvent *, gpointer);
 static void   fuzzy_select_draw           (Tool *);
 static void   fuzzy_select_control        (Tool *, int, gpointer);
 
 /*  fuzzy select action functions  */
-static GdkSegment *   fuzzy_select_calculate (Tool *, void *, int *);
+static GimpSegment *   fuzzy_select_calculate (Tool *, void *, int *);
 
 
 /*  XSegments which make up the fuzzy selection boundary  */
 
-static GdkSegment *segs = NULL;
+static GimpSegment *segs = NULL;
 static int         num_segs = 0;
 static Channel *   fuzzy_mask = NULL;
 static SelectionOptions *fuzzy_options = NULL;
@@ -325,7 +325,7 @@ fuzzy_select (GImage *gimage, GimpDrawable *drawable, int op, int feather,
 /*  fuzzy select action functions  */
 
 static void
-fuzzy_select_button_press (Tool *tool, GdkEventButton *bevent,
+fuzzy_select_button_press (Tool *tool, GimpButtonEvent *bevent,
 			   gpointer gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -340,14 +340,10 @@ fuzzy_select_button_press (Tool *tool, GdkEventButton *bevent,
   fuzzy_sel->last_y = fuzzy_sel->y;
   fuzzy_sel->threshold = default_threshold;
 
-  gdk_pointer_grab (gdisp->canvas->window, FALSE,
-		    GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-		    NULL, NULL, bevent->time);
-
   tool->state = ACTIVE;
   tool->gdisp_ptr = gdisp_ptr;
 
-  if (bevent->state & GDK_MOD1_MASK)
+  if (bevent->state & GDK_ALT_MASK)
     {
       init_edit_selection (tool, gdisp_ptr, bevent, MaskTranslate);
       return;
@@ -373,12 +369,12 @@ fuzzy_select_button_press (Tool *tool, GdkEventButton *bevent,
   segs = fuzzy_select_calculate (tool, gdisp_ptr, &num_segs);
 
   draw_core_start (fuzzy_sel->core,
-		   gdisp->canvas->window,
+		   gdisp->canvas,
 		   tool);
 }
 
 static void
-fuzzy_select_button_release (Tool *tool, GdkEventButton *bevent,
+fuzzy_select_button_release (Tool *tool, GimpButtonEvent *bevent,
 			     gpointer gdisp_ptr)
 {
   FuzzySelect * fuzzy_sel;
@@ -388,8 +384,6 @@ fuzzy_select_button_release (Tool *tool, GdkEventButton *bevent,
   gdisp = (GDisplay *) gdisp_ptr;
   fuzzy_sel = (FuzzySelect *) tool->private;
 
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
 
   draw_core_stop (fuzzy_sel->core, tool);
   tool->state = INACTIVE;
@@ -414,10 +408,10 @@ fuzzy_select_button_release (Tool *tool, GdkEventButton *bevent,
 }
 
 static void
-fuzzy_select_motion (Tool *tool, GdkEventMotion *mevent, gpointer gdisp_ptr)
+fuzzy_select_motion (Tool *tool, GimpMotionEvent *mevent, gpointer gdisp_ptr)
 {
   FuzzySelect * fuzzy_sel;
-  GdkSegment * new_segs;
+  GimpSegment * new_segs;
   int num_new_segs;
   int diff, diff_x, diff_y;
 
@@ -453,14 +447,14 @@ fuzzy_select_motion (Tool *tool, GdkEventMotion *mevent, gpointer gdisp_ptr)
   draw_core_resume (fuzzy_sel->core, tool);
 }
 
-static GdkSegment *
+static GimpSegment *
 fuzzy_select_calculate (Tool *tool, void *gdisp_ptr, int *nsegs)
 {
   PixelRegion maskPR;
   FuzzySelect *fuzzy_sel;
   GDisplay *gdisp;
   Channel *new;
-  GdkSegment *segs;
+  GimpSegment *segs;
   BoundSeg *bsegs;
   int i, x, y;
   GimpDrawable *drawable;
@@ -491,7 +485,7 @@ fuzzy_select_calculate (Tool *tool, void *gdisp_ptr, int *nsegs)
 			      drawable_width (GIMP_DRAWABLE(fuzzy_mask)),
 			      drawable_height (GIMP_DRAWABLE(fuzzy_mask)));
 
-  segs = (GdkSegment *) g_malloc (sizeof (GdkSegment) * *nsegs);
+  segs = (GimpSegment *) g_malloc (sizeof (GimpSegment) * *nsegs);
 
   for (i = 0; i < *nsegs; i++)
     {
@@ -515,7 +509,7 @@ fuzzy_select_draw (Tool *tool)
   fuzzy_sel = (FuzzySelect *) tool->private;
 
   if (segs)
-    gdk_draw_segments (fuzzy_sel->core->win, fuzzy_sel->core->gc, segs, num_segs);
+    draw_core_segments (fuzzy_sel->core, segs, num_segs);
 }
 
 static void

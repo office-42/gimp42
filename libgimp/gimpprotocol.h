@@ -170,27 +170,27 @@ struct _GPProcUninstall
 
 
 void gp_init                   (void);
-int  gp_quit_write             (int            fd);
-int  gp_config_write           (int            fd,
+int  gp_quit_write             (GIOChannel *channel);
+int  gp_config_write           (GIOChannel *channel,
 				GPConfig      *config);
-int  gp_tile_req_write         (int            fd,
+int  gp_tile_req_write         (GIOChannel *channel,
 				GPTileReq     *tile_req);
-int  gp_tile_ack_write         (int            fd);
-int  gp_tile_data_write        (int            fd,
+int  gp_tile_ack_write         (GIOChannel *channel);
+int  gp_tile_data_write        (GIOChannel *channel,
 				GPTileData    *tile_data);
-int  gp_proc_run_write         (int            fd,
+int  gp_proc_run_write         (GIOChannel *channel,
 				GPProcRun     *proc_run);
-int  gp_proc_return_write      (int            fd,
+int  gp_proc_return_write      (GIOChannel *channel,
 				GPProcReturn  *proc_return);
-int  gp_temp_proc_run_write    (int            fd,
+int  gp_temp_proc_run_write    (GIOChannel *channel,
 				GPProcRun     *proc_run);
-int  gp_temp_proc_return_write (int            fd,
+int  gp_temp_proc_return_write (GIOChannel *channel,
 				GPProcReturn  *proc_return);
-int  gp_proc_install_write     (int            fd,
+int  gp_proc_install_write     (GIOChannel *channel,
 				GPProcInstall *proc_install);
-int  gp_proc_uninstall_write   (int            fd,
+int  gp_proc_uninstall_write   (GIOChannel *channel,
 				GPProcUninstall *proc_uninstall);
-int  gp_extension_ack_write    (int            fd);
+int  gp_extension_ack_write    (GIOChannel *channel);
 
 
 #endif /* __GIMP_PROTOCOL_H__ */

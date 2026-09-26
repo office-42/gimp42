@@ -73,12 +73,12 @@ static char          height_buf [MAX_INFO_BUF];
 
 
 /*  crop action functions  */
-static void crop_button_press       (Tool *, GdkEventButton *, gpointer);
-static void crop_button_release     (Tool *, GdkEventButton *, gpointer);
-static void crop_motion             (Tool *, GdkEventMotion *, gpointer);
-static void crop_cursor_update      (Tool *, GdkEventMotion *, gpointer);
+static void crop_button_press       (Tool *, GimpButtonEvent *, gpointer);
+static void crop_button_release     (Tool *, GimpButtonEvent *, gpointer);
+static void crop_motion             (Tool *, GimpMotionEvent *, gpointer);
+static void crop_cursor_update      (Tool *, GimpMotionEvent *, gpointer);
 static void crop_control            (Tool *, int, gpointer);
-static void crop_arrow_keys_func    (Tool *, GdkEventKey *, gpointer);
+static void crop_arrow_keys_func    (Tool *, GimpKeyEvent *, gpointer);
 
 
 /*  Crop helper functions   */
@@ -89,6 +89,7 @@ static void crop_adjust_guides      (GImage *, int, int, int, int);
 
 /*  Crop dialog functions  */
 static void crop_info_update        (Tool *);
+static void crop_changed            (Tool *, Crop *);
 static void crop_info_create        (Tool *);
 static void crop_ok_callback        (GtkWidget *, gpointer);
 static void crop_selection_callback (GtkWidget *, gpointer);
@@ -103,7 +104,7 @@ static Argument *crop_invoker (Argument *);
 
 static void
 crop_button_press (Tool           *tool,
-		   GdkEventButton *bevent,
+		   GimpButtonEvent *bevent,
 		   gpointer        gdisp_ptr)
 {
   Crop * crop;
@@ -165,16 +166,12 @@ crop_button_press (Tool           *tool,
   crop->lastx = crop->startx;
   crop->lasty = crop->starty;
 
-  gdk_pointer_grab (gdisp->canvas->window, FALSE,
-		    GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-		    NULL, NULL, bevent->time);
-
   tool->state = ACTIVE;
 }
 
 static void
 crop_button_release (Tool           *tool,
-		     GdkEventButton *bevent,
+		     GimpButtonEvent *bevent,
 		     gpointer        gdisp_ptr)
 {
   Crop * crop;
@@ -183,8 +180,6 @@ crop_button_release (Tool           *tool,
   crop = (Crop *) tool->private;
   gdisp = (GDisplay *) gdisp_ptr;
 
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
 
   if (! (bevent->state & GDK_BUTTON3_MASK))
     {
@@ -256,7 +251,7 @@ while (glist  != NULL)  {
 
 static void
 crop_motion (Tool           *tool,
-	     GdkEventMotion *mevent,
+	     GimpMotionEvent *mevent,
 	     gpointer        gdisp_ptr)
 {
   Crop * crop;
@@ -339,16 +334,17 @@ crop_motion (Tool           *tool,
   /*  recalculate the coordinates for crop_draw based on the new values  */
   crop_recalc (tool, crop);
   draw_core_resume (crop->core, tool);
+  crop_changed (tool, crop);
 }
 
 static void
 crop_cursor_update (Tool           *tool,
-		    GdkEventMotion *mevent,
+		    GimpMotionEvent *mevent,
 		    gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
   int x, y;
-  GdkCursorType ctype;
+  GimpCursorType ctype;
   Crop * crop;
 
   gdisp = (GDisplay *) gdisp_ptr;
@@ -358,31 +354,31 @@ crop_cursor_update (Tool           *tool,
 
   if (tool->state == INACTIVE ||
       (tool->state == ACTIVE && tool->gdisp_ptr != gdisp_ptr))
-    ctype = GDK_CROSS;
+    ctype = GIMP_CURSOR_CROSS;
   else if (mevent->x == BOUNDS (mevent->x, crop->x1, crop->x1 + crop->srw) &&
       mevent->y == BOUNDS (mevent->y, crop->y1, crop->y1 + crop->srh))
-    ctype = GDK_TOP_LEFT_CORNER;
+    ctype = GIMP_CURSOR_TOP_LEFT_CORNER;
   else if (mevent->x == BOUNDS (mevent->x, crop->x2 - crop->srw, crop->x2) &&
 	   mevent->y == BOUNDS (mevent->y, crop->y2 - crop->srh, crop->y2))
-    ctype = GDK_BOTTOM_RIGHT_CORNER;
+    ctype = GIMP_CURSOR_BOTTOM_RIGHT_CORNER;
   else if  (mevent->x == BOUNDS (mevent->x, crop->x1, crop->x1 + crop->srw) &&
 	    mevent->y == BOUNDS (mevent->y, crop->y2 - crop->srh, crop->y2))
-    ctype = GDK_FLEUR;
+    ctype = GIMP_CURSOR_FLEUR;
   else if  (mevent->x == BOUNDS (mevent->x, crop->x2 - crop->srw, crop->x2) &&
 	    mevent->y == BOUNDS (mevent->y, crop->y1, crop->y1 + crop->srh))
-    ctype = GDK_FLEUR;
+    ctype = GIMP_CURSOR_FLEUR;
   else if (mevent->x > crop->x1 && mevent->x < crop->x2 &&
 	   mevent->y > crop->y1 && mevent->y < crop->y2)
-    ctype = GDK_ICON;
+    ctype = GIMP_CURSOR_ICON;
   else
-    ctype = GDK_CROSS;
+    ctype = GIMP_CURSOR_CROSS;
 
   gdisplay_install_tool_cursor (gdisp, ctype);
 }
 
 static void
 crop_arrow_keys_func (Tool        *tool,
-		      GdkEventKey *kevent,
+		      GimpKeyEvent *kevent,
 		      gpointer     gdisp_ptr)
 {
   int inc_x, inc_y;
@@ -398,10 +394,10 @@ crop_arrow_keys_func (Tool        *tool,
 
       switch (kevent->keyval)
 	{
-	case GDK_Up    : inc_y = -1; break;
-	case GDK_Left  : inc_x = -1; break;
-	case GDK_Right : inc_x =  1; break;
-	case GDK_Down  : inc_y =  1; break;
+	case GDK_KEY_Up    : inc_y = -1; break;
+	case GDK_KEY_Left  : inc_x = -1; break;
+	case GDK_KEY_Right : inc_x =  1; break;
+	case GDK_KEY_Down  : inc_y =  1; break;
 	}
 
       /*  If the shift key is down, move by an accelerated increment  */
@@ -432,6 +428,7 @@ crop_arrow_keys_func (Tool        *tool,
 
       crop_recalc (tool, crop);
       draw_core_resume (crop->core, tool);
+      crop_changed (tool, crop);
     }
 }
 
@@ -452,6 +449,7 @@ crop_control (Tool     *tool,
     case RESUME :
       crop_recalc (tool, crop);
       draw_core_resume (crop->core, tool);
+      crop_changed (tool, crop);
       break;
     case HALT :
       draw_core_stop (crop->core, tool);
@@ -472,26 +470,30 @@ crop_draw (Tool *tool)
   gdisp = (GDisplay *) tool->gdisp_ptr;
   crop = (Crop *) tool->private;
 
-  gdk_draw_line (crop->core->win, crop->core->gc,
-		 crop->x1, crop->y1, gdisp->disp_width, crop->y1);
-  gdk_draw_line (crop->core->win, crop->core->gc,
-		 crop->x1, crop->y1, crop->x1, gdisp->disp_height);
-  gdk_draw_line (crop->core->win, crop->core->gc,
-		 crop->x2, crop->y2, 0, crop->y2);
-  gdk_draw_line (crop->core->win, crop->core->gc,
-		 crop->x2, crop->y2, crop->x2, 0);
+  draw_core_line (crop->core, crop->x1, crop->y1, gdisp->disp_width, crop->y1);
+  draw_core_line (crop->core, crop->x1, crop->y1, crop->x1, gdisp->disp_height);
+  draw_core_line (crop->core, crop->x2, crop->y2, 0, crop->y2);
+  draw_core_line (crop->core, crop->x2, crop->y2, crop->x2, 0);
 
+  draw_core_rectangle (crop->core, 1,
+		      crop->x1, crop->y1, crop->srw, crop->srh);
+  draw_core_rectangle (crop->core, 1,
+		      crop->x2 - crop->srw, crop->y2-crop->srh, crop->srw, crop->srh);
+  draw_core_rectangle (crop->core, 1,
+		      crop->x2 - crop->srw, crop->y1, crop->srw, crop->srh);
+  draw_core_rectangle (crop->core, 1,
+		      crop->x1, crop->y2-crop->srh, crop->srw, crop->srh);
+}
+
+/*  After the crop rectangle moved: the corner handles and the info
+ *  dialog follow it.  (This happened in crop_draw under X.)
+ */
+static void
+crop_changed (Tool *tool,
+	      Crop *crop)
+{
   crop->srw = ((crop->x2 - crop->x1) < SRW) ? (crop->x2 - crop->x1) : SRW;
   crop->srh = ((crop->y2 - crop->y1) < SRH) ? (crop->y2 - crop->y1) : SRH;
-
-  gdk_draw_rectangle (crop->core->win, crop->core->gc, 1,
-		      crop->x1, crop->y1, crop->srw, crop->srh);
-  gdk_draw_rectangle (crop->core->win, crop->core->gc, 1,
-		      crop->x2 - crop->srw, crop->y2-crop->srh, crop->srw, crop->srh);
-  gdk_draw_rectangle (crop->core->win, crop->core->gc, 1,
-		      crop->x2 - crop->srw, crop->y1, crop->srw, crop->srh);
-  gdk_draw_rectangle (crop->core->win, crop->core->gc, 1,
-		      crop->x1, crop->y2-crop->srh, crop->srw, crop->srh);
 
   crop_info_update (tool);
 }
@@ -677,7 +679,8 @@ crop_start (Tool *tool,
   gdisp = (GDisplay *) tool->gdisp_ptr;
 
   crop_recalc (tool, crop);
-  draw_core_start (crop->core, gdisp->canvas->window, tool);
+  draw_core_start (crop->core, gdisp->canvas, tool);
+  crop_changed (tool, crop);
 }
 
 
@@ -705,7 +708,7 @@ crop_info_create (Tool *tool)
   info_dialog_add_field (crop_info, "Height: ", height_buf);
 
   /* Create the action area  */
-  build_action_area (GTK_DIALOG (crop_info->shell), action_items, 3, 0);
+  build_action_area (crop_info->shell, action_items, 3, 0);
 }
 
 static void
@@ -765,6 +768,7 @@ crop_selection_callback (GtkWidget *w,
 
   crop_recalc (tool, crop);
   draw_core_resume (crop->core, tool);
+  crop_changed (tool, crop);
 }
 
 static void

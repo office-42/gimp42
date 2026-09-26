@@ -30,8 +30,9 @@
 
 /* end of configuration */
 
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 #include "dbbrowser.h"
 
 typedef struct {
@@ -50,7 +51,7 @@ typedef struct {
   GtkWidget* descr_scroll;
   GtkWidget* descr_table;
 
-  GtkWidget* clist;
+  GtkWidget* clist;		/* a GtkListBox of the procedures */
   GtkWidget* scrolled_win;
 
   /* the currently selected procedure */
@@ -87,12 +88,10 @@ typedef struct {
 static void
 dialog_apply_callback(GtkWidget *, gpointer );
 
-static gint
-procedure_select_callback (GtkWidget *widget,
-			   gint row,
-			   gint column,
-			   GdkEventButton * bevent,
-			   gpointer data);
+static void
+procedure_select_callback (GtkListBox    *list,
+			   GtkListBoxRow *row,
+			   gpointer       data);
 
 
 static void

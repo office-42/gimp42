@@ -74,7 +74,7 @@ void iterate(cp, n, fuse, points)
    }
 
    for (i = -fuse; i < n; i++) {
-      int fn = xform_distrib[RAND_FUNC () % CHOOSE_XFORM_GRAIN];
+      int fn = xform_distrib[flame_random () % CHOOSE_XFORM_GRAIN];
       double tx, ty, v;
 
       if (p[0] > 100.0 || p[0] < -100.0 ||
@@ -192,6 +192,9 @@ void iterate(cp, n, fuse, points)
    if ((count_large > 10 || count_nan > 10)
        && !getenv("PVM_ARCH"))
       fprintf(stderr, "large = %d nan = %d\n", count_large, count_nan);
+#else
+   (void) count_large;
+   (void) count_nan;
 #endif
 }
 
@@ -393,6 +396,7 @@ void interpolate_angle(t, s, v1, v2, v3, tie, cross)
    double t, s;
    double *v1, *v2, *v3;
    int tie;
+   int cross;
 {
    double x = *v1;
    double y = *v2;
@@ -730,7 +734,7 @@ void parse_control_point(ss, cp)
    int argc, i, j;
    int set_cm = 0, set_image_size = 0, set_nbatches = 0, set_white_level = 0, set_cmap_inter = 0;
    int set_spatial_oversample = 0;
-   double *slot, xf, cm, t, nbatches, white_level, spatial_oversample, cmap_inter;
+   double *slot = NULL, xf = 0.0, cm, t, nbatches, white_level, spatial_oversample, cmap_inter;
    double image_size[2];
 
    for (i = 0; i < NXFORMS; i++) {
@@ -807,7 +811,7 @@ void parse_control_point(ss, cp)
 	slot = &cmap_inter;
 	set_cmap_inter = 1;
       } else
-	 *slot++ = atof(argv[i]);
+	 if (slot) *slot++ = atof(argv[i]);
    }
    if (set_cm) {
       cp->cmap_index = (int) cm;
@@ -839,6 +843,7 @@ void parse_control_point(ss, cp)
 void print_control_point(f, cp, quote)
    FILE *f;
    control_point *cp;
+   int quote;
 {
   int i, j;
   char *q = quote ? "# " : "";
@@ -873,11 +878,11 @@ void print_control_point(f, cp, quote)
 
 /* returns a uniform variable from 0 to 1 */
 double random_uniform01() {
-   return (RAND_FUNC () & 0xfffffff) / (double) 0xfffffff;
+   return (flame_random () & 0xfffffff) / (double) 0xfffffff;
 }
 
 double random_uniform11() {
-   return ((RAND_FUNC () & 0xfffffff) - 0x7ffffff) / (double) 0x7ffffff;
+   return ((flame_random () & 0xfffffff) - 0x7ffffff) / (double) 0x7ffffff;
 }
 
 /* returns a mean 0 variance 1 random variable
@@ -914,7 +919,7 @@ copy_variation(control_point *cp0, control_point *cp1) {
 
      
 
-#define random_distrib(v) ((v)[RAND_FUNC ()%vlen(v)])
+#define random_distrib(v) ((v)[flame_random ()%vlen(v)])
 
 void random_control_point(cp, ivar) 
    control_point *cp;
@@ -1047,8 +1052,8 @@ void sort_control_points(cps, ncps, metric)
    double same, swap;
    for (i = 0; i < niter; i++) {
       /* consider switching points with indexes n and m */
-      n = RAND_FUNC () % ncps;
-      m = RAND_FUNC () % ncps;
+      n = flame_random () % ncps;
+      m = flame_random () % ncps;
 
       same = (metric(cps + n, cps + (n - 1) % ncps) +
 	      metric(cps + n, cps + (n + 1) % ncps) +

@@ -25,37 +25,76 @@
 /* option menus, entry fields, scales and checkbuttons.    */
 /***********************************************************/
 
+
+/***********************************************************/
+/* gimp42: ported to GTK 4, on top of the GTK 1 style      */
+/* packing helpers in libgimp/gimpwidgets.h.               */
+/***********************************************************/
+
 #include <stdlib.h>
 #include <stdio.h>
-#include <gdk/gdk.h>
 #include <gtk/gtk.h>
+#include <libgimp/gimpwidgets.h>
 #include <gck/gckui.h>
 
 gint _GckAutoShowFlag = TRUE;
 
-/*************************/
-/* Set cursor for window */
-/*************************/
+/*****************************************************/
+/* Put widget into container: boxes pack it with the */
+/* given expand/fill/padding, anything else adds it. */
+/*****************************************************/
 
-void gck_cursor_set(GdkWindow * window, GdkCursorType cursortype)
+static void _gck_pack(GtkWidget *container, GtkWidget *widget,
+                      gint expand, gint fill, gint padding)
 {
-  GdkCursor *newcursor;
+  if (container == NULL)
+    return;
 
+  if (GTK_IS_BOX(container))
+    gimp_box_pack_start(container, widget, expand, fill, padding);
+  else
+    gimp_container_add(container, widget);
+}
+
+/***********************************************/
+/* A picture of XPM data (was a GdkPixmap+mask) */
+/***********************************************/
+
+static GtkWidget *_gck_picture_new(char **xpm_data)
+{
+  GdkPixbuf *pixbuf;
+  GdkTexture *texture;
+  GtkWidget *picture;
+
+  pixbuf = gdk_pixbuf_new_from_xpm_data((const char **) xpm_data);
+  texture = gdk_texture_new_for_pixbuf(pixbuf);
+  picture = gtk_picture_new_for_paintable(GDK_PAINTABLE(texture));
+  gtk_picture_set_can_shrink(GTK_PICTURE(picture), FALSE);
+
+  g_object_unref(texture);
+  g_object_unref(pixbuf);
+
+  return (picture);
+}
+
+/*************************/
+/* Set cursor for widget */
+/*************************/
+
+void gck_cursor_set(GtkWidget *widget, const char *cursor_name)
+{
   g_function_enter("gck_cursor_set");
-  g_assert(window!=NULL);
+  g_assert(widget!=NULL);
 
-  newcursor = gdk_cursor_new(cursortype);
-  gdk_window_set_cursor(window, newcursor);
-  gdk_cursor_destroy(newcursor);
-  gdk_flush();
+  gtk_widget_set_cursor_from_name(widget, cursor_name);
 
   g_function_leave("gck_cursor_set");
 }
 
 /********************************************************/
 /* Toggle auto show flag, it is set to TRUE as default. */
-/* Sometimes, however, we want to do things to a widget */
-/* before we show it.                                   */
+/* GTK 4 widgets are visible from the start, so this is */
+/* kept only for compatibility.                         */
 /********************************************************/
 
 void gck_auto_show(gint flag)
@@ -68,9 +107,9 @@ void gck_auto_show(gint flag)
   g_function_leave("gck_auto_show");
 }
 
-/*********************************************************/
-/* Create application window, style, visual and colormap */
-/*********************************************************/
+/****************************************/
+/* Create application window and visual */
+/****************************************/
 
 GckApplicationWindow *gck_application_window_new(char *name)
 {
@@ -78,65 +117,14 @@ GckApplicationWindow *gck_application_window_new(char *name)
 
   g_function_enter("gck_application_window_new");
 
-  /* Create application window */
-  /* ========================= */
-
-  appwin = (GckApplicationWindow *) malloc(sizeof(GckApplicationWindow));
-  if (appwin == NULL)
-    {
-      g_function_leave("gck_application_window_new");
-      return (NULL);
-    }
-
-  /* Set up visual and colors */
-  /* ======================== */
-
-  if ((appwin->visinfo = gck_visualinfo_new()) == NULL)
-    {
-      free(appwin);
-      g_function_leave("gck_application_window_new");
-      return (NULL);
-    }
-
-  /* Set style */
-  /* ========= */
-
-  appwin->style = gtk_style_new();
-  if (appwin->style == NULL)
-    {
-      gck_visualinfo_destroy(appwin->visinfo);
-      free(appwin);
-      g_function_leave("gck_application_window_new");
-      return (NULL);
-    }
-
-  appwin->style->fg[GTK_STATE_NORMAL] = *gck_rgb_to_gdkcolor(appwin->visinfo, 0, 0, 0);
-  appwin->style->fg[GTK_STATE_ACTIVE] = *gck_rgb_to_gdkcolor(appwin->visinfo, 0, 0, 0);
-  appwin->style->fg[GTK_STATE_PRELIGHT] = *gck_rgb_to_gdkcolor(appwin->visinfo, 0, 0, 0);
-  appwin->style->fg[GTK_STATE_SELECTED] = *gck_rgb_to_gdkcolor(appwin->visinfo, 255, 255, 255);
-
-  appwin->style->bg[GTK_STATE_NORMAL] = *gck_rgb_to_gdkcolor(appwin->visinfo, 215, 215, 215);
-  appwin->style->bg[GTK_STATE_SELECTED] = *gck_rgb_to_gdkcolor(appwin->visinfo, 0, 0, 156);
-  appwin->style->bg[GTK_STATE_INSENSITIVE] = *gck_rgb_to_gdkcolor(appwin->visinfo, 215, 215, 215);
-
-  appwin->style->klass->xthickness = 2;
-  appwin->style->klass->ythickness = 2;
-
-  gtk_widget_push_visual(appwin->visinfo->visual);
-  gtk_widget_push_colormap(appwin->visinfo->colormap);
-  gtk_widget_push_style(appwin->style);
+  appwin = g_new0(GckApplicationWindow, 1);
+  appwin->visinfo = gck_visualinfo_new();
 
   /* Create window widget */
   /* ==================== */
 
-  appwin->widget = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  appwin->widget = gtk_window_new();
   gtk_window_set_title(GTK_WINDOW(appwin->widget),name);
-
-  /* Create application accelerator table */
-  /* ==================================== */
-
-  appwin->accelerator_group = gtk_accel_group_new();
-  gtk_window_add_accel_group(GTK_WINDOW(appwin->widget),appwin->accelerator_group);
 
   g_function_leave("gck_application_window_new");
   return (appwin);
@@ -151,13 +139,9 @@ void gck_application_window_destroy(GckApplicationWindow *appwin)
   g_function_enter("gck_application_window_destroy");
   g_assert(appwin!=NULL);
 
-  gtk_widget_pop_style();
-  gtk_widget_pop_colormap();
-  gtk_widget_pop_visual();
-
   gck_visualinfo_destroy(appwin->visinfo);
-  gtk_widget_destroy(appwin->widget);
-  free(appwin);
+  gtk_window_destroy(GTK_WINDOW(appwin->widget));
+  g_free(appwin);
 
   g_function_leave("gck_application_window_destroy");
 }
@@ -167,9 +151,9 @@ void gck_application_window_destroy(GckApplicationWindow *appwin)
 /**************************/
 
 GckDialogWindow *gck_dialog_window_new(char *name,GckPosition ActionPos,
-                                       GtkSignalFunc ok_pressed_func,
-                                       GtkSignalFunc cancel_pressed_func,
-                                       GtkSignalFunc help_pressed_func)
+                                       GCallback ok_pressed_func,
+                                       GCallback cancel_pressed_func,
+                                       GCallback help_pressed_func)
 {
   GckDialogWindow *dialog;
   GtkWidget *mainbox, *frame;
@@ -179,17 +163,11 @@ GckDialogWindow *gck_dialog_window_new(char *name,GckPosition ActionPos,
   /* Create dialog window */
   /* ==================== */
 
-  dialog = (GckDialogWindow *) malloc(sizeof(GckDialogWindow));
-  if (dialog == NULL)
-    {
-      g_function_leave("gck_dialog_window_new");
-      return (NULL);
-    }
+  dialog = g_new0(GckDialogWindow, 1);
 
-  dialog->widget = gtk_window_new(GTK_WINDOW_DIALOG);
+  dialog->widget = gtk_window_new();
   gtk_window_set_title(GTK_WINDOW(dialog->widget),name);
-  gtk_window_set_policy(GTK_WINDOW(dialog->widget),FALSE,TRUE,TRUE);
-  gtk_window_position(GTK_WINDOW(dialog->widget),GTK_WIN_POS_MOUSE);
+  gtk_window_set_resizable(GTK_WINDOW(dialog->widget),TRUE);
 
   dialog->okbutton=NULL;
   dialog->cancelbutton=NULL;
@@ -208,12 +186,12 @@ GckDialogWindow *gck_dialog_window_new(char *name,GckPosition ActionPos,
       if (ActionPos==GCK_TOP)
         {
           dialog->actionbox=gck_hbox_new(mainbox,TRUE,TRUE,TRUE,5,0,5);
-          frame = gck_frame_new(NULL,mainbox,GTK_SHADOW_ETCHED_IN,TRUE,TRUE,0,5);
+          frame = gck_frame_new(NULL,mainbox,GCK_SHADOW_ETCHED_IN,TRUE,TRUE,0,5);
           dialog->workbox=gck_vbox_new(frame,FALSE,TRUE,TRUE,5,0,5);
         }
       else
         {
-          frame = gck_frame_new(NULL,mainbox,GTK_SHADOW_ETCHED_IN,TRUE,TRUE,0,5);
+          frame = gck_frame_new(NULL,mainbox,GCK_SHADOW_ETCHED_IN,TRUE,TRUE,0,5);
           dialog->workbox=gck_vbox_new(frame,FALSE,TRUE,TRUE,5,0,5);
           dialog->actionbox=gck_hbox_new(mainbox,TRUE,TRUE,TRUE,5,0,5);
         }
@@ -223,12 +201,12 @@ GckDialogWindow *gck_dialog_window_new(char *name,GckPosition ActionPos,
       if (ActionPos==GCK_LEFT)
         {
           dialog->actionbox=gck_vbox_new(mainbox,FALSE,FALSE,FALSE,5,0,5);
-          frame = gck_frame_new(NULL,mainbox,GTK_SHADOW_ETCHED_IN,TRUE,TRUE,0,5);
+          frame = gck_frame_new(NULL,mainbox,GCK_SHADOW_ETCHED_IN,TRUE,TRUE,0,5);
           dialog->workbox=gck_vbox_new(frame,FALSE,TRUE,TRUE,5,0,5);
         }
       else
         {
-          frame = gck_frame_new(NULL,mainbox,GTK_SHADOW_ETCHED_IN,TRUE,TRUE,0,5);
+          frame = gck_frame_new(NULL,mainbox,GCK_SHADOW_ETCHED_IN,TRUE,TRUE,0,5);
           dialog->workbox=gck_vbox_new(frame,FALSE,TRUE,TRUE,5,0,5);
           dialog->actionbox=gck_vbox_new(mainbox,FALSE,FALSE,FALSE,5,0,5);
         }
@@ -238,21 +216,21 @@ GckDialogWindow *gck_dialog_window_new(char *name,GckPosition ActionPos,
     {
       dialog->okbutton = gck_pushbutton_new("Ok",dialog->actionbox,FALSE,TRUE,0,
                                             ok_pressed_func);
-      gtk_object_set_data(GTK_OBJECT(dialog->okbutton),"GckDialogWindow",(gpointer)dialog);
+      g_object_set_data(G_OBJECT(dialog->okbutton),"GckDialogWindow",(gpointer)dialog);
     }
 
   if (cancel_pressed_func!=NULL)
     {
       dialog->cancelbutton = gck_pushbutton_new("Cancel",dialog->actionbox,FALSE,TRUE,0,
                                                 cancel_pressed_func);
-      gtk_object_set_data(GTK_OBJECT(dialog->cancelbutton),"GckDialogWindow",(gpointer)dialog);
+      g_object_set_data(G_OBJECT(dialog->cancelbutton),"GckDialogWindow",(gpointer)dialog);
     }
 
   if (help_pressed_func!=NULL)
     {
       dialog->helpbutton = gck_pushbutton_new("Help",dialog->actionbox,FALSE,TRUE,0,
                                               help_pressed_func);
-      gtk_object_set_data(GTK_OBJECT(dialog->helpbutton),"GckDialogWindow",(gpointer)dialog);
+      g_object_set_data(G_OBJECT(dialog->helpbutton),"GckDialogWindow",(gpointer)dialog);
     }
 
   g_function_leave("gck_dialog_window_new");
@@ -268,8 +246,8 @@ void gck_dialog_window_destroy(GckDialogWindow * dialog)
   g_function_enter("gck_dialog_window_destroy");
   g_assert(dialog!=NULL);
 
-  gtk_widget_destroy(dialog->widget);
-  free(dialog);
+  gtk_window_destroy(GTK_WINDOW(dialog->widget));
+  g_free(dialog);
 
   g_function_leave("gck_dialog_window_destroy");
 }
@@ -284,12 +262,9 @@ GtkWidget *gck_vseparator_new(GtkWidget *container)
 
   g_function_enter("gck_vseparator_new");
 
-  separator=gtk_vseparator_new();
+  separator=gtk_separator_new(GTK_ORIENTATION_VERTICAL);
   if (container!=NULL)
-    gtk_container_add(GTK_CONTAINER(container),separator);
-
-  if (_GckAutoShowFlag==TRUE)
-    gtk_widget_show(separator);
+    gimp_container_add(container,separator);
 
   g_function_leave("gck_vseparator_new");
   return(separator);
@@ -305,11 +280,9 @@ GtkWidget *gck_hseparator_new(GtkWidget *container)
 
   g_function_enter("gck_hseparator_new");
 
-  separator=gtk_hseparator_new();
+  separator=gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
   if (container!=NULL)
-    gtk_container_add(GTK_CONTAINER(container),separator);
-
-  if (_GckAutoShowFlag==TRUE) gtk_widget_show(separator);
+    gimp_container_add(container,separator);
 
   g_function_leave("gck_hseparator_new");
   return(separator);
@@ -319,29 +292,37 @@ GtkWidget *gck_hseparator_new(GtkWidget *container)
 /* Create frame template */
 /*************************/
 
-GtkWidget *gck_frame_new(char *name, GtkWidget * container, GtkShadowType shadowtype,
+GtkWidget *gck_frame_new(char *name, GtkWidget * container, GckShadowType shadowtype,
                          gint expand, gint fill, gint padding, gint borderwidth)
 {
+  static GtkCssProvider *provider = NULL;
   GtkWidget *frame;
-  gint container_type;
 
   g_function_enter("gck_frame_new");
 
   frame = gtk_frame_new(name);
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), shadowtype);
-  gtk_container_border_width(GTK_CONTAINER(frame), borderwidth);
 
-  if (container!=NULL)
+  /* A frame without a shadow draws no border */
+  /* ======================================== */
+
+  if (shadowtype == GCK_SHADOW_NONE)
     {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), frame, expand, fill, padding);
-      else
-        gtk_container_add(GTK_CONTAINER(container), frame);
+      if (provider == NULL)
+        {
+          provider = gtk_css_provider_new();
+          gtk_css_provider_load_from_string(provider,
+            "frame.gck-shadow-none > border { border-style: none; box-shadow: none; }");
+          gtk_style_context_add_provider_for_display(gdk_display_get_default(),
+            GTK_STYLE_PROVIDER(provider),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        }
+
+      gtk_widget_add_css_class(frame, "gck-shadow-none");
     }
 
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(frame);
+  gimp_container_set_border_width(frame, borderwidth);
+
+  _gck_pack(container, frame, expand, fill, padding);
 
   g_function_leave("gck_frame_new");
   return (frame);
@@ -354,7 +335,6 @@ GtkWidget *gck_frame_new(char *name, GtkWidget * container, GtkShadowType shadow
 GtkWidget *gck_label_new(char *name, GtkWidget *container)
 {
   GtkWidget *label;
-  gint container_type;
 
   g_function_enter("gck_label_new");
 
@@ -363,17 +343,7 @@ GtkWidget *gck_label_new(char *name, GtkWidget *container)
   else
     label = gtk_label_new(name);
 
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), label, FALSE,FALSE, 0);
-      else
-        gtk_container_add(GTK_CONTAINER(container), label);
-    }
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(label);
+  _gck_pack(container, label, FALSE, FALSE, 0);
 
   g_function_leave("gck_label_new");
   return (label);
@@ -383,7 +353,6 @@ GtkWidget *gck_label_aligned_new(char *name, GtkWidget * container,
                                  gdouble xalign, gdouble yalign)
 {
   GtkWidget *label;
-  gint container_type;
 
   g_function_enter("gck_label_aligned_new");
 
@@ -392,185 +361,129 @@ GtkWidget *gck_label_aligned_new(char *name, GtkWidget * container,
   else
     label = gtk_label_new(name);
 
-  gtk_misc_set_alignment(GTK_MISC(label),xalign,yalign);
+  gtk_label_set_xalign(GTK_LABEL(label),xalign);
+  gtk_label_set_yalign(GTK_LABEL(label),yalign);
 
-  if (container!=NULL)
-   {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), label, FALSE,FALSE, 0);
-      else
-        gtk_container_add(GTK_CONTAINER(container), label);
-   }
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(label);
+  _gck_pack(container, label, FALSE, FALSE, 0);
 
   g_function_leave("gck_label_aligned_new");
   return (label);
 }
 
+/*****************************************************/
+/* Create drawing area.  Input is up to the caller:  */
+/* add event controllers to the returned widget.     */
+/*****************************************************/
+
 GtkWidget *gck_drawing_area_new(GtkWidget *container,gint width,gint height,
-                                gint event_mask,GtkSignalFunc event_handler)
+                                GtkDrawingAreaDrawFunc draw_func,gpointer data)
 {
   GtkWidget *drawingarea;
-  gint container_type;
 
   g_function_enter("gck_drawing_area_new");
 
   drawingarea = gtk_drawing_area_new();
-  gtk_drawing_area_size(GTK_DRAWING_AREA(drawingarea),width,height);
+  gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(drawingarea),width);
+  gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(drawingarea),height);
 
-  gtk_widget_set_events(drawingarea,event_mask);
+  if (draw_func!=NULL)
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(drawingarea),
+                                   draw_func,data,NULL);
 
-  gtk_signal_connect(GTK_OBJECT(drawingarea),"event",
-    (GtkSignalFunc)event_handler,(gpointer)drawingarea);
-
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), drawingarea, FALSE, FALSE, 0);
-      else
-        gtk_container_add(GTK_CONTAINER(container), drawingarea);
-    }
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(drawingarea);
+  _gck_pack(container, drawingarea, FALSE, FALSE, 0);
 
   g_function_leave("gck_drawing_area_new");
   return(drawingarea);
 }
 
 
-GtkWidget *gck_pixmap_new (GdkPixmap *pixm,
-                           GdkBitmap *mask,
+GtkWidget *gck_pixmap_new (char **xpm_data,
                            GtkWidget *container)
 {
-  GtkWidget *pixmap,*alignment;
+  GtkWidget *pixmap;
 
   g_function_enter("gck_pixmap_new");
-  g_assert(pixm != NULL);
+  g_assert(xpm_data != NULL);
 
-  pixmap = gtk_pixmap_new(pixm,mask);
-/*  gtk_widget_set_events(pixmap,GDK_EXPOSURE_MASK); */
+  pixmap = _gck_picture_new(xpm_data);
+  gtk_widget_set_halign(pixmap, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign(pixmap, GTK_ALIGN_CENTER);
+  gimp_container_set_border_width(pixmap, 2);
 
-  alignment=gtk_alignment_new(0.5,0.5,0.0,0.0);
-  gtk_container_add(GTK_CONTAINER(container),alignment);
-  gtk_container_border_width(GTK_CONTAINER(alignment),2);
-
-  gtk_container_add(GTK_CONTAINER(alignment),pixmap);
-
-  gtk_widget_show(pixmap);
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(alignment);
+  if (container!=NULL)
+    gimp_container_add(container,pixmap);
 
   g_function_leave("gck_pixmap_new");
   return(pixmap);
 }
 
-/************************************/
-/* Create horizontal scale template */
-/************************************/
+/**************************/
+/* Create scale templates */
+/**************************/
 
-GtkWidget *gck_hscale_new(char *name, GtkWidget *container,
-	                  GckScaleValues *svals,
-                          GtkSignalFunc value_changed_func)
+static GtkWidget *_gck_scale_new(char *name, GtkWidget *container,
+                                 GckScaleValues *svals,
+                                 GCallback value_changed_func,
+                                 GtkOrientation orientation)
 {
   GtkWidget *label, *scale;
-  GtkObject *adjustment;
-  gint container_type;
+  GtkAdjustment *adjustment;
 
-  g_function_enter("gck_hscale_new");
   g_assert(svals!=NULL);
 
-  if (name != NULL)
+  if (name != NULL && container != NULL)
     {
       label = gtk_label_new(name);
-      gtk_container_add(GTK_CONTAINER(container), label);
-      gtk_widget_show(label);
+      gimp_container_add(container, label);
     }
 
   adjustment = gtk_adjustment_new(svals->value, svals->lower,
 	                          svals->upper, svals->step_inc,
                                   svals->page_inc, svals->page_size);
 
-  scale = gtk_hscale_new(GTK_ADJUSTMENT(adjustment));
-  gtk_widget_set_usize(scale, svals->size, 0);
+  scale = gtk_scale_new(orientation, adjustment);
+  if (orientation == GTK_ORIENTATION_HORIZONTAL)
+    gtk_widget_set_size_request(scale, svals->size, -1);
+  else
+    gtk_widget_set_size_request(scale, -1, svals->size);
+  gtk_scale_set_digits(GTK_SCALE(scale), 1);
+  gtk_scale_set_draw_value(GTK_SCALE(scale), svals->draw_value_flag);
   gtk_scale_set_value_pos(GTK_SCALE(scale), GTK_POS_TOP);
 
   if (value_changed_func!=NULL)
-    gtk_signal_connect_object(GTK_OBJECT(adjustment),"value_changed",
+    g_signal_connect_swapped(adjustment,"value-changed",
       value_changed_func,(gpointer)scale);
 
-  gtk_range_set_update_policy(GTK_RANGE(scale), svals->update_type);
-  gtk_scale_set_draw_value(GTK_SCALE(scale), svals->draw_value_flag);
+  _gck_pack(container, scale, FALSE, FALSE, 0);
 
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), scale, FALSE,FALSE, 0);
-      else
-        gtk_container_add(GTK_CONTAINER(container), scale);
-    }
+  return (scale);
+}
 
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(scale);
+GtkWidget *gck_hscale_new(char *name, GtkWidget *container,
+	                  GckScaleValues *svals,
+                          GCallback value_changed_func)
+{
+  GtkWidget *scale;
+
+  g_function_enter("gck_hscale_new");
+
+  scale = _gck_scale_new(name, container, svals, value_changed_func,
+                         GTK_ORIENTATION_HORIZONTAL);
 
   g_function_leave("gck_hscale_new");
   return (scale);
 }
 
-/**********************************/
-/* Create vertical scale template */
-/**********************************/
-
 GtkWidget *gck_vscale_new(char *name, GtkWidget * container,
 	                  GckScaleValues *svals,
-                          GtkSignalFunc value_changed_func)
+                          GCallback value_changed_func)
 {
-  GtkWidget *label, *scale;
-  GtkObject *adjustment;
-  gint container_type;
+  GtkWidget *scale;
 
   g_function_enter("gck_vscale_new");
-  g_assert(svals!=NULL);
 
-  if (name != NULL)
-    {
-      label = gtk_label_new(name);
-      gtk_container_add(GTK_CONTAINER(container), label);
-      gtk_widget_show(label);
-    }
-
-  adjustment = gtk_adjustment_new(svals->value, svals->lower,
-			          svals->upper, svals->step_inc,
-                                  svals->page_inc, svals->page_size);
-
-  scale = gtk_vscale_new(GTK_ADJUSTMENT(adjustment));
-  gtk_widget_set_usize(scale, 0, svals->size);
-  gtk_scale_set_value_pos(GTK_SCALE(scale), GTK_POS_TOP);
-
-  if (value_changed_func!=NULL)
-    gtk_signal_connect_object(GTK_OBJECT(adjustment),"value_changed",
-      value_changed_func,(gpointer)scale);
-
-  gtk_range_set_update_policy(GTK_RANGE(scale), svals->update_type);
-  gtk_scale_set_draw_value(GTK_SCALE(scale), svals->draw_value_flag);
-
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), scale, FALSE,FALSE, 0);
-      else
-        gtk_container_add(GTK_CONTAINER(container), scale);
-    }
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(scale);
+  scale = _gck_scale_new(name, container, svals, value_changed_func,
+                         GTK_ORIENTATION_VERTICAL);
 
   g_function_leave("gck_vscale_new");
   return (scale);
@@ -582,51 +495,36 @@ GtkWidget *gck_vscale_new(char *name, GtkWidget * container,
 
 GtkWidget *gck_entryfield_text_new (char *name, GtkWidget *container,
                                     char *initial_text,
-                                    GtkSignalFunc text_changed_func)
+                                    GCallback text_changed_func)
 {
   GtkWidget *entry, *label=NULL, *hbox=NULL;
-  gint container_type;
 
   g_function_enter("gck_entryfield_text_new");
 
   if (name!=NULL)
     {
-      hbox = gtk_hbox_new(FALSE, 0);
-
-      if (container!=NULL)
-        {
-          container_type=GTK_WIDGET_TYPE(container);
-          if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-            gtk_box_pack_start(GTK_BOX(container), hbox, FALSE, FALSE, 0);
-          else
-            gtk_container_add(GTK_CONTAINER(container), hbox);
-        }
-
-      gtk_container_border_width(GTK_CONTAINER(hbox), 2);
-      gtk_widget_show(hbox);
+      hbox = gimp_hbox_new(FALSE, 0);
+      _gck_pack(container, hbox, FALSE, FALSE, 0);
+      gimp_container_set_border_width(hbox, 2);
 
       label = gtk_label_new(name);
-      gtk_container_add(GTK_CONTAINER(hbox), label);
-      gtk_widget_show(label);
+      gimp_container_add(hbox, label);
    }
 
   entry = gtk_entry_new();
 
   if (initial_text!=NULL)
-    gtk_entry_set_text(GTK_ENTRY(entry), initial_text);
+    gtk_editable_set_text(GTK_EDITABLE(entry), initial_text);
 
   if (hbox!=NULL)
-    gtk_container_add(GTK_CONTAINER(hbox), entry);
+    gimp_container_add(hbox, entry);
   else if (container!=NULL)
-    gtk_container_add(GTK_CONTAINER(container), entry);
+    gimp_container_add(container, entry);
 
   if (text_changed_func!=NULL)
-    gtk_signal_connect_object(GTK_OBJECT(entry),"changed",text_changed_func,(gpointer)entry);
+    g_signal_connect_swapped(entry,"changed",text_changed_func,(gpointer)entry);
 
-  if (_GckAutoShowFlag == TRUE && (container!=NULL || hbox!=NULL))
-    gtk_widget_show(entry);
-
-  gtk_object_set_data(GTK_OBJECT(entry),"EntryLabel",(gpointer)label);
+  g_object_set_data(G_OBJECT(entry),"EntryLabel",(gpointer)label);
 
   g_function_leave("gck_entryfield_text_new");
 
@@ -639,11 +537,11 @@ GtkWidget *gck_entryfield_text_new (char *name, GtkWidget *container,
 
 GtkWidget *gck_entryfield_new(char *name, GtkWidget *container,
                               double initial_value,
-                              GtkSignalFunc value_changed_func)
+                              GCallback value_changed_func)
 {
   char buffer[64];
 
-  sprintf(buffer, "%f", initial_value);
+  g_snprintf(buffer, sizeof(buffer), "%f", initial_value);
 
   return (gck_entryfield_text_new(name,container,buffer,value_changed_func));
 }
@@ -654,124 +552,88 @@ GtkWidget *gck_entryfield_new(char *name, GtkWidget *container,
 
 GtkWidget *gck_pushbutton_new(char *name, GtkWidget *container,
                               gint expand, gint fill, gint padding,
-                              GtkSignalFunc button_clicked_func)
+                              GCallback button_clicked_func)
 {
-  GtkWidget *button, *label;
-  gint container_type;
+  GtkWidget *button;
 
   g_function_enter("gck_pushbutton_new");
 
-  button = gtk_button_new();
+  if (name != NULL)
+    button = gtk_button_new_with_label(name);
+  else
+    button = gtk_button_new();
 
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), button, expand, fill, padding);
-      else
-        gtk_container_add(GTK_CONTAINER(container), button);
-    }
+  _gck_pack(container, button, expand, fill, padding);
 
   if (button_clicked_func != NULL)
-    gtk_signal_connect_object(GTK_OBJECT(button),"clicked",button_clicked_func,(gpointer)button);
-
-  if (name != NULL)
-    {
-      label = gtk_label_new(name);
-      gtk_container_add(GTK_CONTAINER(button), label);
-      gtk_widget_show(label);
-    }
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(button);
+    g_signal_connect_swapped(button,"clicked",button_clicked_func,(gpointer)button);
 
   g_function_leave("gck_pushbutton_new");
   return (button);
 }
 
+/**********************************************************/
+/* Fill a button with a picture and/or a label; a picture */
+/* and a label go side by side in a box.                  */
+/**********************************************************/
+
+static void _gck_button_fill(GtkWidget *button, char *name, char **xpm_data)
+{
+  GtkWidget *cont;
+
+  if (name!=NULL && xpm_data!=NULL)
+    cont=gck_hbox_new(button, FALSE,FALSE,TRUE,0,0,1);
+  else
+    cont=button;
+
+  if (xpm_data!=NULL)
+    gck_pixmap_new(xpm_data,cont);
+
+  if (name != NULL)
+    gck_label_new(name,cont);
+}
+
 GtkWidget *gck_pushbutton_pixmap_new(char *name,
-                                     GdkPixmap *pixm,
-                                     GdkBitmap *mask,
+                                     char **xpm_data,
                                      GtkWidget *container,
                                      gint expand,gint fill,gint padding,
-                                     GtkSignalFunc button_clicked_func)
+                                     GCallback button_clicked_func)
 {
-  GtkWidget *button, *cont;
-  gint container_type;
+  GtkWidget *button;
 
   g_function_enter("gck_pushbutton_pixmap_new");
 
   button = gtk_button_new();
 
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), button, expand, fill, padding);
-      else
-        gtk_container_add(GTK_CONTAINER(container), button);
-    }
+  _gck_pack(container, button, expand, fill, padding);
 
   if (button_clicked_func != NULL)
-    gtk_signal_connect_object(GTK_OBJECT(button),"clicked",button_clicked_func,(gpointer)button);
+    g_signal_connect_swapped(button,"clicked",button_clicked_func,(gpointer)button);
 
-  if (name!=NULL && pixm!=NULL)
-    cont=gck_hbox_new(button, FALSE,FALSE,TRUE,0,0,1);
-  else
-    cont=button;
-
-  if (pixm!=NULL)
-    gck_pixmap_new(pixm,mask,cont);
-
-  if (name != NULL)
-    gck_label_new(name,cont);
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(button);
+  _gck_button_fill(button, name, xpm_data);
 
   g_function_leave("gck_pushbutton_pixmap_new");
   return (button);
 }
 
 GtkWidget *gck_togglebutton_pixmap_new(char *name,
-                                       GdkPixmap *pixm,
-                                       GdkBitmap *mask,
+                                       char **xpm_data,
                                        GtkWidget *container,
                                        gint expand,gint fill,gint padding,
-                                       GtkSignalFunc button_toggled_func)
+                                       GCallback button_toggled_func)
 {
-  GtkWidget *button, *cont;
-  gint container_type;
+  GtkWidget *button;
 
   g_function_enter("gck_togglebutton_pixmap_new");
 
   button = gtk_toggle_button_new();
 
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), button, expand, fill, padding);
-      else
-        gtk_container_add(GTK_CONTAINER(container), button);
-    }
+  _gck_pack(container, button, expand, fill, padding);
 
   if (button_toggled_func != NULL)
-    gtk_signal_connect_object(GTK_OBJECT(button),"toggled",button_toggled_func,(gpointer)button);
+    g_signal_connect_swapped(button,"toggled",button_toggled_func,(gpointer)button);
 
-  if (name!=NULL && pixm!=NULL)
-    cont=gck_hbox_new(button, FALSE,FALSE,TRUE,0,0,1);
-  else
-    cont=button;
-
-  if (pixm!=NULL)
-    gck_pixmap_new(pixm,mask,cont);
-
-  if (name != NULL)
-    gck_label_new(name,cont);
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(button);
+  _gck_button_fill(button, name, xpm_data);
 
   g_function_leave("gck_togglebutton_pixmap_new");
   return (button);
@@ -783,10 +645,9 @@ GtkWidget *gck_togglebutton_pixmap_new(char *name,
 
 GtkWidget *gck_checkbutton_new(char *name, GtkWidget *container,
                                gint value,
-                               GtkSignalFunc status_changed_func)
+                               GCallback status_changed_func)
 {
   GtkWidget *button;
-  gint container_type;
 
   g_function_enter("gck_checkbutton_new");
 
@@ -795,22 +656,12 @@ GtkWidget *gck_checkbutton_new(char *name, GtkWidget *container,
   else
     button = gtk_check_button_new_with_label(name);
 
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), button, TRUE, TRUE, 0);
-      else
-        gtk_container_add(GTK_CONTAINER(container), button);
-    }
+  _gck_pack(container, button, TRUE, TRUE, 0);
 
-  gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(button),value);
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(button),value);
 
   if (status_changed_func!=NULL)
-    gtk_signal_connect_object(GTK_OBJECT(button),"toggled",status_changed_func,(gpointer)button);
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(button);
+    g_signal_connect_swapped(button,"toggled",status_changed_func,(gpointer)button);
 
   g_function_leave("gck_checkbutton_new");
   return (button);
@@ -823,84 +674,50 @@ GtkWidget *gck_checkbutton_new(char *name, GtkWidget *container,
 GtkWidget *gck_radiobutton_new(char *name,
                                GtkWidget *container,
                                GtkWidget *previous,
-                               GtkSignalFunc status_changed_func)
+                               GCallback status_changed_func)
 {
   GtkWidget *button;
-  GSList *group=NULL;
-  gint container_type;
 
   g_function_enter("gck_radiobutton_new");
 
-  if (previous!=NULL)
-    group=gtk_radio_button_group(GTK_RADIO_BUTTON(previous));
+  button = gimp_radio_button_new(previous, name);
 
-  if (name==NULL)
-    button = gtk_radio_button_new(group);
-  else
-    button = gtk_radio_button_new_with_label(group,name);
-
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), button, TRUE, TRUE, 0);
-      else
-        gtk_container_add(GTK_CONTAINER(container), button);
-    }
+  _gck_pack(container, button, TRUE, TRUE, 0);
 
   if (status_changed_func != NULL)
-    gtk_signal_connect_object(GTK_OBJECT(button),"toggled",status_changed_func,(gpointer)button);
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(button);
+    g_signal_connect_swapped(button,"toggled",status_changed_func,(gpointer)button);
 
   g_function_leave("gck_radiobutton_new");
   return (button);
 }
 
+/**************************************************************/
+/* Radio buttons drawn as buttons (GTK 1's draw_indicator off) */
+/* are grouped toggle buttons in GTK 4.                        */
+/**************************************************************/
+
 GtkWidget *gck_radiobutton_pixmap_new(char *name,
-                                      GdkPixmap *pixm,
-                                      GdkBitmap *mask,
+                                      char **xpm_data,
                                       GtkWidget *container,
                                       GtkWidget *previous,
-                                      GtkSignalFunc status_changed_func)
+                                      GCallback status_changed_func)
 {
-  GtkWidget *button,*cont;
-  GSList *group=NULL;
+  GtkWidget *button;
 
   g_function_enter("gck_radiobutton_pixmap_new");
 
+  button = gtk_toggle_button_new();
+
   if (previous != NULL)
-    group=gtk_radio_button_group(GTK_RADIO_BUTTON(previous));
+    gtk_toggle_button_set_group(GTK_TOGGLE_BUTTON(button),
+                                GTK_TOGGLE_BUTTON(previous));
 
-  button = gtk_radio_button_new(group);
+  _gck_pack(container, button, TRUE, TRUE, 0);
 
-  gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(button),FALSE);
-
-  if (container!=NULL)
-    {
-      if (GTK_IS_VBOX(container) || GTK_IS_HBOX(container))
-        gtk_box_pack_start(GTK_BOX(container), button, TRUE, TRUE, 0);
-      else
-        gtk_container_add(GTK_CONTAINER(container), button);
-    }
-
-  if (name!=NULL && pixm!=NULL)
-    cont=gck_hbox_new(button, FALSE,FALSE,TRUE,0,0,1);
-  else
-    cont=button;
-
-  if (pixm != NULL)
-    gck_pixmap_new(pixm,mask,cont);
-
-  if (name != NULL)
-    gck_label_new(name,cont);
+  _gck_button_fill(button, name, xpm_data);
 
   if (status_changed_func != NULL)
-    gtk_signal_connect_object(GTK_OBJECT(button),"toggled",status_changed_func,(gpointer)button);
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(button);
+    g_signal_connect_swapped(button,"toggled",status_changed_func,(gpointer)button);
 
   g_function_leave("gck_radiobutton_pixmap_new");
   return (button);
@@ -915,25 +732,14 @@ GtkWidget *gck_vbox_new(GtkWidget * container,
 	                gint spacing, gint padding, gint borderwidth)
 {
   GtkWidget *vbox;
-  gint container_type;
 
   g_function_enter("gck_vbox_new");
 
-  vbox = gtk_vbox_new(homogenous, spacing);
+  vbox = gimp_vbox_new(homogenous, spacing);
 
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), vbox, expand, fill, padding);
-      else
-        gtk_container_add(GTK_CONTAINER(container), vbox);
-    }
+  _gck_pack(container, vbox, expand, fill, padding);
 
-  gtk_container_border_width(GTK_CONTAINER(vbox), borderwidth);
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(vbox);
+  gimp_container_set_border_width(vbox, borderwidth);
 
   g_function_leave("gck_vbox_new");
   return (vbox);
@@ -948,25 +754,14 @@ GtkWidget *gck_hbox_new(GtkWidget * container,
 	                gint spacing, gint padding, gint borderwidth)
 {
   GtkWidget *hbox;
-  gint container_type;
 
   g_function_enter("gck_hbox_new");
 
-  hbox = gtk_hbox_new(homogenous, spacing);
+  hbox = gimp_hbox_new(homogenous, spacing);
 
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), hbox, expand, fill, padding);
-      else
-        gtk_container_add(GTK_CONTAINER(container), hbox);
-    }
+  _gck_pack(container, hbox, expand, fill, padding);
 
-  gtk_container_border_width(GTK_CONTAINER(hbox), borderwidth);
-
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(hbox);
+  gimp_container_set_border_width(hbox, borderwidth);
 
   g_function_leave("gck_hbox_new");
   return (hbox);
@@ -976,164 +771,76 @@ GtkWidget *gck_hbox_new(GtkWidget * container,
 /* Create option menu */
 /**********************/
 
+typedef struct
+{
+  GCallback item_selected_func;
+  gpointer data;
+} _GckOptionMenu;
+
+static void _gck_option_menu_selected(GtkWidget *option_menu, gpointer item_id)
+{
+  _GckOptionMenu *menu;
+
+  menu = g_object_get_data(G_OBJECT(option_menu), "_GckOptionMenu");
+
+  g_object_set_data(G_OBJECT(option_menu), "_GckOptionMenuItemID", item_id);
+
+  if (menu != NULL && menu->item_selected_func != NULL)
+    ((void (*)(GtkWidget *, gpointer)) menu->item_selected_func)(option_menu,
+                                                                 menu->data);
+}
+
 GtkWidget *gck_option_menu_new(char *name, GtkWidget *container,
                                gint expand, gint fill, gint padding,
                                char *item_labels[],
-                               GtkSignalFunc item_selected_func,
+                               GCallback item_selected_func,
                                gpointer data)
 {
-  GtkWidget *optionmenu, *menu, *menuitem,*cont,*label;
-  gint i = 0, container_type;
+  GtkWidget *optionmenu,*cont;
+  _GckOptionMenu *menu;
+  gint i = 0;
 
   g_function_enter("gck_option_menu_new");
 
-  optionmenu = gtk_option_menu_new();
+  optionmenu = gimp_option_menu_new();
+
+  menu = g_new0(_GckOptionMenu, 1);
+  menu->item_selected_func = item_selected_func;
+  menu->data = data;
+  g_object_set_data_full(G_OBJECT(optionmenu), "_GckOptionMenu", menu, g_free);
+  g_object_set_data(G_OBJECT(optionmenu), "_GckOptionMenuItemID", GINT_TO_POINTER(0));
 
   if (name!=NULL)
     {
       cont=gck_hbox_new(container,FALSE,FALSE,FALSE,5,0,0);
-      label=gck_label_new(name,cont);
+      gck_label_new(name,cont);
     }
   else
     cont=container;
 
-  if (cont!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(cont);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(cont), optionmenu, expand, fill, padding);
-      else
-        gtk_container_add(GTK_CONTAINER(cont),optionmenu);
-    }
-
-  menu = gtk_menu_new();
+  _gck_pack(cont, optionmenu, expand, fill, padding);
 
   while (item_labels[i] != NULL)
     {
-      menuitem = gtk_menu_item_new_with_label(item_labels[i]);
-
-      gtk_object_set_data(GTK_OBJECT(menuitem),"_GckOptionMenuItemID",(gpointer)i);
-
-      if (item_selected_func!=NULL)
-        gtk_signal_connect(GTK_OBJECT(menuitem),"activate",
-          item_selected_func,data);
-
-      gtk_container_add(GTK_CONTAINER(menu), menuitem);
-      gtk_widget_show(menuitem);
+      gimp_option_menu_append(optionmenu, item_labels[i],
+                              G_CALLBACK(_gck_option_menu_selected),
+                              GINT_TO_POINTER(i));
       i++;
     }
-
-  gtk_option_menu_set_menu(GTK_OPTION_MENU(optionmenu), menu);
-  if (_GckAutoShowFlag == TRUE)
-    gtk_widget_show(optionmenu);
 
   g_function_leave("gck_option_menu_new");
   return (optionmenu);
 }
 
-/******************/
-/* Create menubar */
-/******************/
-
-GtkWidget *gck_menu_bar_new(GtkWidget *container,GckMenuItem menu_items[],
-                            GtkAccelGroup *acc_group)
+void gck_option_menu_set_history(GtkWidget *option_menu, gint index)
 {
-  GtkWidget *menubar,*menu_item;
-  gint container_type;
+  g_function_enter("gck_option_menu_set_history");
 
-  g_function_enter("gck_menu_bar_new");
+  gimp_option_menu_set_history(option_menu, index);
+  g_object_set_data(G_OBJECT(option_menu), "_GckOptionMenuItemID",
+                    GINT_TO_POINTER(index));
 
-  menubar=gtk_menu_bar_new();
-
-  if (container!=NULL)
-    {
-      container_type=GTK_WIDGET_TYPE(container);
-      if (container_type == gtk_vbox_get_type() || container_type == gtk_hbox_get_type())
-        gtk_box_pack_start(GTK_BOX(container), menubar, FALSE, TRUE, 0);
-      else
-        gtk_container_add(GTK_CONTAINER(container),menubar);
-    }
-
-  if (menu_items!=NULL)
-    {
-      while (menu_items->label!=NULL)
-        {
-          menu_item = gtk_menu_item_new_with_label(menu_items->label);
-          gtk_container_add(GTK_CONTAINER(menubar),menu_item);
-
-          gtk_object_set_data(GTK_OBJECT(menu_item),"_GckMenuItem",(gpointer)menu_items);
-
-          if (menu_items->item_selected_func!=NULL)
-            gtk_signal_connect(GTK_OBJECT(menu_item),"activate",
-              (GtkSignalFunc)menu_items->item_selected_func,(gpointer)menu_item);
-
-          if (menu_items->subitems!=NULL)
-	    gtk_menu_item_set_submenu(GTK_MENU_ITEM(menu_item),
-              gck_menu_new(menu_items->subitems,acc_group));
-
-          gtk_widget_show(menu_item);
-          menu_items->widget = menu_item;
-
-          menu_items++;
-        }
-    }
-
-  if (_GckAutoShowFlag==TRUE)
-    gtk_widget_show(menubar);
-
-  g_function_leave("gck_menu_bar_new");
-  return(menubar);
-}
-
-/***************/
-/* Create menu */
-/***************/
-
-GtkWidget *gck_menu_new(GckMenuItem *menu_items,GtkAccelGroup *acc_group)
-{
-  GtkWidget *menu,*menu_item;
-  gint i=0;
-
-  g_function_enter("gck_menu_new");
-
-  menu = gtk_menu_new();
-
-  while (menu_items[i].label!=NULL)
-    {
-      if (menu_items[i].label[0] == '-')
-        menu_item = gtk_menu_item_new();
-      else
-	{
-	  menu_item = gtk_menu_item_new_with_label(menu_items[i].label);
-	  if (menu_items->accelerator_key && acc_group)
-            gtk_widget_add_accelerator(menu_item,
-				       menu_items[i].label,
-				       acc_group,
-				       menu_items[i].accelerator_key,
-				       menu_items[i].accelerator_mods,
-				       GTK_ACCEL_VISIBLE | GTK_ACCEL_LOCKED);
-
-          gtk_object_set_data(GTK_OBJECT(menu_item),"_GckMenuItem",(gpointer)&menu_items[i]);
-
-          if (menu_items[i].item_selected_func!=NULL)
-            gtk_signal_connect(GTK_OBJECT(menu_item),"activate",
-              (GtkSignalFunc)menu_items[i].item_selected_func,(gpointer)menu_item);
-	}
-
-      gtk_container_add(GTK_CONTAINER(menu),menu_item);
-
-      if (menu_items[i].subitems!=NULL)
-	gtk_menu_item_set_submenu(GTK_MENU_ITEM(menu_item),
-          gck_menu_new(menu_items[i].subitems,acc_group));
-
-      gtk_widget_show(menu_item);
-      menu_items[i].widget = menu_item;
-
-      i++;
-    }
-
-  g_function_leave("gck_menu_new");
-  return(menu);
+  g_function_leave("gck_option_menu_set_history");
 }
 
 /**************************************************/
@@ -1145,7 +852,7 @@ GtkWidget *gck_image_menu_new(char *name,
                               GtkWidget * container,
                               gint expand, gint fill,
                               gint padding, gint Constrain,
-                              GtkSignalFunc item_selected_func)
+                              GCallback item_selected_func)
 {
   GtkWidget *imagemenu = NULL;
 

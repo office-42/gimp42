@@ -53,6 +53,7 @@
 #include <stdlib.h>
 #include <gtk/gtk.h>
 #include <libgimp/gimp.h>
+#include "libgimp/gimpui.h"
 
 /* Defines */
 #define PLUG_IN_NAME        "plug_in_rotate"
@@ -568,13 +569,10 @@ rotate_dialog (void)
   GtkWidget *hbox;
   GtkWidget *radio_button;
   GtkWidget *check_button;
-  GSList    *radio_group = NULL;
+  GtkWidget    *radio_group = NULL;
   gint radio_pressed[NUM_ANGLES];
   gint everything;
-  gint argc = 1;
   gint i;
-  gchar **argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("Rotate");
 
   for (i=0;i<NUM_ANGLES;i++)
     {
@@ -583,140 +581,115 @@ rotate_dialog (void)
   everything = rotvals.everything;
 
   /* Init GTK  */
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  gdk_set_use_xshm (gimp_use_xshm ());
 
   /* Main Dialog */
-  dialog = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dialog), PLUG_IN_PRINT_NAME);
-  gtk_window_position (GTK_WINDOW (dialog), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dialog), "destroy",
-		      (GtkSignalFunc) rotate_close_callback,
+  dialog = gimp_dialog_new (PLUG_IN_PRINT_NAME);
+  g_signal_connect (dialog, "destroy",
+		      G_CALLBACK (rotate_close_callback),
 		      NULL);
   /*  Action area  */
   button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) rotate_ok_callback,
+  g_signal_connect (button, "clicked",
+                      G_CALLBACK (rotate_ok_callback),
                       dialog);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog)->action_area), 
+  gimp_box_pack_start (gimp_dialog_get_action_area (dialog), 
 		      button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gtk_window_set_default_widget (GTK_WINDOW (dialog), button);
 
   button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dialog));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog)->action_area), 
+  g_signal_connect_swapped (button, "clicked", G_CALLBACK (gtk_window_destroy), dialog);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dialog), 
 		      button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Rotate clockwise by");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 6);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog)->vbox), 
+  gimp_container_set_border_width (frame, 6);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dialog), 
 		      frame, TRUE, TRUE, 0);
 
   /* table for radio_buttons */
-  table = gtk_table_new (6, 6, FALSE);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 8);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 1);
-  gtk_container_border_width (GTK_CONTAINER (table), 6);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  table = gimp_table_new (6, 6, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 8);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 1);
+  gimp_container_set_border_width (table, 6);
+  gimp_container_add (frame, table);
 
   /* radio buttons */
 
   /* 0 degrees */
   radio_label = gtk_label_new ( angle_label[0] );
-  gtk_table_attach ( GTK_TABLE (table), radio_label, 2, 3, 0, 1, 0, 0, 0, 0);
-  gtk_widget_show (radio_label);
-  radio_button = gtk_radio_button_new ( radio_group );
-  radio_group = gtk_radio_button_group ( GTK_RADIO_BUTTON (radio_button) );  
-  gtk_table_attach ( GTK_TABLE (table), radio_button, 2, 3, 1, 2, 0, 0, 0, 0);
-  gtk_signal_connect ( GTK_OBJECT (radio_button), "toggled",
-		       (GtkSignalFunc) rotate_toggle_update,
+  gimp_table_attach (table, radio_label, 2, 3, 0, 1, 0, 0, 0, 0);
+  radio_button = gimp_radio_button_new (radio_group, NULL);
+  radio_group = radio_button;  
+  gimp_table_attach (table, radio_button, 2, 3, 1, 2, 0, 0, 0, 0);
+  g_signal_connect (radio_button, "toggled",
+		       G_CALLBACK (rotate_toggle_update),
 		       &radio_pressed[0]);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (radio_button), 
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (radio_button), 
 				   radio_pressed[0]);
-  gtk_widget_show (radio_button);
 
   /* 90 degrees */  
   radio_label = gtk_label_new ( angle_label[1] );
-  gtk_table_attach ( GTK_TABLE (table), radio_label, 4, 5, 2, 3, 0, 0, 0, 0);
-  gtk_widget_show (radio_label);
-  radio_button = gtk_radio_button_new ( radio_group );
-  radio_group = gtk_radio_button_group ( GTK_RADIO_BUTTON (radio_button) );  
-  gtk_table_attach ( GTK_TABLE (table), radio_button, 3, 4, 2, 3, 0, 0, 0, 0);
-  gtk_signal_connect ( GTK_OBJECT (radio_button), "toggled",
-		       (GtkSignalFunc) rotate_toggle_update,
+  gimp_table_attach (table, radio_label, 4, 5, 2, 3, 0, 0, 0, 0);
+  radio_button = gimp_radio_button_new (radio_group, NULL);
+  radio_group = radio_button;  
+  gimp_table_attach (table, radio_button, 3, 4, 2, 3, 0, 0, 0, 0);
+  g_signal_connect (radio_button, "toggled",
+		       G_CALLBACK (rotate_toggle_update),
 		       &radio_pressed[1]);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (radio_button), 
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (radio_button), 
 				   radio_pressed[1]);
-  gtk_widget_show (radio_button);
 
   /* 180 degrees */
   radio_label = gtk_label_new ( angle_label[2] );
-  gtk_table_attach ( GTK_TABLE (table), radio_label, 2, 3, 4, 5, 0, 0, 0, 0);
-  gtk_widget_show (radio_label);
-  radio_button = gtk_radio_button_new ( radio_group );
-  radio_group = gtk_radio_button_group ( GTK_RADIO_BUTTON (radio_button) );  
-  gtk_table_attach ( GTK_TABLE (table), radio_button, 2, 3, 3, 4, 0, 0, 0, 0);
-  gtk_signal_connect ( GTK_OBJECT (radio_button), "toggled",
-		       (GtkSignalFunc) rotate_toggle_update,
+  gimp_table_attach (table, radio_label, 2, 3, 4, 5, 0, 0, 0, 0);
+  radio_button = gimp_radio_button_new (radio_group, NULL);
+  radio_group = radio_button;  
+  gimp_table_attach (table, radio_button, 2, 3, 3, 4, 0, 0, 0, 0);
+  g_signal_connect (radio_button, "toggled",
+		       G_CALLBACK (rotate_toggle_update),
 		       &radio_pressed[2]);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (radio_button), 
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (radio_button), 
 				   radio_pressed[2]);
-  gtk_widget_show (radio_button);
 
   /* 270 degrees */ 
   radio_label = gtk_label_new ( angle_label[3] );
-  gtk_table_attach ( GTK_TABLE (table), radio_label, 0, 1, 2, 3, 0, 0, 0, 0);
-  gtk_widget_show (radio_label);
-  radio_button = gtk_radio_button_new ( radio_group );
-  radio_group = gtk_radio_button_group ( GTK_RADIO_BUTTON (radio_button) );  
-  gtk_table_attach ( GTK_TABLE (table), radio_button, 1, 2, 2, 3, 0, 0, 0, 0);
-  gtk_signal_connect ( GTK_OBJECT (radio_button), "toggled",
-		       (GtkSignalFunc) rotate_toggle_update,
+  gimp_table_attach (table, radio_label, 0, 1, 2, 3, 0, 0, 0, 0);
+  radio_button = gimp_radio_button_new (radio_group, NULL);
+  radio_group = radio_button;  
+  gimp_table_attach (table, radio_button, 1, 2, 2, 3, 0, 0, 0, 0);
+  g_signal_connect (radio_button, "toggled",
+		       G_CALLBACK (rotate_toggle_update),
 		       &radio_pressed[3]);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (radio_button), 
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (radio_button), 
 				   radio_pressed[3]);
-  gtk_widget_show (radio_button);
 
   /* label: degrees */
 
   unit_label = gtk_label_new ( "degrees" );
-  gtk_table_attach ( GTK_TABLE (table), unit_label, 5, 6, 5, 6, 0, 0, 0, 0);
-  gtk_widget_show (unit_label);
+  gimp_table_attach (table, unit_label, 5, 6, 5, 6, 0, 0, 0, 0);
 
  
-  gtk_widget_show (table);
-  gtk_widget_show (frame);
 
   /* hbox for check-button */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 6);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog)->vbox), 
+  hbox = gimp_hbox_new (FALSE, 1);
+  gimp_container_set_border_width (hbox, 6);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dialog), 
 		      hbox, TRUE, TRUE, 0);
   /* check button */
   check_button = gtk_check_button_new_with_label ("Rotate the whole image");
-  gtk_box_pack_end (GTK_BOX (hbox), check_button, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (check_button), "toggled",
-		      (GtkSignalFunc) rotate_toggle_update,
+  gimp_box_pack_end (hbox, check_button, TRUE, TRUE, 0);
+  g_signal_connect (check_button, "toggled",
+		      G_CALLBACK (rotate_toggle_update),
 		      &everything);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (check_button), 
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (check_button), 
 			       rotvals.everything);
-  gtk_widget_show (check_button);
-  gtk_widget_show (hbox);
 
-  gtk_widget_show (dialog);
+  gtk_window_present (GTK_WINDOW (dialog));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   rotvals.angle=0;
   for (i = 0; i < NUM_ANGLES; i++)
@@ -739,7 +712,7 @@ static void
 rotate_close_callback (GtkWidget *widget,
 		       gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -747,7 +720,7 @@ rotate_ok_callback (GtkWidget *widget,
 		    gpointer   data)
 {
   rotint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -758,7 +731,7 @@ rotate_toggle_update (GtkWidget *widget,
 
   toggle_val = (gint *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;

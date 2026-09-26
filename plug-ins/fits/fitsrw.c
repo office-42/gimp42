@@ -2011,7 +2011,7 @@ int pgmraw_to_fits (char *pgmfile, char *fitsfile)
  fitsout = fits_open (fitsfile, "w");
  if (fitsout == NULL) goto err_return;
 
- pgmin = fopen (pgmfile, "r");
+ pgmin = fopen (pgmfile, "rb");
  if (pgmin == NULL) goto err_return;
 
  /* Read signature of PGM file */

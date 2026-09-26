@@ -35,7 +35,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
+#include "libgimp/gimpui.h"
 
 /* big scales */
 #define	SCALE_WIDTH	225
@@ -50,13 +51,14 @@ typedef struct
 }	myParams;
 
 /* lets prototype */
-static void	query();
+static void	query(void);
 static void	run(char *, int, GParam *, int *, GParam **);
-static int	doDialog();
+static int	doDialog(void);
 static void	exchange(GDrawable *);
 static void	doLabelAndScale(char *, GtkWidget *, guchar *);
 
 static void	ok_callback(GtkWidget *, gpointer);
+static void	close_callback(GtkWidget *, gpointer);
 static void	scale_callback(GtkAdjustment *, gpointer);
 
 /* some global variables */
@@ -295,7 +297,7 @@ void	exchange(GDrawable *drawable)
 
 /* show our dialog */
 static
-int	doDialog()
+int	doDialog(void)
 {
 	GtkWidget	*dialog;
 	GtkWidget	*button;
@@ -304,83 +306,55 @@ int	doDialog()
 	GtkWidget	*mainbox;
 	GtkWidget	*tobox;
 	GtkWidget	*frombox;
-	gchar		**argv;
-	gint		argc;
 	int		framenumber;
 
-	argc = 1;
-	argv = g_new(gchar *, 1);
-	argv[0] = g_strdup("exchange");
-
-	gtk_init(&argc, &argv);
-	gtk_rc_parse(gimp_gtkrc());
+	gtk_init();
 
 	/* set up the dialog */
-	dialog = gtk_dialog_new();
-	gtk_window_set_title(GTK_WINDOW(dialog), "Color Exchange");
-	gtk_window_position(GTK_WINDOW(dialog), GTK_WIN_POS_MOUSE);
-	gtk_signal_connect(GTK_OBJECT(dialog), "destroy",
-			   (GtkSignalFunc) gtk_main_quit,
-			   NULL);
+	dialog = gimp_dialog_new("Color Exchange");
+	g_signal_connect(dialog, "destroy",
+			 G_CALLBACK(close_callback),
+			 NULL);
 
 	/* lets create some buttons */
-	button = gtk_button_new_with_label("Ok");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect(GTK_OBJECT(button), "clicked",
-			   (GtkSignalFunc) ok_callback,
-			   dialog);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->action_area),
-	                   button, TRUE, TRUE, 0);
-	gtk_widget_grab_default(button);
-	gtk_widget_show(button); 
-	
-	button = gtk_button_new_with_label("Cancel");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect_object (GTK_OBJECT(button), "clicked",
-				   (GtkSignalFunc) gtk_widget_destroy,
-				   GTK_OBJECT(dialog));
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->action_area),
-	                   button, TRUE, TRUE, 0);
-	gtk_widget_show(button); 
+	gimp_dialog_add_button(dialog, "Ok",
+			       G_CALLBACK(ok_callback), dialog, TRUE);
+	button = gimp_dialog_add_button(dialog, "Cancel", NULL, NULL, FALSE);
+	g_signal_connect_swapped(button, "clicked",
+				 G_CALLBACK(gtk_window_destroy),
+				 dialog);
 
 	/* do some boxes here */
-	mainbox = gtk_vbox_new(FALSE, 5);
-	gtk_container_border_width(GTK_CONTAINER(mainbox), 10);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->vbox), mainbox, TRUE, TRUE, 0);
-	frombox = gtk_hbox_new(FALSE, 5);
-	gtk_container_border_width(GTK_CONTAINER(frombox), 10);
-	gtk_box_pack_start(GTK_BOX(mainbox), frombox, TRUE, TRUE, 0);
-	tobox = gtk_hbox_new(FALSE, 5);
-	gtk_container_border_width(GTK_CONTAINER(tobox), 10);
-	gtk_box_pack_start(GTK_BOX(mainbox), tobox, TRUE, TRUE, 0);
+	mainbox = gimp_vbox_new(FALSE, 5);
+	gimp_container_set_border_width(mainbox, 10);
+	gimp_box_pack_start(gimp_dialog_get_vbox(dialog), mainbox, TRUE, TRUE, 0);
+	frombox = gimp_hbox_new(FALSE, 5);
+	gimp_container_set_border_width(frombox, 10);
+	gimp_box_pack_start(mainbox, frombox, TRUE, TRUE, 0);
+	tobox = gimp_hbox_new(FALSE, 5);
+	gimp_container_set_border_width(tobox, 10);
+	gimp_box_pack_start(mainbox, tobox, TRUE, TRUE, 0);
 
 	/* and our scales */
 	for (framenumber = 0; framenumber < 2; framenumber++)
 	{
 		frame = gtk_frame_new(framenumber ? "To color" : "From color");
-		gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-		gtk_container_border_width(GTK_CONTAINER(frame), 10);
-		gtk_box_pack_start(framenumber ? GTK_BOX(tobox) : GTK_BOX(frombox),
-		                   frame, TRUE, TRUE, 0);
-		gtk_widget_show(frame);
-		table = gtk_table_new(8, 2, FALSE);
-		gtk_container_border_width(GTK_CONTAINER(table), 10);
-		gtk_container_add(GTK_CONTAINER(frame), table);
+		gimp_container_set_border_width(frame, 10);
+		gimp_box_pack_start(framenumber ? tobox : frombox,
+		                    frame, TRUE, TRUE, 0);
+		table = gimp_table_new(8, 2, FALSE);
+		gimp_container_set_border_width(table, 10);
+		gtk_frame_set_child(GTK_FRAME(frame), table);
 		doLabelAndScale("Red", table, framenumber ? &xargs.tored : &xargs.fromred);
 		doLabelAndScale("Green", table, framenumber ? &xargs.togreen : &xargs.fromgreen);
 		doLabelAndScale("Blue", table, framenumber ? &xargs.toblue : &xargs.fromblue);
 		if (!framenumber)
 			doLabelAndScale("Threshold", table, &xargs.threshold);
-		gtk_widget_show(table);
 	}
 
 	/* show everything */
-	gtk_widget_show(tobox);
-	gtk_widget_show(frombox);
-	gtk_widget_show(mainbox);
-	gtk_widget_show(dialog);
-	gtk_main();
-	gdk_flush();
+	gtk_window_present(GTK_WINDOW(dialog));
+	gimp_main_loop_run();
 
 	return running;
 }
@@ -390,32 +364,33 @@ void	doLabelAndScale(char *labelname, GtkWidget *table, guchar *dest)
 {
 	static	int	idx = -1;
 	GtkWidget	*label, *scale;
-	GtkObject	*scale_data;
+	GtkAdjustment	*scale_data;
 
 	idx++;
 	label = gtk_label_new(labelname);
-	gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
-	gtk_table_attach(GTK_TABLE(table), label, 0, 1, idx, idx + 1, GTK_FILL, 0, 5, 0);
-	scale_data = gtk_adjustment_new(*dest, 0.0, 255.0, 0.0, 0.0, 0.0);
-	scale = gtk_hscale_new(GTK_ADJUSTMENT(scale_data));
-	gtk_widget_set_usize(scale, SCALE_WIDTH, 0);
+	gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+	gimp_table_attach(table, label, 0, 1, idx, idx + 1, GIMP_FILL, 0, 5, 0);
+	scale_data = gtk_adjustment_new(*dest, 0.0, 255.0, 1.0, 1.0, 0.0);
 	/* just need 1:1 resolution on scales */
-	gtk_scale_set_digits(GTK_SCALE(scale), 0);
-	gtk_table_attach(GTK_TABLE(table), scale, 1, 2, idx, idx + 1, GTK_FILL, 0, 0, 0);
-	gtk_scale_set_value_pos(GTK_SCALE(scale), GTK_POS_TOP);
-	gtk_range_set_update_policy(GTK_RANGE(scale), GTK_UPDATE_DELAYED);
-	gtk_signal_connect(GTK_OBJECT(scale_data), "value_changed",
-			   (GtkSignalFunc) scale_callback,
-			   dest);
-	gtk_widget_show(label);
-	gtk_widget_show(scale);
+	scale = gimp_hscale_new(scale_data, 0);
+	gtk_widget_set_size_request(scale, SCALE_WIDTH, -1);
+	gimp_table_attach(table, scale, 1, 2, idx, idx + 1, GIMP_FILL, 0, 0, 0);
+	g_signal_connect(scale_data, "value-changed",
+			 G_CALLBACK(scale_callback),
+			 dest);
+}
+
+static
+void	close_callback(GtkWidget *widget, gpointer data)
+{
+	gimp_main_loop_quit();
 }
 
 static
 void	ok_callback(GtkWidget *widget, gpointer data)
 {
 	running = 1;
-	gtk_widget_destroy(GTK_WIDGET(data));
+	gtk_window_destroy(GTK_WINDOW(data));
 }
 
 static
@@ -423,5 +398,5 @@ void	scale_callback(GtkAdjustment *adj, gpointer data)
 {
 	guchar	*val = data;
 
-	*val = (guchar) adj->value;
+	*val = (guchar) gtk_adjustment_get_value(adj);
 }

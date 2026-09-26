@@ -59,7 +59,7 @@ paintbrush_toggle_update (GtkWidget *w,
 
   toggle_val = (gboolean *) data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -69,7 +69,7 @@ static void
 paintbrush_scale_update (GtkAdjustment *adjustment,
 			 double        *scale_val)
 {
-  *scale_val = adjustment->value;
+  *scale_val = gtk_adjustment_get_value (adjustment);
 }
 
 static PaintOptions *
@@ -80,7 +80,7 @@ create_paint_options (void)
   GtkWidget *hbox;
   GtkWidget *label;
   GtkWidget *fade_out_scale;
-  GtkObject *fade_out_scale_data;
+  GtkAdjustment *fade_out_scale_data;
   GtkWidget *incremental_toggle;
 
   /*  the new options structure  */
@@ -89,41 +89,34 @@ create_paint_options (void)
   options->incremental = FALSE;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
+  vbox = gimp_vbox_new (FALSE, 1);
 
   /*  the main label  */
   label = gtk_label_new ("Paintbrush Options");
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (vbox), label);
 
   /*  the fade-out scale  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (FALSE, 1);
+  gtk_box_append (GTK_BOX (vbox), hbox);
 
   label = gtk_label_new ("Fade Out");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (hbox), label);
 
   fade_out_scale_data = gtk_adjustment_new (0.0, 0.0, 1000.0, 1.0, 1.0, 0.0);
-  fade_out_scale = gtk_hscale_new (GTK_ADJUSTMENT (fade_out_scale_data));
-  gtk_box_pack_start (GTK_BOX (hbox), fade_out_scale, TRUE, TRUE, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (fade_out_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (fade_out_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (fade_out_scale_data), "value_changed",
-		      (GtkSignalFunc) paintbrush_scale_update,
-		      &options->fade_out);
-  gtk_widget_show (fade_out_scale);
-  gtk_widget_show (hbox);
+  fade_out_scale = gimp_hscale_new (fade_out_scale_data, 1);
+  gimp_box_pack_start (hbox, fade_out_scale, TRUE, TRUE, 0);
+  g_signal_connect (fade_out_scale_data, "value-changed",
+		    G_CALLBACK (paintbrush_scale_update),
+		    &options->fade_out);
 
 
   /* the incremental toggle */
   incremental_toggle = gtk_check_button_new_with_label ("Incremental");
-  gtk_box_pack_start (GTK_BOX (vbox), incremental_toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (incremental_toggle), "toggled",
-		      (GtkSignalFunc) paintbrush_toggle_update,
-		      &options->incremental);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (incremental_toggle), options->incremental);
-  gtk_widget_show (incremental_toggle);
+  gtk_box_append (GTK_BOX (vbox), incremental_toggle);
+  g_signal_connect (incremental_toggle, "toggled",
+		    G_CALLBACK (paintbrush_toggle_update),
+		    &options->incremental);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (incremental_toggle), options->incremental);
   
   /*  Register this selection options widget with the main tools options dialog  */
   tools_register_options (PAINTBRUSH, vbox);

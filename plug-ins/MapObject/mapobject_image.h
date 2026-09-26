@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include <gdk/gdk.h>
+#include <gtk/gtk.h>
 #include <gck/gck.h>
 #include <libgimp/gimp.h>
 
@@ -21,7 +21,7 @@ extern GDrawable *input_drawable,*output_drawable;
 extern GPixelRgn  source_region,dest_region;
 
 extern guchar   *preview_rgb_data;
-extern GdkImage *image;
+extern cairo_surface_t *image;
 
 extern glong   maxcounter,old_depth,max_depth;
 extern gint    imgtype,width,height,in_channels,out_channels;

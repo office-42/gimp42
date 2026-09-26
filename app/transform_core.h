@@ -113,10 +113,10 @@ struct _transform_undo
 extern        InfoDialog * transform_info;
 
 /*  transform tool action functions  */
-void          transform_core_button_press      (Tool *, GdkEventButton *, gpointer);
-void          transform_core_button_release    (Tool *, GdkEventButton *, gpointer);
-void          transform_core_motion            (Tool *, GdkEventMotion *, gpointer);
-void          transform_core_cursor_update     (Tool *, GdkEventMotion *, gpointer);
+void          transform_core_button_press      (Tool *, GimpButtonEvent *, gpointer);
+void          transform_core_button_release    (Tool *, GimpButtonEvent *, gpointer);
+void          transform_core_motion            (Tool *, GimpMotionEvent *, gpointer);
+void          transform_core_cursor_update     (Tool *, GimpMotionEvent *, gpointer);
 void          transform_core_control           (Tool *, int, gpointer);
 
 /*  transform tool functions  */

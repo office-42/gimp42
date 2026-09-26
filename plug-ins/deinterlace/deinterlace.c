@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <libgimp/gimp.h>
 #include <gtk/gtk.h>
+#include <libgimp/gimpui.h>
 #include <plug-ins/megawidget/megawidget.h>
 
 
@@ -221,7 +222,7 @@ deinterlace (GDrawable *drawable)
   free (dest);
 }
 
-static gint deinterlace_dialog()
+static gint deinterlace_dialog(void)
 {
   GtkWidget *dlg;
   GtkWidget *vbox;
@@ -230,29 +231,18 @@ static gint deinterlace_dialog()
     { "Keep Odd Fields", 0},
     { "Keep Even Fields", 0},
     { NULL, 0}};
-  gchar **argv;
-  gint argc;
-
-  /* Set args */
-  argc = 1;
-  argv = g_new(gchar *, 1);
-  argv[0] = g_strdup("deinterlace");
-  gtk_init(&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
   modes[DeinterlaceValue].var = 1;
 
   dlg = mw_app_new("plug_in_deinterlace", "Deinterlace", &runp);
 
-  vbox = gtk_vbox_new(FALSE, 0);
-  gtk_container_border_width(GTK_CONTAINER(vbox), 5);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), vbox, TRUE, TRUE, 0);
-  gtk_widget_show(vbox);
+  vbox = gimp_vbox_new(FALSE, 0);
+  gimp_container_set_border_width(vbox, 5);
+  gimp_box_pack_start(gimp_dialog_get_vbox(dlg), vbox, TRUE, TRUE, 0);
 
   mw_radio_group_new(vbox, "Mode", modes);
 
-  gtk_widget_show(dlg);
-  gtk_main();
-  gdk_flush();
+  gtk_window_present(GTK_WINDOW(dlg));
+  gimp_main_loop_run();
 
   DeinterlaceValue = mw_radio_result(modes);
 

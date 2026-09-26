@@ -19,7 +19,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "appenv.h"
-#include "actionarea.h"
 #include "patterns.h"
 #include "pattern_select.h"
 #include "buildmenu.h"
@@ -35,17 +34,13 @@
 
 /*
 #define STD_PATTERN_COLUMNS 6
-#define STD_PATTERN_ROWS    5 
+#define STD_PATTERN_ROWS    5
 */
 
 #define MAX_WIN_WIDTH     (MIN_CELL_SIZE * NUM_PATTERN_COLUMNS)
 #define MAX_WIN_HEIGHT    (MIN_CELL_SIZE * NUM_PATTERN_ROWS)
 #define MARGIN_WIDTH      1
 #define MARGIN_HEIGHT     1
-#define PATTERN_EVENT_MASK GDK_BUTTON1_MOTION_MASK | \
-                           GDK_EXPOSURE_MASK | \
-                           GDK_BUTTON_PRESS_MASK | \
-			   GDK_ENTER_NOTIFY_MASK
 
 /*  local function prototypes  */
 static void pattern_popup_open               (PatternSelectP, int, int, GPatternP);
@@ -58,18 +53,18 @@ static void preview_calc_scrollbar           (PatternSelectP);
 static void pattern_select_show_selected     (PatternSelectP, int, int);
 static void update_active_pattern_field      (PatternSelectP);
 static void pattern_select_close_callback    (GtkWidget *, gpointer);
-static gint pattern_select_delete_callback    (GtkWidget *, GdkEvent *, gpointer);
+static gboolean pattern_select_delete_callback (GtkWindow *, gpointer);
 static void pattern_select_refresh_callback  (GtkWidget *, gpointer);
-static gint pattern_select_events            (GtkWidget *, GdkEvent *, PatternSelectP);
-static gint pattern_select_resize            (GtkWidget *, GdkEvent *, PatternSelectP);
+static void pattern_select_pressed           (GtkGestureDrag *, double, double, gpointer);
+static void pattern_select_released          (GtkGestureDrag *, double, double, gpointer);
+static gboolean pattern_select_scroll        (GtkEventControllerScroll *, double, double, gpointer);
+static void pattern_select_resize            (GtkDrawingArea *, int, int, gpointer);
+static void pattern_select_grid_destroy      (GtkWidget *, gpointer);
 static void pattern_select_scroll_update     (GtkAdjustment *, gpointer);
 
-/*  the action area structure  */
-static ActionAreaItem action_items[2] =
-{
-  { "Close", pattern_select_close_callback, NULL, NULL },
-  { "Refresh", pattern_select_refresh_callback, NULL, NULL },
-};
+static void grid_set_size                    (PatternSelectP, int, int);
+static void grid_draw_row                    (PatternSelectP, const guchar *, int, int, int);
+static void grid_draw_func                   (GtkDrawingArea *, cairo_t *, int, int, gpointer);
 
 gint NUM_PATTERN_COLUMNS = 6;
 gint NUM_PATTERN_ROWS    = 5;
@@ -84,97 +79,104 @@ pattern_select_new ()
   GtkWidget *hbox;
   GtkWidget *sbar;
   GtkWidget *label_box;
+  GtkGesture *drag;
+  GtkEventController *scroll;
 
   psp = g_malloc (sizeof (_PatternSelect));
   psp->preview = NULL;
+  psp->grid_surface = NULL;
   psp->pattern_popup = NULL;
+  psp->pattern_preview = NULL;
+  psp->scroll_offset = 0;
 
   /*  The shell and main vbox  */
-  psp->shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (psp->shell), "patternselection", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (psp->shell), "Pattern Selection");
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-  gtk_window_set_policy(GTK_WINDOW(psp->shell), FALSE, TRUE, FALSE);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (psp->shell)->vbox), vbox, TRUE, TRUE, 0);
+  psp->shell = gimp_dialog_new ("Pattern Selection");
+  gtk_window_set_resizable (GTK_WINDOW (psp->shell), TRUE);
+  vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (vbox, 1);
+  gimp_box_pack_start (gimp_dialog_get_vbox (psp->shell), vbox, TRUE, TRUE, 0);
 
   /* handle the wm close event */
-  gtk_signal_connect (GTK_OBJECT (psp->shell), "delete_event",
-		      GTK_SIGNAL_FUNC (pattern_select_delete_callback),
-		      psp);
+  g_signal_connect (psp->shell, "close-request",
+		    G_CALLBACK (pattern_select_delete_callback),
+		    psp);
 
-  psp->options_box = gtk_vbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), psp->options_box, FALSE, FALSE, 0);
+  psp->options_box = gimp_vbox_new (FALSE, 1);
+  gimp_box_pack_start (vbox, psp->options_box, FALSE, FALSE, 0);
 
   /*  Create the active pattern label  */
-  label_box = gtk_hbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (label_box), 2);
-  gtk_box_pack_start (GTK_BOX (psp->options_box), label_box, FALSE, FALSE, 0);
+  label_box = gimp_hbox_new (FALSE, 1);
+  gimp_container_set_border_width (label_box, 2);
+  gimp_box_pack_start (psp->options_box, label_box, FALSE, FALSE, 0);
   psp->pattern_name = gtk_label_new ("Active");
-  gtk_box_pack_start (GTK_BOX (label_box), psp->pattern_name, FALSE, FALSE, 2);
+  gimp_box_pack_start (label_box, psp->pattern_name, FALSE, FALSE, 2);
   psp->pattern_size = gtk_label_new ("(0x0)");
-  gtk_box_pack_start (GTK_BOX (label_box), psp->pattern_size, FALSE, FALSE, 5);
-
-  gtk_widget_show (psp->pattern_name);
-  gtk_widget_show (psp->pattern_size);
-  gtk_widget_show (label_box);
+  gimp_box_pack_start (label_box, psp->pattern_size, FALSE, FALSE, 5);
 
   /*  The horizontal box containing preview & scrollbar  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, TRUE, TRUE, 0);
+  hbox = gimp_hbox_new (FALSE, 1);
+  gimp_box_pack_start (vbox, hbox, TRUE, TRUE, 0);
   psp->frame = gtk_frame_new (NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (psp->frame), GTK_SHADOW_IN);
 
-  gtk_box_pack_start (GTK_BOX (hbox), psp->frame, TRUE, TRUE, 0);
+  gimp_box_pack_start (hbox, psp->frame, TRUE, TRUE, 0);
 
-  psp->sbar_data = GTK_ADJUSTMENT (gtk_adjustment_new (0, 0, MAX_WIN_HEIGHT, 1, 1, MAX_WIN_HEIGHT));
-  gtk_signal_connect (GTK_OBJECT (psp->sbar_data), "value_changed",
-		      (GtkSignalFunc) pattern_select_scroll_update,
-		      psp);
-  sbar = gtk_vscrollbar_new (psp->sbar_data);
-  gtk_box_pack_start (GTK_BOX (hbox), sbar, FALSE, FALSE, 0);
+  psp->sbar_data = gtk_adjustment_new (0, 0, MAX_WIN_HEIGHT, 1, 1, MAX_WIN_HEIGHT);
+  g_signal_connect (psp->sbar_data, "value-changed",
+		    G_CALLBACK (pattern_select_scroll_update),
+		    psp);
+  sbar = gtk_scrollbar_new (GTK_ORIENTATION_VERTICAL, psp->sbar_data);
+  gimp_box_pack_start (hbox, sbar, FALSE, FALSE, 0);
 
   /*  Create the pattern preview window and the underlying image  */
   psp->cell_width = STD_CELL_SIZE;
   psp->cell_height = STD_CELL_SIZE;
 
-  psp->width = MAX_WIN_WIDTH;
-  psp->height = MAX_WIN_HEIGHT;
+  psp->preview = gtk_drawing_area_new ();
+  gtk_drawing_area_set_content_width (GTK_DRAWING_AREA (psp->preview), MAX_WIN_WIDTH);
+  gtk_drawing_area_set_content_height (GTK_DRAWING_AREA (psp->preview), MAX_WIN_HEIGHT);
+  gtk_widget_set_hexpand (psp->preview, TRUE);
+  gtk_widget_set_vexpand (psp->preview, TRUE);
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (psp->preview),
+				  grid_draw_func, psp, NULL);
+  grid_set_size (psp, MAX_WIN_WIDTH, MAX_WIN_HEIGHT);
 
-  psp->preview = gtk_preview_new (GTK_PREVIEW_COLOR);
-  gtk_preview_size (GTK_PREVIEW (psp->preview), psp->width, psp->height);
-  gtk_widget_set_events (psp->preview, PATTERN_EVENT_MASK);
+  drag = gtk_gesture_drag_new ();
+  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (drag), 1);
+  g_signal_connect (drag, "drag-begin",
+		    G_CALLBACK (pattern_select_pressed), psp);
+  g_signal_connect (drag, "drag-end",
+		    G_CALLBACK (pattern_select_released), psp);
+  gtk_widget_add_controller (psp->preview, GTK_EVENT_CONTROLLER (drag));
 
-  gtk_signal_connect (GTK_OBJECT (psp->preview), "event",
-		      (GtkSignalFunc) pattern_select_events,
-		      psp);
+  scroll = gtk_event_controller_scroll_new (GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
+  g_signal_connect (scroll, "scroll",
+		    G_CALLBACK (pattern_select_scroll), psp);
+  gtk_widget_add_controller (psp->preview, scroll);
 
-  gtk_signal_connect_after (GTK_OBJECT(psp->frame), "size_allocate",
-                           (GtkSignalFunc)pattern_select_resize,
-                           psp);
+  g_signal_connect_after (psp->preview, "resize",
+			  G_CALLBACK (pattern_select_resize),
+			  psp);
+  g_signal_connect (psp->preview, "destroy",
+		    G_CALLBACK (pattern_select_grid_destroy), psp);
 
-  gtk_container_add (GTK_CONTAINER (psp->frame), psp->preview);
-  gtk_widget_show (psp->preview);
-
-  gtk_widget_show (sbar);
-  gtk_widget_show (hbox);
-  gtk_widget_show (psp->frame);
+  gtk_frame_set_child (GTK_FRAME (psp->frame), psp->preview);
 
   /*  The action area  */
-  action_items[0].user_data = psp;
-  action_items[1].user_data = psp;
-  build_action_area (GTK_DIALOG (psp->shell), action_items, 2, 0);
+  gimp_dialog_add_button (psp->shell, "Close",
+			  G_CALLBACK (pattern_select_close_callback),
+			  psp, TRUE);
+  gimp_dialog_add_button (psp->shell, "Refresh",
+			  G_CALLBACK (pattern_select_refresh_callback),
+			  psp, FALSE);
 
-  gtk_widget_show (psp->options_box);
-  gtk_widget_show (vbox);
-  gtk_widget_show (psp->shell);
+  gtk_window_present (GTK_WINDOW (psp->shell));
 
   if(no_data)   /* if patterns are already loaded, dont do it now... */
     patterns_init(FALSE);
   preview_calc_scrollbar (psp);
   display_patterns (psp);
 
-  
+
   /*  update the active selection  */
   active = get_active_pattern ();
   if (active)
@@ -202,8 +204,101 @@ pattern_select_free (PatternSelectP psp)
   if (psp)
     {
       if (psp->pattern_popup != NULL)
-	gtk_widget_destroy (psp->pattern_popup);
+	{
+	  gtk_widget_unparent (psp->pattern_popup);
+	  psp->pattern_popup = NULL;
+	}
+
+      /*  the dialog's callbacks refer to psp: take them with it  */
+      if (psp->preview)
+	g_signal_handlers_disconnect_by_data (psp->preview, psp);
+      g_signal_handlers_disconnect_by_data (psp->sbar_data, psp);
+      if (psp->shell)
+	gtk_window_destroy (GTK_WINDOW (psp->shell));
+
+      if (psp->grid_surface)
+	cairo_surface_destroy (psp->grid_surface);
       g_free (psp);
+    }
+}
+
+/*
+ *  The grid: an RGB image the size of the drawing area, filled a row at a
+ *  time the way the GtkPreview it replaces was, and painted as a whole.
+ */
+static void
+grid_set_size (PatternSelectP psp,
+	       int            width,
+	       int            height)
+{
+  width = MAX (width, 1);
+  height = MAX (height, 1);
+
+  if (psp->grid_surface &&
+      psp->width == width && psp->height == height)
+    return;
+
+  if (psp->grid_surface)
+    cairo_surface_destroy (psp->grid_surface);
+
+  psp->grid_surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24,
+						  width, height);
+  psp->width = width;
+  psp->height = height;
+}
+
+static void
+grid_draw_row (PatternSelectP  psp,
+	       const guchar   *src,
+	       int             x,
+	       int             y,
+	       int             w)
+{
+  guint32 *dest;
+  int stride;
+  int i;
+
+  if (!psp->grid_surface || y < 0 || y >= psp->height)
+    return;
+
+  if (x < 0)
+    {
+      src += -x * 3;
+      w += x;
+      x = 0;
+    }
+  if (x + w > psp->width)
+    w = psp->width - x;
+  if (w <= 0)
+    return;
+
+  cairo_surface_flush (psp->grid_surface);
+  stride = cairo_image_surface_get_stride (psp->grid_surface);
+  dest = (guint32 *) (cairo_image_surface_get_data (psp->grid_surface) +
+		      y * stride) + x;
+
+  for (i = 0; i < w; i++, src += 3)
+    dest[i] = ((guint32) src[0] << 16) | ((guint32) src[1] << 8) | src[2];
+
+  cairo_surface_mark_dirty (psp->grid_surface);
+}
+
+static void
+grid_draw_func (GtkDrawingArea *area,
+		cairo_t        *cr,
+		int             width,
+		int             height,
+		gpointer        data)
+{
+  PatternSelectP psp = data;
+
+  cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
+  cairo_paint (cr);
+
+  if (psp->grid_surface)
+    {
+      cairo_set_source_surface (cr, psp->grid_surface, 0, 0);
+      cairo_paint (cr);
     }
 }
 
@@ -216,45 +311,37 @@ pattern_popup_open (PatternSelectP psp,
 		    int            y,
 		    GPatternP      pattern)
 {
-  gint x_org, y_org;
-  gint scr_w, scr_h;
-  gchar *src, *buf;
+  GdkRectangle rect;
+  guchar *src, *buf;
 
   /* make sure the popup exists and is not visible */
   if (psp->pattern_popup == NULL)
     {
-      GtkWidget *frame;
-      psp->pattern_popup = gtk_window_new (GTK_WINDOW_POPUP);
-      gtk_window_set_policy (GTK_WINDOW (psp->pattern_popup), FALSE, FALSE, TRUE);
-      frame = gtk_frame_new (NULL);
-      gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_OUT);
-      gtk_container_add (GTK_CONTAINER (psp->pattern_popup), frame);
-      gtk_widget_show (frame);
-      psp->pattern_preview = gtk_preview_new (GTK_PREVIEW_COLOR);
-      gtk_container_add (GTK_CONTAINER (frame), psp->pattern_preview);
-      gtk_widget_show (psp->pattern_preview);
+      psp->pattern_popup = gtk_popover_new ();
+      gtk_popover_set_has_arrow (GTK_POPOVER (psp->pattern_popup), FALSE);
+      gtk_popover_set_autohide (GTK_POPOVER (psp->pattern_popup), FALSE);
+      gtk_widget_set_parent (psp->pattern_popup, psp->preview);
+      psp->pattern_preview = gimp_preview_new (GIMP_PREVIEW_COLOR);
+      gtk_popover_set_child (GTK_POPOVER (psp->pattern_popup),
+			     psp->pattern_preview);
     }
   else
     {
-      gtk_widget_hide (psp->pattern_popup);
+      gtk_popover_popdown (GTK_POPOVER (psp->pattern_popup));
     }
 
-  /* decide where to put the popup */
-  gdk_window_get_origin (psp->preview->window, &x_org, &y_org);
-  scr_w = gdk_screen_width ();
-  scr_h = gdk_screen_height ();
-  x = x_org + x - pattern->mask->width * 0.5;
-  y = y_org + y - pattern->mask->height * 0.5;
-  x = (x < 0) ? 0 : x;
-  y = (y < 0) ? 0 : y;
-  x = (x + pattern->mask->width > scr_w) ? scr_w - pattern->mask->width : x;
-  y = (y + pattern->mask->height > scr_h) ? scr_h - pattern->mask->height : y;
-  gtk_preview_size (GTK_PREVIEW (psp->pattern_preview), pattern->mask->width, pattern->mask->height);
-  gtk_widget_popup (psp->pattern_popup, x, y);
+  /* the popup points at the cell that was clicked */
+  rect.x = x;
+  rect.y = y;
+  rect.width = 1;
+  rect.height = 1;
+  gtk_popover_set_pointing_to (GTK_POPOVER (psp->pattern_popup), &rect);
+  gimp_preview_size (GIMP_PREVIEW (psp->pattern_preview),
+		     pattern->mask->width, pattern->mask->height);
 
   /*  Draw the pattern  */
-  buf = g_new (gchar, pattern->mask->width * 3);
-  src = (gchar *)temp_buf_data (pattern->mask);
+  buf = g_new (guchar, pattern->mask->width * 3);
+  src = temp_buf_data (pattern->mask);
   for (y = 0; y < pattern->mask->height; y++)
     {
       if (pattern->mask->bytes == 1)
@@ -271,20 +358,19 @@ pattern_popup_open (PatternSelectP psp,
 	    buf[x*3+1] = src[x*3+1];
 	    buf[x*3+2] = src[x*3+2];
 	  }
-      gtk_preview_draw_row (GTK_PREVIEW (psp->pattern_preview), (guchar *)buf, 0, y, pattern->mask->width);
+      gimp_preview_draw_row (GIMP_PREVIEW (psp->pattern_preview), buf, 0, y, pattern->mask->width);
       src += pattern->mask->width * pattern->mask->bytes;
     }
   g_free(buf);
-  
-  /*  Draw the pattern preview  */
-  gtk_widget_draw (psp->pattern_preview, NULL);
+
+  gtk_popover_popup (GTK_POPOVER (psp->pattern_popup));
 }
 
 static void
 pattern_popup_close (PatternSelectP psp)
 {
   if (psp->pattern_popup != NULL)
-    gtk_widget_hide (psp->pattern_popup);
+    gtk_popover_popdown (GTK_POPOVER (psp->pattern_popup));
 }
 
 static void
@@ -320,8 +406,8 @@ display_pattern (PatternSelectP psp,
   offset_y = row * psp->cell_height + ((cell_height - height) >> 1)
     - psp->scroll_offset + MARGIN_HEIGHT;
 
-  ystart = BOUNDS (offset_y, 0, psp->preview->requisition.height);
-  yend = BOUNDS (offset_y + height, 0, psp->preview->requisition.height);
+  ystart = BOUNDS (offset_y, 0, psp->height);
+  yend = BOUNDS (offset_y + height, 0, psp->height);
 
   /*  Get the pointer into the pattern mask data  */
   rowstride = pattern_buf->width * pattern_buf->bytes;
@@ -347,7 +433,7 @@ display_pattern (PatternSelectP psp,
 	    *b++ = *s++;
 	  }
 
-      gtk_preview_draw_row (GTK_PREVIEW (psp->preview), buf, offset_x, i, width);
+      grid_draw_row (psp, buf, offset_x, i, width);
 
       src += rowstride;
     }
@@ -361,14 +447,14 @@ display_setup (PatternSelectP psp)
   unsigned char * buf;
   int i;
 
-  buf = (unsigned char *) g_malloc (sizeof (char) * psp->preview->requisition.width * 3);
+  buf = (unsigned char *) g_malloc (sizeof (char) * psp->width * 3);
 
   /*  Set the buffer to white  */
-  memset (buf, 255, psp->preview->requisition.width * 3);
+  memset (buf, 255, psp->width * 3);
 
   /*  Set the image buffer to white  */
-  for (i = 0; i < psp->preview->requisition.height; i++)
-    gtk_preview_draw_row (GTK_PREVIEW (psp->preview), buf, 0, i, psp->preview->requisition.width);
+  for (i = 0; i < psp->height; i++)
+    grid_draw_row (psp, buf, 0, i, psp->width);
 
   g_free (buf);
 }
@@ -410,6 +496,8 @@ display_patterns (PatternSelectP psp)
 
       list = g_slist_next (list);
     }
+
+  gtk_widget_queue_draw (psp->preview);
 }
 
 static void
@@ -419,7 +507,6 @@ pattern_select_show_selected (PatternSelectP psp,
 {
   static int old_row = 0;
   static int old_col = 0;
-  GdkRectangle area;
   unsigned char * buf;
   int yend;
   int ystart;
@@ -434,8 +521,8 @@ pattern_select_show_selected (PatternSelectP psp,
       offset_x = old_col * psp->cell_width;
       offset_y = old_row * psp->cell_height - psp->scroll_offset;
 
-      ystart = BOUNDS (offset_y , 0, psp->preview->requisition.height);
-      yend = BOUNDS (offset_y + psp->cell_height, 0, psp->preview->requisition.height);
+      ystart = BOUNDS (offset_y , 0, psp->height);
+      yend = BOUNDS (offset_y + psp->cell_height, 0, psp->height);
 
       /*  set the buf to white  */
       memset (buf, 255, psp->cell_width * 3);
@@ -443,27 +530,21 @@ pattern_select_show_selected (PatternSelectP psp,
       for (i = ystart; i < yend; i++)
 	{
 	  if (i == offset_y || i == (offset_y + psp->cell_height - 1))
-	    gtk_preview_draw_row (GTK_PREVIEW (psp->preview), buf, offset_x, i, psp->cell_width);
+	    grid_draw_row (psp, buf, offset_x, i, psp->cell_width);
 	  else
 	    {
-	      gtk_preview_draw_row (GTK_PREVIEW (psp->preview), buf, offset_x, i, 1);
-	      gtk_preview_draw_row (GTK_PREVIEW (psp->preview), buf, offset_x + psp->cell_width - 1, i, 1);
+	      grid_draw_row (psp, buf, offset_x, i, 1);
+	      grid_draw_row (psp, buf, offset_x + psp->cell_width - 1, i, 1);
 	    }
 	}
-
-      area.x = offset_x;
-      area.y = ystart;
-      area.width = psp->cell_width;
-      area.height = yend - ystart;
-      gtk_widget_draw (psp->preview, &area);
     }
 
   /*  make the new selection  */
   offset_x = col * psp->cell_width;
   offset_y = row * psp->cell_height - psp->scroll_offset;
 
-  ystart = BOUNDS (offset_y , 0, psp->preview->requisition.height);
-  yend = BOUNDS (offset_y + psp->cell_height, 0, psp->preview->requisition.height);
+  ystart = BOUNDS (offset_y , 0, psp->height);
+  yend = BOUNDS (offset_y + psp->cell_height, 0, psp->height);
 
   /*  set the buf to black  */
   memset (buf, 0, psp->cell_width * 3);
@@ -471,19 +552,15 @@ pattern_select_show_selected (PatternSelectP psp,
   for (i = ystart; i < yend; i++)
     {
       if (i == offset_y || i == (offset_y + psp->cell_height - 1))
-	gtk_preview_draw_row (GTK_PREVIEW (psp->preview), buf, offset_x, i, psp->cell_width);
+	grid_draw_row (psp, buf, offset_x, i, psp->cell_width);
       else
 	{
-	  gtk_preview_draw_row (GTK_PREVIEW (psp->preview), buf, offset_x, i, 1);
-	  gtk_preview_draw_row (GTK_PREVIEW (psp->preview), buf, offset_x + psp->cell_width - 1, i, 1);
+	  grid_draw_row (psp, buf, offset_x, i, 1);
+	  grid_draw_row (psp, buf, offset_x + psp->cell_width - 1, i, 1);
 	}
     }
 
-  area.x = offset_x;
-  area.y = ystart;
-  area.width = psp->cell_width;
-  area.height = yend - ystart;
-  gtk_widget_draw (psp->preview, &area);
+  gtk_widget_queue_draw (psp->preview);
 
   old_row = row;
   old_col = col;
@@ -495,7 +572,7 @@ static void
 draw_preview (PatternSelectP psp)
 {
   /*  Draw the image buf to the preview window  */
-  gtk_widget_draw (psp->preview, NULL);
+  gtk_widget_queue_draw (psp->preview);
 }
 
 static void
@@ -509,15 +586,16 @@ preview_calc_scrollbar (PatternSelectP psp)
   num_rows = (num_patterns + NUM_PATTERN_COLUMNS - 1) / NUM_PATTERN_COLUMNS;
   max = num_rows * psp->cell_width;
   if (!num_rows) num_rows = 1;
-  page_size = psp->preview->allocation.height;
+  page_size = gtk_widget_get_height (psp->preview);
+  if (page_size <= 0)
+    page_size = psp->height;
 
-  psp->sbar_data->value = psp->scroll_offset;
-  psp->sbar_data->upper = max;
-  psp->sbar_data->page_size = (page_size < max) ? page_size : max;
-  psp->sbar_data->page_increment = (page_size >> 1);
-  psp->sbar_data->step_increment = psp->cell_width;
-
-  gtk_signal_emit_by_name (GTK_OBJECT (psp->sbar_data), "changed");
+  gtk_adjustment_configure (psp->sbar_data,
+			    psp->scroll_offset,
+			    0, max,
+			    psp->cell_width,
+			    (page_size >> 1),
+			    (page_size < max) ? page_size : max);
 }
 
 static void
@@ -532,23 +610,28 @@ update_active_pattern_field (PatternSelectP psp)
     return;
 
   /*  Set pattern name  */
-  gtk_label_set (GTK_LABEL (psp->pattern_name), pattern->name);
+  gtk_label_set_text (GTK_LABEL (psp->pattern_name), pattern->name);
 
   /*  Set pattern size  */
   sprintf (buf, "(%d X %d)", pattern->mask->width, pattern->mask->height);
-  gtk_label_set (GTK_LABEL (psp->pattern_size), buf);
+  gtk_label_set_text (GTK_LABEL (psp->pattern_size), buf);
 }
 
-static gint
-pattern_select_resize (GtkWidget      *widget,
-		       GdkEvent       *event,
-		       PatternSelectP  psp)
-{  
-/* calculate the best-fit approximation... */  
+static void
+pattern_select_resize (GtkDrawingArea *area,
+		       int             width,
+		       int             height,
+		       gpointer        data)
+{
+  PatternSelectP psp = data;
+  GPatternP active;
+/* calculate the best-fit approximation... */
   gint wid;
   gint now;
 
-  wid = widget->allocation.width-4;
+  wid = width;
+  if (wid < MIN_CELL_SIZE)
+    wid = MIN_CELL_SIZE;
 
   for(now = MIN_CELL_SIZE, STD_CELL_SIZE = MIN_CELL_SIZE;
       now < MAX_CELL_SIZE; ++now)
@@ -563,17 +646,9 @@ pattern_select_resize (GtkWidget      *widget,
 
   psp->cell_width = STD_CELL_SIZE;
   psp->cell_height = STD_CELL_SIZE;
-  psp->width = widget->allocation.width - 4;
-  psp->height = widget->allocation.height - 4;
 
-  /*
-  NUM_PATTERN_COLUMNS=(gint)(widget->allocation.width/STD_CELL_WIDTH);
-  NUM_PATTERN_ROWS = (num_patterns + NUM_PATTERN_COLUMNS - 1) / NUM_PATTERN_COLUMNS;
-  */
-/*  psp->width=widget->allocation.width;
-  psp->height=widget->allocation.height; */
+  grid_set_size (psp, width, height);
 
-  gtk_preview_size (GTK_PREVIEW (psp->preview), psp->width, psp->height);
   /*  recalculate scrollbar extents  */
   preview_calc_scrollbar (psp);
 
@@ -581,80 +656,87 @@ pattern_select_resize (GtkWidget      *widget,
   display_patterns (psp);
 
   /*  update the active selection  */
-/*  active = get_active_pattern ();
+  active = get_active_pattern ();
   if (active)
-    pattern_select_select (psp, active->index); */
+    pattern_select_select (psp, active->index);
 
   /*  update the display  */
   draw_preview (psp);
-  return FALSE;
 }
 
-static gint
-pattern_select_events (GtkWidget      *widget,
-		       GdkEvent       *event,
-		       PatternSelectP  psp)
+static void
+pattern_select_pressed (GtkGestureDrag *gesture,
+			double          x,
+			double          y,
+			gpointer        data)
 {
-  GdkEventButton *bevent;
+  PatternSelectP psp = data;
   GPatternP pattern;
   int row, col, index;
 
-  switch (event->type)
+  col = x / psp->cell_width;
+  row = (y + psp->scroll_offset) / psp->cell_height;
+  if (col < 0 || col >= NUM_PATTERN_COLUMNS || row < 0)
+    return;
+  index = row * NUM_PATTERN_COLUMNS + col;
+
+  /*  Get the pattern and display the popup pattern preview  */
+  if ((pattern = get_pattern_by_index (index)))
     {
-    case GDK_BUTTON_PRESS:
-      bevent = (GdkEventButton *) event;
-
-      if (bevent->button == 1)
-	{
-	  col = bevent->x / psp->cell_width;
-	  row = (bevent->y + psp->scroll_offset) / psp->cell_height;
-	  index = row * NUM_PATTERN_COLUMNS + col;
-
-	  /*  Get the pattern and display the popup pattern preview  */
-	  if ((pattern = get_pattern_by_index (index)))
-	    {
-	      gdk_pointer_grab (psp->preview->window, FALSE,
-				(GDK_POINTER_MOTION_HINT_MASK |
-				 GDK_BUTTON1_MOTION_MASK |
-				 GDK_BUTTON_RELEASE_MASK),
-				NULL, NULL, bevent->time);
-
-	      /*  Make this pattern the active pattern  */
-	      select_pattern (pattern);
-	      /*  Show the pattern popup window if the pattern is too large  */
-	      if (pattern->mask->width > psp->cell_width ||
-		  pattern->mask->height > psp->cell_height)
-		pattern_popup_open (psp, bevent->x, bevent->y, pattern);
-	    }
-	}
-      break;
-
-    case GDK_BUTTON_RELEASE:
-      bevent = (GdkEventButton *) event;
-
-      if (bevent->button == 1)
-	{
-	  /*  Ungrab the pointer  */
-	  gdk_pointer_ungrab (bevent->time);
-
-	  /*  Close the brush popup window  */
-	  pattern_popup_close (psp);
-	}
-      break;
-
-    default:
-      break;
+      /*  Make this pattern the active pattern  */
+      select_pattern (pattern);
+      /*  Show the pattern popup window if the pattern is too large  */
+      if (pattern->mask->width > psp->cell_width ||
+	  pattern->mask->height > psp->cell_height)
+	pattern_popup_open (psp, x, y, pattern);
     }
-
-  return FALSE;
 }
 
-static gint
-pattern_select_delete_callback (GtkWidget *w,
-				GdkEvent *e,
-				gpointer client_data)
+static void
+pattern_select_released (GtkGestureDrag *gesture,
+			 double          offset_x,
+			 double          offset_y,
+			 gpointer        data)
 {
-  pattern_select_close_callback (w, client_data);
+  /*  Close the pattern popup window  */
+  pattern_popup_close ((PatternSelectP) data);
+}
+
+static gboolean
+pattern_select_scroll (GtkEventControllerScroll *controller,
+		       double                    dx,
+		       double                    dy,
+		       gpointer                  data)
+{
+  PatternSelectP psp = data;
+  double value;
+
+  value = gtk_adjustment_get_value (psp->sbar_data) +
+    dy * gtk_adjustment_get_step_increment (psp->sbar_data);
+  gtk_adjustment_set_value (psp->sbar_data, value);
+
+  return TRUE;
+}
+
+static void
+pattern_select_grid_destroy (GtkWidget *widget,
+			     gpointer   data)
+{
+  PatternSelectP psp = data;
+
+  if (psp->pattern_popup)
+    {
+      gtk_widget_unparent (psp->pattern_popup);
+      psp->pattern_popup = NULL;
+    }
+  psp->preview = NULL;
+}
+
+static gboolean
+pattern_select_delete_callback (GtkWindow *w,
+				gpointer   client_data)
+{
+  pattern_select_close_callback (GTK_WIDGET (w), client_data);
 
   return TRUE;
 }
@@ -665,8 +747,8 @@ pattern_select_close_callback (GtkWidget *w,
 {
   PatternSelectP psp;
   psp = (PatternSelectP) client_data;
-  if (GTK_WIDGET_VISIBLE (psp->shell))
-    gtk_widget_hide (psp->shell);
+  if (gtk_widget_get_visible (psp->shell))
+    gtk_widget_set_visible (psp->shell, FALSE);
 }
 
 static void
@@ -706,9 +788,9 @@ pattern_select_scroll_update (GtkAdjustment *adjustment,
 
   psp = data;
 
-  if (psp)
+  if (psp && psp->preview)
     {
-      psp->scroll_offset = adjustment->value;
+      psp->scroll_offset = gtk_adjustment_get_value (adjustment);
       display_patterns (psp);
 
       active = get_active_pattern ();

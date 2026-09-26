@@ -2,18 +2,22 @@
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
-#include "gtk/gtk.h"
+#include "appenv.h"
 #include "tips_dialog.h"
 #include "gimprc.h"
 #include "interface.h"
 #include "wilber.h"
 
+#include "config.h"
+
 #define TIPS_FILE_NAME "gimp_tips.txt"
 
-static int  tips_dialog_hide (GtkWidget *widget, gpointer data);
-static int  tips_show_next (GtkWidget *widget, gpointer data);
+static gboolean tips_dialog_close (GtkWindow *window, gpointer data);
+static void tips_dialog_hide (GtkWidget *widget, gpointer data);
+static void tips_show_next (GtkWidget *widget, gpointer data);
 static void tips_toggle_update (GtkWidget *widget, gpointer data);
-static void read_tips_file(char *filename);
+static void read_tips_file (char *filename);
+static gchar *tips_find_data_file (const gchar *name);
 
 static GtkWidget *tips_dialog = NULL;
 static GtkWidget *tips_label;
@@ -35,19 +39,15 @@ tips_dialog_create ()
   guchar *   temp;
   guchar *   src;
   guchar *   dest;
-  gchar  *   gimp_data_dir;
+  gchar  *   filename;
   int        x;
   int        y;
 
   if (tips_count == 0)
     {
-      temp = g_malloc (512);
-      if ((gimp_data_dir = getenv ("GIMP_DATADIR")) != NULL)
-        sprintf ((char *)temp, "%s/%s", gimp_data_dir, TIPS_FILE_NAME);
-      else
-        sprintf ((char *)temp, "%s/%s", DATADIR, TIPS_FILE_NAME);
-      read_tips_file ((char *)temp);
-      g_free (temp);
+      filename = tips_find_data_file (TIPS_FILE_NAME);
+      read_tips_file (filename);
+      g_free (filename);
     }
 
   if (last_tip >= tips_count || last_tip < 0)
@@ -55,103 +55,92 @@ tips_dialog_create ()
 
   if (!tips_dialog)
     {
-      tips_dialog = gtk_window_new (GTK_WINDOW_DIALOG);
-      gtk_window_set_wmclass (GTK_WINDOW (tips_dialog), "tip_of_the_day", "Gimp");
+      tips_dialog = gtk_window_new ();
       gtk_window_set_title (GTK_WINDOW (tips_dialog), "GIMP Tip of the day");
-      gtk_window_position (GTK_WINDOW (tips_dialog), GTK_WIN_POS_CENTER);
-      gtk_signal_connect (GTK_OBJECT (tips_dialog), "delete_event",
-			  GTK_SIGNAL_FUNC (tips_dialog_hide), NULL);
-      /* destroy the tips window if the mainlevel gtk_main() function is left */
-      gtk_quit_add_destroy (1, GTK_OBJECT (tips_dialog));
+      g_signal_connect (tips_dialog, "close-request",
+			G_CALLBACK (tips_dialog_close), NULL);
 
-      vbox = gtk_vbox_new (FALSE, 0);
-      gtk_container_add (GTK_CONTAINER (tips_dialog), vbox);
-      gtk_widget_show (vbox);
+      vbox = gimp_vbox_new (FALSE, 0);
+      gtk_window_set_child (GTK_WINDOW (tips_dialog), vbox);
 
-      hbox1 = gtk_hbox_new (FALSE, 5);
-      gtk_container_border_width (GTK_CONTAINER (hbox1), 10);
-      gtk_box_pack_start (GTK_BOX (vbox), hbox1, FALSE, TRUE, 0);
-      gtk_widget_show (hbox1);
+      hbox1 = gimp_hbox_new (FALSE, 5);
+      gimp_container_set_border_width (hbox1, 10);
+      gimp_box_pack_start (vbox, hbox1, FALSE, TRUE, 0);
 
-      hbox2 = gtk_hbox_new (FALSE, 5);
-      gtk_container_border_width (GTK_CONTAINER (hbox2), 10);
-      gtk_box_pack_end (GTK_BOX (vbox), hbox2, FALSE, TRUE, 0);
-      gtk_widget_show (hbox2);
+      hbox2 = gimp_hbox_new (FALSE, 5);
+      gimp_container_set_border_width (hbox2, 10);
+      gimp_box_pack_end (vbox, hbox2, FALSE, TRUE, 0);
 
-      preview = gtk_preview_new (GTK_PREVIEW_COLOR);
-      gtk_preview_size (GTK_PREVIEW (preview), wilber_width, wilber_height);
+      preview = gimp_preview_new (GIMP_PREVIEW_COLOR);
+      gimp_preview_size (GIMP_PREVIEW (preview), wilber_width, wilber_height);
       temp = g_malloc (wilber_width * 3);
       src = (guchar *)wilber_data;
-      for (y = 0; y < wilber_height; y++)
+      for (y = 0; y < (int) wilber_height; y++)
 	{
 	  dest = temp;
-	  for (x = 0; x < wilber_width; x++)
+	  for (x = 0; x < (int) wilber_width; x++)
 	    {
 	      HEADER_PIXEL(src, dest);
 	      dest += 3;
 	    }
-	  gtk_preview_draw_row (GTK_PREVIEW (preview), temp,
-				0, y, wilber_width); 
+	  gimp_preview_draw_row (GIMP_PREVIEW (preview), temp,
+				 0, y, wilber_width);
 	}
       g_free(temp);
-      gtk_box_pack_end (GTK_BOX (hbox1), preview, FALSE, TRUE, 3);
-      gtk_widget_show (preview);
+      gimp_box_pack_end (hbox1, preview, FALSE, TRUE, 3);
 
       tips_label = gtk_label_new (tips_text[last_tip]);
       gtk_label_set_justify (GTK_LABEL (tips_label), GTK_JUSTIFY_LEFT);
-      gtk_box_pack_start (GTK_BOX (hbox1), tips_label, TRUE, TRUE, 3);
-      gtk_widget_show (tips_label);
+      gimp_box_pack_start (hbox1, tips_label, TRUE, TRUE, 3);
 
       button_close = gtk_button_new_with_label ("Close");
-      gtk_signal_connect (GTK_OBJECT (button_close), "clicked",
-			  GTK_SIGNAL_FUNC (tips_dialog_hide), NULL);
-      gtk_box_pack_end (GTK_BOX (hbox2), button_close, FALSE, TRUE, 0);
-      gtk_widget_show (button_close);
+      g_signal_connect (button_close, "clicked",
+			G_CALLBACK (tips_dialog_hide), NULL);
+      gimp_box_pack_end (hbox2, button_close, FALSE, TRUE, 0);
 
       button_next = gtk_button_new_with_label ("Next Tip");
-      gtk_signal_connect (GTK_OBJECT (button_next), "clicked",
-			  GTK_SIGNAL_FUNC (tips_show_next),
-			  (gpointer) "next");
-      gtk_box_pack_end (GTK_BOX (hbox2), button_next, FALSE, TRUE, 0);
-      gtk_widget_show (button_next);
+      g_signal_connect (button_next, "clicked",
+			G_CALLBACK (tips_show_next),
+			(gpointer) "next");
+      gimp_box_pack_end (hbox2, button_next, FALSE, TRUE, 0);
 
       button_prev = gtk_button_new_with_label ("Prev. Tip");
-      gtk_signal_connect (GTK_OBJECT (button_prev), "clicked",
-			  GTK_SIGNAL_FUNC (tips_show_next),
-			  (gpointer) "prev");
-      gtk_box_pack_end (GTK_BOX (hbox2), button_prev, FALSE, TRUE, 0);
-      gtk_widget_show (button_prev);
+      g_signal_connect (button_prev, "clicked",
+			G_CALLBACK (tips_show_next),
+			(gpointer) "prev");
+      gimp_box_pack_end (hbox2, button_prev, FALSE, TRUE, 0);
 
       button_check = gtk_check_button_new_with_label ("Show tip next time");
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button_check),
+      gtk_check_button_set_active (GTK_CHECK_BUTTON (button_check),
 				   show_tips);
-      gtk_signal_connect (GTK_OBJECT (button_check), "toggled",
-			  GTK_SIGNAL_FUNC (tips_toggle_update),
-			  (gpointer) &show_tips);
-      gtk_box_pack_start (GTK_BOX (hbox2), button_check, FALSE, TRUE, 0);
-      gtk_widget_show (button_check);
+      g_signal_connect (button_check, "toggled",
+			G_CALLBACK (tips_toggle_update),
+			(gpointer) &show_tips);
+      gimp_box_pack_start (hbox2, button_check, FALSE, TRUE, 0);
 
       old_show_tips = show_tips;
     }
 
-  if (!GTK_WIDGET_VISIBLE (tips_dialog))
-    {
-      gtk_widget_show (tips_dialog);
-    }
-  else
-    {
-      gdk_window_raise (tips_dialog->window);
-    }
+  gtk_window_present (GTK_WINDOW (tips_dialog));
 }
 
-static int
+static gboolean
+tips_dialog_close (GtkWindow *window,
+		   gpointer   data)
+{
+  tips_dialog_hide (GTK_WIDGET (window), data);
+
+  return TRUE;
+}
+
+static void
 tips_dialog_hide (GtkWidget *widget,
 		  gpointer data)
 {
   GList *update = NULL; /* options that should be updated in .gimprc */
   GList *remove = NULL; /* options that should be commented out */
 
-  gtk_widget_hide (tips_dialog);
+  gtk_widget_set_visible (tips_dialog, FALSE);
 
   update = g_list_append (update, "last-tip-shown"); /* always save this */
   if (show_tips != old_show_tips)
@@ -165,11 +154,9 @@ tips_dialog_hide (GtkWidget *widget,
   last_tip--;
   g_list_free (update);
   g_list_free (remove);
-
-  return TRUE;
 }
 
-static int
+static void
 tips_show_next (GtkWidget *widget,
 		gpointer  data)
 {
@@ -185,8 +172,7 @@ tips_show_next (GtkWidget *widget,
       if (last_tip >= tips_count)
 	last_tip = 0;
     }
-  gtk_label_set (GTK_LABEL (tips_label), tips_text[last_tip]);
-  return FALSE;
+  gtk_label_set_text (GTK_LABEL (tips_label), tips_text[last_tip]);
 }
 
 static void
@@ -197,10 +183,60 @@ tips_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
+}
+
+/*  Looks for a data file: in $GIMP_DATADIR, in the installed data
+ *  directory (found relative to the executable on Windows), then in the
+ *  source tree when running from the build directory.  Returns the
+ *  first candidate when none exists, so the caller's error handling
+ *  still applies.
+ */
+static gchar *
+tips_find_data_file (const gchar *name)
+{
+  gchar *dir;
+  gchar *path;
+  gchar *first = NULL;
+  gchar *candidates[5];
+  int n = 0;
+  int i;
+
+  candidates[n++] = g_build_filename (gimp_data_directory (), name, NULL);
+
+#ifdef G_OS_WIN32
+  dir = g_win32_get_package_installation_directory_of_module (NULL);
+#else
+  dir = g_strdup (GIMP42_PREFIX);
+#endif
+  candidates[n++] = g_build_filename (dir, GIMP42_DATADIR_REL, name, NULL);
+  g_free (dir);
+
+  candidates[n++] = g_build_filename (GIMP42_PREFIX, GIMP42_DATADIR_REL, name, NULL);
+  candidates[n++] = g_build_filename (GIMP_BUILD_SRCDIR, name, NULL);
+  candidates[n++] = g_build_filename (GIMP_BUILD_SRCDIR, "data", name, NULL);
+
+  path = NULL;
+  for (i = 0; i < n; i++)
+    {
+      if (!path && g_file_test (candidates[i], G_FILE_TEST_IS_REGULAR))
+	path = candidates[i];
+      else if (i == 0)
+	first = candidates[i];
+      else
+	g_free (candidates[i]);
+    }
+
+  if (path)
+    {
+      g_free (first);
+      return path;
+    }
+
+  return first;
 }
 
 static void
@@ -217,8 +253,9 @@ read_tips_file (char *filename)
   FILE *fp;
   char *tip = NULL;
   char *str = NULL;
+  size_t len;
 
-  fp = fopen (filename, "rt");
+  fp = fopen (filename, "rb");
   if (!fp)
     {
       store_tip ("Your GIMP tips file appears to be missing!\n"
@@ -232,7 +269,15 @@ read_tips_file (char *filename)
     {
       if (!fgets (str, 1024, fp))
 	continue;
-      
+
+      /*  the file is read in binary mode: drop a CR before the LF  */
+      len = strlen (str);
+      if (len >= 2 && str[len - 2] == '\r' && str[len - 1] == '\n')
+	{
+	  str[len - 2] = '\n';
+	  str[len - 1] = '\0';
+	}
+
       if (str[0] == '#' || str[0] == '\n')
 	{
 	  if (tip != NULL)

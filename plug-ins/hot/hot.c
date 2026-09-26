@@ -69,6 +69,7 @@
 #include <string.h>
 #include <libgimp/gimp.h>
 #include <gtk/gtk.h>
+#include <libgimp/gimpui.h>
 #include <plug-ins/megawidget/megawidget.h>
 
 struct Grgb {
@@ -508,36 +509,24 @@ pluginCoreIA(struct piArgs *argp) {
      { "Blacken (flag)", 0 },
      { NULL, 0}
   };
-  gchar **argv;
-  gint argc;
-
-  /* Set args */
-  argc = 1;
-  argv = g_new(gchar *, 1);
-  argv[0] = g_strdup("hot");
-  gtk_init(&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
 
   actions[argp->action].var = 1;
 
   dlg = mw_app_new("plug_in_hot", "Hot", &runp);
-  hbox = gtk_hbox_new(FALSE, 5);
-  gtk_container_border_width(GTK_CONTAINER(hbox), 5);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), hbox, TRUE, TRUE, 0);
-  gtk_widget_show(hbox);
+  hbox = gimp_hbox_new(FALSE, 5);
+  gimp_container_set_border_width(hbox, 5);
+  gimp_box_pack_start(gimp_dialog_get_vbox(dlg), hbox, TRUE, TRUE, 0);
 
-  vbox = gtk_vbox_new(FALSE, 5);
-  gtk_box_pack_start(GTK_BOX(hbox), vbox, TRUE, TRUE, 0);
-  gtk_widget_show(vbox);
+  vbox = gimp_vbox_new(FALSE, 5);
+  gimp_box_pack_start(hbox, vbox, TRUE, TRUE, 0);
 
   mw_toggle_button_new(vbox, NULL, "Create New Layer", &argp->new_layerp);
   mw_radio_group_new(vbox, "Mode", modes);
 
   mw_radio_group_new(hbox, "Action", actions);
 
-  gtk_widget_show(dlg);
-  gtk_main();
-  gdk_flush();
+  gtk_window_present(GTK_WINDOW(dlg));
+  gimp_main_loop_run();
 
   argp->mode = mw_radio_result(modes);
   argp->action = mw_radio_result(actions);

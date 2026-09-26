@@ -34,10 +34,10 @@
 
 /*  local function prototypes  */
 
-static void  color_picker_button_press     (Tool *, GdkEventButton *, gpointer);
-static void  color_picker_button_release   (Tool *, GdkEventButton *, gpointer);
-static void  color_picker_motion           (Tool *, GdkEventMotion *, gpointer);
-static void  color_picker_cursor_update    (Tool *, GdkEventMotion *, gpointer);
+static void  color_picker_button_press     (Tool *, GimpButtonEvent *, gpointer);
+static void  color_picker_button_release   (Tool *, GimpButtonEvent *, gpointer);
+static void  color_picker_motion           (Tool *, GimpMotionEvent *, gpointer);
+static void  color_picker_cursor_update    (Tool *, GimpMotionEvent *, gpointer);
 static void  color_picker_control          (Tool *, int, void *);
 static void  color_picker_info_window_close_callback  (GtkWidget *, gpointer);
 
@@ -78,7 +78,7 @@ color_picker_toggle_update (GtkWidget *w,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -97,21 +97,19 @@ create_color_picker_options (void)
   options->sample_merged = 0;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
+  vbox = gimp_vbox_new (FALSE, 1);
 
   /*  the main label  */
   label = gtk_label_new ("Color Picker Options");
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_box_pack_start (vbox, label, FALSE, FALSE, 0);
 
   /*  the sample merged toggle button  */
   sample_merged_toggle = gtk_check_button_new_with_label ("Sample Merged");
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (sample_merged_toggle), options->sample_merged);
-  gtk_box_pack_start (GTK_BOX (vbox), sample_merged_toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (sample_merged_toggle), "toggled",
-		      (GtkSignalFunc) color_picker_toggle_update,
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (sample_merged_toggle), options->sample_merged);
+  gimp_box_pack_start (vbox, sample_merged_toggle, FALSE, FALSE, 0);
+  g_signal_connect (sample_merged_toggle, "toggled",
+		      G_CALLBACK (color_picker_toggle_update),
 		      &options->sample_merged);
-  gtk_widget_show (sample_merged_toggle);
 
 
   /*  Register this selection options widget with the main tools options dialog  */
@@ -127,7 +125,7 @@ static ActionAreaItem action_items[] =
 
 static void
 color_picker_button_press (Tool           *tool,
-			   GdkEventButton *bevent,
+			   GimpButtonEvent *bevent,
 			   gpointer        gdisp_ptr)
 {
   GDisplay * gdisp;
@@ -179,14 +177,8 @@ color_picker_button_press (Tool           *tool,
 	}
   /* Create the action area  */
   action_items[0].user_data = color_picker_info;
-  build_action_area (GTK_DIALOG (color_picker_info->shell), action_items, 1, 0);
+  build_action_area (color_picker_info->shell, action_items, 1, 0);
     }
-
-  gdk_pointer_grab (gdisp->canvas->window, FALSE,
-		    (GDK_POINTER_MOTION_HINT_MASK |
-		     GDK_BUTTON1_MOTION_MASK |
-		     GDK_BUTTON_RELEASE_MASK),
-		    NULL, NULL, bevent->time);
 
   /*  Make the tool active and set the gdisplay which owns it  */
   tool->gdisp_ptr = gdisp_ptr;
@@ -218,14 +210,12 @@ color_picker_button_press (Tool           *tool,
 
 static void
 color_picker_button_release (Tool           *tool,
-			     GdkEventButton *bevent,
+			     GimpButtonEvent *bevent,
 			     gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
   int x, y;
 
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
   gdisp = (GDisplay *) gdisp_ptr;
 
   /*  First, transform the coordinates to gimp image space  */
@@ -238,7 +228,7 @@ color_picker_button_release (Tool           *tool,
 
 static void
 color_picker_motion (Tool           *tool,
-		     GdkEventMotion *mevent,
+		     GimpMotionEvent *mevent,
 		     gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -256,7 +246,7 @@ color_picker_motion (Tool           *tool,
 
 static void
 color_picker_cursor_update (Tool           *tool,
-			    GdkEventMotion *mevent,
+			    GimpMotionEvent *mevent,
 			    gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -266,9 +256,9 @@ color_picker_cursor_update (Tool           *tool,
 
   gdisplay_untransform_coords (gdisp, mevent->x, mevent->y, &x, &y, FALSE, FALSE);
   if (gimage_pick_correlate_layer (gdisp->gimage, x, y))
-    gdisplay_install_tool_cursor (gdisp, GDK_TCROSS);
+    gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TCROSS);
   else
-    gdisplay_install_tool_cursor (gdisp, GDK_TOP_LEFT_ARROW);
+    gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TOP_LEFT_ARROW);
 }
 
 static void

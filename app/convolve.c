@@ -95,7 +95,7 @@ static void
 convolve_scale_update (GtkAdjustment *adjustment,
 		       double        *scale_val)
 {
-  *scale_val = adjustment->value;
+  *scale_val = gtk_adjustment_get_value (adjustment);
 
   /*  recalculate the matrix  */
   calculate_matrix (convolve_options->type, convolve_options->pressure);
@@ -105,7 +105,10 @@ static void
 convolve_type_callback (GtkWidget *w,
 			gpointer  client_data)
 {
-  convolve_options->type = (ConvolveType) client_data;
+  if (! gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
+    return;
+
+  convolve_options->type = (ConvolveType) GPOINTER_TO_INT (client_data);
   /*  recalculate the matrix  */
   calculate_matrix (convolve_options->type, convolve_options->pressure);
 }
@@ -120,8 +123,8 @@ create_convolve_options (void)
   GtkWidget *pressure_scale;
   GtkWidget *radio_box;
   GtkWidget *radio_button;
-  GtkObject *pressure_scale_data;
-  GSList *group = NULL;
+  GtkAdjustment *pressure_scale_data;
+  GtkWidget *group = NULL;
   int i;
   char *button_names[3] =
   {
@@ -136,47 +139,40 @@ create_convolve_options (void)
   options->pressure = 50.0;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 2);
+  vbox = gimp_vbox_new (FALSE, 2);
 
   /*  the main label  */
   label = gtk_label_new ("Convolver Options");
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (vbox), label);
 
   /*  the pressure scale  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (FALSE, 1);
+  gtk_box_append (GTK_BOX (vbox), hbox);
 
   label = gtk_label_new ("Pressure");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (hbox), label);
 
   pressure_scale_data = gtk_adjustment_new (50.0, 0.0, 100.0, 1.0, 1.0, 0.0);
-  pressure_scale = gtk_hscale_new (GTK_ADJUSTMENT (pressure_scale_data));
-  gtk_box_pack_start (GTK_BOX (hbox), pressure_scale, TRUE, TRUE, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (pressure_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (pressure_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (pressure_scale_data), "value_changed",
-		      (GtkSignalFunc) convolve_scale_update,
-		      &options->pressure);
-  gtk_widget_show (pressure_scale);
-  gtk_widget_show (hbox);
+  pressure_scale = gimp_hscale_new (pressure_scale_data, 1);
+  gimp_box_pack_start (hbox, pressure_scale, TRUE, TRUE, 0);
+  g_signal_connect (pressure_scale_data, "value-changed",
+		    G_CALLBACK (convolve_scale_update),
+		    &options->pressure);
 
-  radio_box = gtk_vbox_new (FALSE, 2);
-  gtk_box_pack_start (GTK_BOX (vbox), radio_box, FALSE, FALSE, 0);
+  radio_box = gimp_vbox_new (FALSE, 2);
+  gtk_box_append (GTK_BOX (vbox), radio_box);
 
   /*  the radio buttons  */
   for (i = 0; i < 2; i++)
     {
-      radio_button = gtk_radio_button_new_with_label (group, button_names[i]);
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (radio_button));
-      gtk_box_pack_start (GTK_BOX (radio_box), radio_button, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (radio_button), "toggled",
-			  (GtkSignalFunc) convolve_type_callback,
-			  (gpointer) ((long) i));
-      gtk_widget_show (radio_button);
+      radio_button = gimp_radio_button_new (group, button_names[i]);
+      if (group == NULL)
+	group = radio_button;
+      gtk_box_append (GTK_BOX (radio_box), radio_button);
+      g_signal_connect (radio_button, "toggled",
+			G_CALLBACK (convolve_type_callback),
+			GINT_TO_POINTER (i));
     }
-  gtk_widget_show (radio_box);
 
   /*  Register this selection options widget with the main tools options dialog  */
   tools_register_options (CONVOLVE, vbox);

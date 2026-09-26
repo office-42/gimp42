@@ -26,6 +26,7 @@
 #include <gtk/gtk.h>
 #include <math.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #define PLUG_IN_NAME    "plug_in_illusion"
 #define PLUG_IN_VERSION "v0.7 (Dec. 25 1997)"
@@ -269,7 +270,7 @@ static GtkWidget *entry_division;
 
 static void dialog_destroy_handler( GtkWidget *widget, gpointer *data )
 {
-  gtk_main_quit();
+  gimp_main_loop_quit();
 }
 
 static void dialog_ok_handler( GtkWidget *widget, gpointer *data )
@@ -277,15 +278,15 @@ static void dialog_ok_handler( GtkWidget *widget, gpointer *data )
   dialog_status = TRUE;
 
   parameters.division =
-    (gint32)atof(gtk_entry_get_text( GTK_ENTRY( entry_division ) ) );
+    (gint32)atof(gtk_editable_get_text( GTK_EDITABLE( entry_division ) ) );
 
-  gtk_widget_destroy( GTK_WIDGET( data ) );
+  gtk_window_destroy( GTK_WINDOW( data ) );
 }
 
 static void dialog_cancel_handler( GtkWidget *widget, gpointer *data )
 {
   dialog_status = FALSE;
-  gtk_widget_destroy( GTK_WIDGET( data ) );
+  gtk_window_destroy( GTK_WINDOW( data ) );
 }
 
 /******************************************************************************/
@@ -296,73 +297,53 @@ static int dialog( void )
   
   dialog_status = FALSE;
   
-  {
-    gint    argc = 1;
-    gchar **argv = g_new( gchar *, 1 );
-    argv[0] = g_strdup( DIALOG_CAPTION );
-    gtk_init( &argc, &argv );
-    gtk_rc_parse( gimp_gtkrc () );
-  }
+  gtk_init();
 
   /* dialog window */
-  window = gtk_dialog_new();
-  gtk_signal_connect( GTK_OBJECT( window ), "destroy",
-		      GTK_SIGNAL_FUNC( dialog_destroy_handler ), NULL );
-  gtk_container_border_width( GTK_CONTAINER( window ), 0 );
-  gtk_container_border_width( GTK_CONTAINER( GTK_DIALOG( window )->vbox ), 5 );
+  window = gimp_dialog_new( DIALOG_CAPTION );
+  g_signal_connect( window, "destroy",
+		    G_CALLBACK( dialog_destroy_handler ), NULL );
+  gimp_container_set_border_width( gimp_dialog_get_vbox( window ), 5 );
 
   {
     /* buttons */
     GtkWidget *button;
 
     /* ok button */
-    button = gtk_button_new_with_label( "OK" );
-    gtk_signal_connect_object( GTK_OBJECT( button ), "clicked",
-			       GTK_SIGNAL_FUNC( dialog_ok_handler ),
-			       GTK_OBJECT( window ) );
-    GTK_WIDGET_SET_FLAGS( button, GTK_CAN_DEFAULT );
-    gtk_box_pack_start( GTK_BOX( GTK_DIALOG( window )->action_area ),
-			button, TRUE, TRUE, 0 );
-    gtk_widget_grab_default( button );
-    gtk_widget_show( button );
-    
+    button = gimp_dialog_add_button( window, "OK", NULL, NULL, TRUE );
+    g_signal_connect( button, "clicked",
+		      G_CALLBACK( dialog_ok_handler ), window );
+
     /* cancel button */
-    button = gtk_button_new_with_label( "Cancel" );
-    gtk_signal_connect_object( GTK_OBJECT( button ), "clicked",
-			       GTK_SIGNAL_FUNC( dialog_cancel_handler ),
-			       GTK_OBJECT( window )) ;
-    gtk_box_pack_start( GTK_BOX( GTK_DIALOG( window )->action_area ),
-			button, TRUE, TRUE, 0 );
-    gtk_widget_show( button );
+    button = gimp_dialog_add_button( window, "Cancel", NULL, NULL, FALSE );
+    g_signal_connect( button, "clicked",
+		      G_CALLBACK( dialog_cancel_handler ), window );
   }
-  
+
   {
     /* text boxes */
     GtkWidget *table;
     GtkWidget *label;
     char       buffer[32];
-    
+
     /* table */
-    table = gtk_table_new( 1, 2, FALSE );
-    gtk_table_set_row_spacings( GTK_TABLE( table ), 5 );
-    gtk_table_set_col_spacings( GTK_TABLE( table ), 5 );
-    gtk_box_pack_start( GTK_BOX( GTK_DIALOG( window )->vbox ),
-			table, TRUE, TRUE, 0 );
-    gtk_widget_show( table );
-    
+    table = gimp_table_new( 1, 2, FALSE );
+    gtk_grid_set_row_spacing( GTK_GRID( table ), 5 );
+    gtk_grid_set_column_spacing( GTK_GRID( table ), 5 );
+    gimp_box_pack_start( gimp_dialog_get_vbox( window ),
+			 table, TRUE, TRUE, 0 );
+
     /* tile width */
     label = gtk_label_new( "division: " );
     entry_division = gtk_entry_new();
     sprintf( buffer, "%d", parameters.division );
-    gtk_entry_set_text( GTK_ENTRY( entry_division ), buffer );
-    gtk_table_attach_defaults( GTK_TABLE( table ), label, 0, 1, 0, 1 );
-    gtk_table_attach_defaults( GTK_TABLE( table ), entry_division, 1, 2, 0, 1 );
-    gtk_widget_show( label );
-    gtk_widget_show( entry_division );
+    gtk_editable_set_text( GTK_EDITABLE( entry_division ), buffer );
+    gimp_table_attach_defaults( table, label, 0, 1, 0, 1 );
+    gimp_table_attach_defaults( table, entry_division, 1, 2, 0, 1 );
   }
 
-  gtk_widget_show( window );
-  gtk_main();
+  gtk_window_present( GTK_WINDOW( window ) );
+  gimp_main_loop_run();
 
   return dialog_status;
 }

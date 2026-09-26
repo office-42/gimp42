@@ -17,12 +17,16 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
 #include <time.h>
 
 #include <gtk/gtk.h>
 
 #include "libgimp/gimpfeatures.h"
 
+#include "appenv.h"
+#include "gimprc.h"
 #include "about_dialog.h"
 #include "interface.h"
 
@@ -31,19 +35,24 @@
 #define ANIMATION_STEPS 16
 #define ANIMATION_SIZE 2
 
-static int  about_dialog_load_logo (GtkWidget *window);
-static void about_dialog_destroy (void);
-static void about_dialog_unmap (void);
-static int  about_dialog_logo_expose (GtkWidget *widget, GdkEventExpose *event);
-static int  about_dialog_button (GtkWidget *widget, GdkEventButton *event);
-static int  about_dialog_timer (gpointer data);
+static int      about_dialog_load_logo (void);
+static void     about_dialog_destroy (void);
+static void     about_dialog_unmap (void);
+static void     about_dialog_logo_map (GtkWidget *widget, gpointer data);
+static void     about_dialog_logo_draw (GtkDrawingArea *area, cairo_t *cr,
+					int width, int height, gpointer data);
+static void     about_dialog_scroll_draw (GtkDrawingArea *area, cairo_t *cr,
+					  int width, int height, gpointer data);
+static void     about_dialog_button (GtkGestureClick *gesture, int n_press,
+				     double x, double y, gpointer data);
+static gboolean about_dialog_timer (gpointer data);
+static gchar *  about_dialog_find_data_file (const gchar *name);
 
 
 static GtkWidget *about_dialog = NULL;
 static GtkWidget *logo_area = NULL;
 static GtkWidget *scroll_area = NULL;
-static GdkPixmap *logo_pixmap = NULL;
-static GdkPixmap *scroll_pixmap = NULL;
+static cairo_surface_t *logo_surface = NULL;
 static unsigned char *dissolve_map = NULL;
 static int dissolve_width;
 static int dissolve_height;
@@ -54,7 +63,7 @@ static int do_scrolling = 0;
 static int scroll_state = 0;
 static int frame = 0;
 static int offset = 0;
-static int timer = 0;
+static guint timer = 0;
 
 static char *scroll_text[] =
 {
@@ -83,7 +92,7 @@ static char *scroll_text[] =
   "Simon Janes",
   "Tim Janik",
   "Tuomas Kuosmanen",
-  "Peter Kirchgessner", 
+  "Peter Kirchgessner",
   "Nick Lamb",
   "Karl LaRocca",
   "Jens Lautenbacher",
@@ -124,6 +133,7 @@ static char *scroll_text[] =
 };
 static int nscroll_texts = sizeof (scroll_text) / sizeof (scroll_text[0]);
 static int scroll_text_widths[100] = { 0 };
+static int draw_offset = 0;
 static int cur_scroll_text = 0;
 static int cur_scroll_index = 0;
 
@@ -132,130 +142,115 @@ static int shuffle_array[ sizeof(scroll_text) / sizeof(scroll_text[0]) ];
 void
 about_dialog_create (int timeout)
 {
-  GtkStyle *style;
   GtkWidget *vbox;
   GtkWidget *aboutframe;
   GtkWidget *label;
-  GtkWidget *alignment;
+  GtkGesture *click;
+  PangoLayout *layout;
+  PangoRectangle ink, logical;
   gint max_width;
+  gint max_height;
   gint i;
 
   if (!about_dialog)
     {
-      about_dialog = gtk_window_new (GTK_WINDOW_DIALOG);
-      gtk_window_set_wmclass (GTK_WINDOW (about_dialog), "about_dialog", "Gimp");
+      if (!about_dialog_load_logo ())
+	return;
+
+      about_dialog = gtk_window_new ();
       gtk_window_set_title (GTK_WINDOW (about_dialog), "About the GIMP");
-      gtk_window_set_policy (GTK_WINDOW (about_dialog), FALSE, FALSE, FALSE);
-      gtk_window_position (GTK_WINDOW (about_dialog), GTK_WIN_POS_CENTER);
-      gtk_signal_connect (GTK_OBJECT (about_dialog), "destroy",
-			  (GtkSignalFunc) about_dialog_destroy, NULL);
-      gtk_signal_connect (GTK_OBJECT (about_dialog), "unmap_event",
-			  (GtkSignalFunc) about_dialog_unmap, NULL);
-      gtk_signal_connect (GTK_OBJECT (about_dialog), "button_press_event",
-			  (GtkSignalFunc) about_dialog_button, NULL);
-      gtk_widget_set_events (about_dialog, GDK_BUTTON_PRESS_MASK);
+      gtk_window_set_resizable (GTK_WINDOW (about_dialog), FALSE);
+      gtk_window_set_hide_on_close (GTK_WINDOW (about_dialog), TRUE);
+      g_signal_connect (about_dialog, "destroy",
+			G_CALLBACK (about_dialog_destroy), NULL);
+      g_signal_connect (about_dialog, "unmap",
+			G_CALLBACK (about_dialog_unmap), NULL);
 
-      if (!about_dialog_load_logo (about_dialog))
-	{
-	  gtk_widget_destroy (about_dialog);
-	  about_dialog = NULL;
-	  return;
-	}
+      /*  a click anywhere in the window closes it  */
+      click = gtk_gesture_click_new ();
+      gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (click), 0);
+      g_signal_connect (click, "pressed",
+			G_CALLBACK (about_dialog_button), NULL);
+      gtk_widget_add_controller (about_dialog, GTK_EVENT_CONTROLLER (click));
 
-      vbox = gtk_vbox_new (FALSE, 1);
-      gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-      gtk_container_add (GTK_CONTAINER (about_dialog), vbox);
-      gtk_widget_show (vbox);
+      vbox = gimp_vbox_new (FALSE, 1);
+      gimp_container_set_border_width (vbox, 1);
+      gtk_window_set_child (GTK_WINDOW (about_dialog), vbox);
 
       aboutframe = gtk_frame_new (NULL);
-      gtk_frame_set_shadow_type (GTK_FRAME (aboutframe), GTK_SHADOW_IN);
-      gtk_container_border_width (GTK_CONTAINER (aboutframe), 0);
-      gtk_box_pack_start (GTK_BOX (vbox), aboutframe, TRUE, TRUE, 0);
-      gtk_widget_show (aboutframe);
+      gimp_box_pack_start (vbox, aboutframe, TRUE, TRUE, 0);
 
       logo_area = gtk_drawing_area_new ();
-      gtk_signal_connect (GTK_OBJECT (logo_area), "expose_event",
-			  (GtkSignalFunc) about_dialog_logo_expose, NULL);
-      gtk_drawing_area_size (GTK_DRAWING_AREA (logo_area), logo_width, logo_height);
-      gtk_widget_set_events (logo_area, GDK_EXPOSURE_MASK);
-      gtk_container_add (GTK_CONTAINER (aboutframe), logo_area);
-      gtk_widget_show (logo_area);
+      gtk_drawing_area_set_content_width (GTK_DRAWING_AREA (logo_area), logo_width);
+      gtk_drawing_area_set_content_height (GTK_DRAWING_AREA (logo_area), logo_height);
+      gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (logo_area),
+				      about_dialog_logo_draw, NULL, NULL);
+      g_signal_connect (logo_area, "map",
+			G_CALLBACK (about_dialog_logo_map), NULL);
+      gtk_frame_set_child (GTK_FRAME (aboutframe), logo_area);
 
-      gtk_widget_realize (logo_area);
-      gdk_window_set_background (logo_area->window, &logo_area->style->black);
+      label = gtk_label_new (NULL);
+      gtk_label_set_markup (GTK_LABEL (label),
+			    "<span size=\"large\">Version " GIMP_VERSION
+			    " brought to you by</span>");
+      gimp_box_pack_start (vbox, label, FALSE, TRUE, 0);
 
-
-      style = gtk_style_new ();
-      gdk_font_unref (style->font);
-      style->font = gdk_font_load ("-Adobe-Helvetica-Medium-R-Normal--*-140-*-*-*-*-*-*");
-      gtk_widget_push_style (style);
-
-      label = gtk_label_new ("Version " GIMP_VERSION " brought to you by");
-      gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, TRUE, 0);
-      gtk_widget_show (label);
-
-      label = gtk_label_new ("Spencer Kimball and Peter Mattis");
-      gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, TRUE, 0);
-      gtk_widget_show (label);
-
-      gtk_widget_pop_style ();
-
-
-      alignment = gtk_alignment_new (0.5, 0.5, 0.0, 0.0);
-      gtk_box_pack_start (GTK_BOX (vbox), alignment, FALSE, TRUE, 0);
-      gtk_widget_show (alignment);
+      label = gtk_label_new (NULL);
+      gtk_label_set_markup (GTK_LABEL (label),
+			    "<span size=\"large\">Spencer Kimball and Peter Mattis</span>");
+      gimp_box_pack_start (vbox, label, FALSE, TRUE, 0);
 
       aboutframe = gtk_frame_new (NULL);
-      gtk_frame_set_shadow_type (GTK_FRAME (aboutframe), GTK_SHADOW_IN);
-      gtk_container_border_width (GTK_CONTAINER (aboutframe), 0);
-      gtk_container_add (GTK_CONTAINER (alignment), aboutframe);
-      gtk_widget_show (aboutframe);
-
-      max_width = 0;
-      for (i = 0; i < nscroll_texts; i++)
-	{
-	  scroll_text_widths[i] = gdk_string_width (aboutframe->style->font, scroll_text[i]);
-	  max_width = MAX (max_width, scroll_text_widths[i]);
-	}
+      gtk_widget_set_halign (aboutframe, GTK_ALIGN_CENTER);
+      gtk_widget_set_valign (aboutframe, GTK_ALIGN_CENTER);
+      gimp_box_pack_start (vbox, aboutframe, FALSE, TRUE, 0);
 
       scroll_area = gtk_drawing_area_new ();
-      gtk_drawing_area_size (GTK_DRAWING_AREA (scroll_area),
-			     max_width + 10,
-			     aboutframe->style->font->ascent +
-			     aboutframe->style->font->descent);
-      gtk_widget_set_events (scroll_area, GDK_BUTTON_PRESS_MASK);
-      gtk_container_add (GTK_CONTAINER (aboutframe), scroll_area);
-      gtk_widget_show (scroll_area);
+      gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (scroll_area),
+				      about_dialog_scroll_draw, NULL, NULL);
+      gtk_frame_set_child (GTK_FRAME (aboutframe), scroll_area);
+
+      max_width = 0;
+      max_height = 0;
+      layout = gtk_widget_create_pango_layout (scroll_area, NULL);
+      for (i = 0; i < nscroll_texts; i++)
+	{
+	  pango_layout_set_text (layout, scroll_text[i], -1);
+	  pango_layout_get_pixel_extents (layout, &ink, &logical);
+	  scroll_text_widths[i] = logical.width;
+	  max_width = MAX (max_width, logical.width);
+	  max_height = MAX (max_height, logical.height);
+	}
+      g_object_unref (layout);
+
+      gtk_drawing_area_set_content_width (GTK_DRAWING_AREA (scroll_area),
+					  max_width + 10);
+      gtk_drawing_area_set_content_height (GTK_DRAWING_AREA (scroll_area),
+					   max_height);
 
       label = gtk_label_new ("Please visit http://www.gimp.org/ for more info");
-      gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, TRUE, 0);
-      gtk_widget_show (label);
-
-      gtk_widget_realize (scroll_area);
-      gdk_window_set_background (scroll_area->window, &scroll_area->style->white);
+      gimp_box_pack_start (vbox, label, FALSE, TRUE, 0);
     }
 
-  if (!GTK_WIDGET_VISIBLE (about_dialog))
+  if (!gtk_widget_get_visible (about_dialog))
     {
-      gtk_widget_show (about_dialog);
-
       do_animation = TRUE;
       do_scrolling = FALSE;
       scroll_state = 0;
       frame = 0;
       offset = 0;
 
-      for (i = 0; i < nscroll_texts; i++) 
+      for (i = 0; i < nscroll_texts; i++)
 	{
 	  shuffle_array[i] = i;
 	}
 
-      for (i = 0; i < nscroll_texts; i++) 
+      for (i = 0; i < nscroll_texts; i++)
 	{
 	  int j, k;
 	  j = rand() % nscroll_texts;
 	  k = rand() % nscroll_texts;
-	  if (j != k) 
+	  if (j != k)
 	    {
 	      int t;
 	      t = shuffle_array[j];
@@ -263,80 +258,147 @@ about_dialog_create (int timeout)
 	      shuffle_array[k] = t;
 	    }
 	}
+
+      gtk_window_present (GTK_WINDOW (about_dialog));
     }
-  else 
+  else
     {
-      gdk_window_raise(about_dialog->window);
+      gtk_window_present (GTK_WINDOW (about_dialog));
     }
 }
 
+/*  Looks for a data file: in $GIMP_DATADIR, in the installed data
+ *  directory (found relative to the executable on Windows), then in the
+ *  source tree when running from the build directory.
+ */
+static gchar *
+about_dialog_find_data_file (const gchar *name)
+{
+  gchar *dir;
+  gchar *candidates[6];
+  gchar *path = NULL;
+  int n = 0;
+  int i;
+
+  candidates[n++] = g_build_filename (gimp_data_directory (), name, NULL);
+
+#ifdef G_OS_WIN32
+  dir = g_win32_get_package_installation_directory_of_module (NULL);
+#else
+  dir = g_strdup (GIMP42_PREFIX);
+#endif
+  candidates[n++] = g_build_filename (dir, GIMP42_DATADIR_REL, name, NULL);
+  g_free (dir);
+
+  candidates[n++] = g_build_filename (GIMP42_PREFIX, GIMP42_DATADIR_REL, name, NULL);
+  candidates[n++] = g_build_filename (GIMP_BUILD_SRCDIR, name, NULL);
+  candidates[n++] = g_build_filename (GIMP_BUILD_SRCDIR, "data", "images", name, NULL);
+
+  for (i = 0; i < n; i++)
+    {
+      if (!path && g_file_test (candidates[i], G_FILE_TEST_IS_REGULAR))
+	path = candidates[i];
+      else
+	g_free (candidates[i]);
+    }
+
+  return path;
+}
+
+/*  Reads the next number from a PPM header, skipping white space and
+ *  comments.
+ */
+static int
+about_dialog_ppm_number (FILE *fp,
+			 int  *value)
+{
+  int c;
+
+  do
+    {
+      c = getc (fp);
+      if (c == '#')
+	while (c != EOF && c != '\n')
+	  c = getc (fp);
+    }
+  while (c != EOF && isspace (c));
+
+  if (c == EOF || !isdigit (c))
+    return FALSE;
+
+  *value = 0;
+  while (c != EOF && isdigit (c))
+    {
+      *value = *value * 10 + (c - '0');
+      c = getc (fp);
+    }
+
+  /*  c is the single white space character that ends the number  */
+  return TRUE;
+}
 
 static int
-about_dialog_load_logo (GtkWidget *window)
+about_dialog_load_logo (void)
 {
-  GtkWidget *preview;
-  GdkGC *gc;
-  char buf[1024];
+  gchar *filename;
   unsigned char *pixelrow;
+  unsigned char *data;
   FILE *fp;
   int count;
+  int stride;
+  int maxval;
   int i, j, k;
 
-  if (logo_pixmap)
+  if (logo_surface)
     return TRUE;
 
-  sprintf (buf, "%s/gimp_logo.ppm", DATADIR);
+  filename = about_dialog_find_data_file ("gimp_logo.ppm");
+  if (!filename)
+    return 0;
 
-  fp = fopen (buf, "rb");
+  fp = fopen (filename, "rb");
+  g_free (filename);
   if (!fp)
     return 0;
 
-  fgets (buf, 1024, fp);
-  if (strcmp (buf, "P6\n") != 0)
+  if (getc (fp) != 'P' || getc (fp) != '6' ||
+      !about_dialog_ppm_number (fp, &logo_width) ||
+      !about_dialog_ppm_number (fp, &logo_height) ||
+      !about_dialog_ppm_number (fp, &maxval) ||
+      maxval != 255 || logo_width <= 0 || logo_height <= 0)
     {
       fclose (fp);
       return 0;
     }
 
-  fgets (buf, 1024, fp);
-  fgets (buf, 1024, fp);
-  sscanf (buf, "%d %d", &logo_width, &logo_height);
-
-  fgets (buf, 1024, fp);
-  if (strcmp (buf, "255\n") != 0)
-    {
-      fclose (fp);
-      return 0;
-    }
-
-  preview = gtk_preview_new (GTK_PREVIEW_COLOR);
-  gtk_preview_size (GTK_PREVIEW (preview), logo_width, logo_height);
+  logo_surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24,
+					     logo_width, logo_height);
+  cairo_surface_flush (logo_surface);
+  data = cairo_image_surface_get_data (logo_surface);
+  stride = cairo_image_surface_get_stride (logo_surface);
   pixelrow = g_new (guchar, logo_width * 3);
 
   for (i = 0; i < logo_height; i++)
     {
+      guint32 *dest = (guint32 *) (data + i * stride);
+
       count = fread (pixelrow, sizeof (unsigned char), logo_width * 3, fp);
       if (count != (logo_width * 3))
 	{
-	  gtk_widget_destroy (preview);
+	  cairo_surface_destroy (logo_surface);
+	  logo_surface = NULL;
 	  g_free (pixelrow);
 	  fclose (fp);
 	  return 0;
 	}
 
-      gtk_preview_draw_row (GTK_PREVIEW (preview), pixelrow, 0, i, logo_width);
+      for (j = 0; j < logo_width; j++)
+	dest[j] = (((guint32) pixelrow[j * 3 + 0] << 16) |
+		   ((guint32) pixelrow[j * 3 + 1] << 8) |
+		   ((guint32) pixelrow[j * 3 + 2]));
     }
+  cairo_surface_mark_dirty (logo_surface);
 
-  gtk_widget_realize (window);
-  logo_pixmap = gdk_pixmap_new (window->window, logo_width, logo_height, 
-				gtk_preview_get_visual ()->depth);
-  gc = gdk_gc_new (logo_pixmap);
-  gtk_preview_put (GTK_PREVIEW (preview),
-		   logo_pixmap, gc,
-		   0, 0, 0, 0, logo_width, logo_height);
-  gdk_gc_destroy (gc);
-
-  gtk_widget_unref (preview);
   g_free (pixelrow);
 
   fclose (fp);
@@ -356,92 +418,114 @@ about_dialog_load_logo (GtkWidget *window)
 }
 
 static void
-about_dialog_destroy ()
+about_dialog_destroy (void)
 {
   about_dialog = NULL;
   about_dialog_unmap ();
 }
 
 static void
-about_dialog_unmap ()
+about_dialog_unmap (void)
 {
   if (timer)
     {
-      gtk_timeout_remove (timer);
+      g_source_remove (timer);
       timer = 0;
     }
 }
 
-static int
-about_dialog_logo_expose (GtkWidget      *widget,
-			  GdkEventExpose *event)
+static void
+about_dialog_logo_map (GtkWidget *widget,
+		       gpointer   data)
 {
-  if (do_animation)
-    {
-      if (!timer)
-	{
-	  about_dialog_timer (widget);
-	  timer = gtk_timeout_add (75, about_dialog_timer, NULL);
-	}
-    }
-  else
-    {
-      /* If we draw beyond the boundaries of the pixmap, then X
-	 will generate an expose area for those areas, starting
-	 an infinite cycle. We now set allow_grow = FALSE, so
-	 the drawing area can never be bigger than the preview.
-         Otherwise, it would be necessary to intersect event->area
-         with the pixmap boundary rectangle. */
-
-      gdk_draw_pixmap (widget->window,
-		       widget->style->black_gc,
-		       logo_pixmap, 
-		       event->area.x, event->area.y,
-		       event->area.x, event->area.y,
-		       event->area.width, event->area.height);
-    }
-
-  return FALSE;
+  /*  the dissolve starts once the logo is on screen  */
+  if (do_animation && !timer)
+    timer = g_timeout_add (75, about_dialog_timer, NULL);
 }
 
-static int
-about_dialog_button (GtkWidget      *widget,
-		     GdkEventButton *event)
+static void
+about_dialog_logo_draw (GtkDrawingArea *area,
+			cairo_t        *cr,
+			int             width,
+			int             height,
+			gpointer        data)
+{
+  int i, j, k;
+
+  cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+  cairo_paint (cr);
+
+  if (!logo_surface)
+    return;
+
+  if (do_animation)
+    {
+      /*  the cells whose turn has come so far  */
+      for (i = 0, k = 0; i < dissolve_height; i++)
+	for (j = 0; j < dissolve_width; j++, k++)
+	  if (dissolve_map[k] < frame)
+	    cairo_rectangle (cr, j * ANIMATION_SIZE, i * ANIMATION_SIZE,
+			     ANIMATION_SIZE, ANIMATION_SIZE);
+      cairo_clip (cr);
+    }
+
+  cairo_set_source_surface (cr, logo_surface, 0, 0);
+  cairo_rectangle (cr, 0, 0, logo_width, logo_height);
+  cairo_fill (cr);
+}
+
+static void
+about_dialog_scroll_draw (GtkDrawingArea *area,
+			  cairo_t        *cr,
+			  int             width,
+			  int             height,
+			  gpointer        data)
+{
+  PangoLayout *layout;
+
+  cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
+  cairo_paint (cr);
+
+  if (!do_scrolling)
+    return;
+
+  layout = gtk_widget_create_pango_layout (GTK_WIDGET (area),
+					   scroll_text[cur_scroll_text]);
+  cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+  cairo_move_to (cr, width - draw_offset, 0);
+  pango_cairo_show_layout (cr, layout);
+  g_object_unref (layout);
+}
+
+static void
+about_dialog_button (GtkGestureClick *gesture,
+		     int              n_press,
+		     double           x,
+		     double           y,
+		     gpointer         data)
 {
   if (timer)
-    gtk_timeout_remove (timer);
+    g_source_remove (timer);
   timer = 0;
   frame = 0;
 
-  gtk_widget_hide (about_dialog);
-
-  return FALSE;
+  gtk_widget_set_visible (about_dialog, FALSE);
 }
 
-static int
+static gboolean
 about_dialog_timer (gpointer data)
 {
-  gint i, j, k;
-  gint return_val;
+  gboolean return_val;
+  int width;
 
-  return_val = TRUE;
+  return_val = G_SOURCE_CONTINUE;
 
   if (do_animation)
     {
-      if(logo_area->allocation.width != 1)
+      if (gtk_widget_get_mapped (logo_area))
 	{
-	  for (i = 0, k = 0; i < dissolve_height; i++)
-	    for (j = 0; j < dissolve_width; j++, k++)
-	      if (frame == dissolve_map[k])
-		{
-		  gdk_draw_pixmap (logo_area->window,
-				   logo_area->style->black_gc,
-				   logo_pixmap,
-				   j * ANIMATION_SIZE, i * ANIMATION_SIZE, j * ANIMATION_SIZE, i * ANIMATION_SIZE,
-				   ANIMATION_SIZE, ANIMATION_SIZE);
-		}
-
 	  frame += 1;
+	  gtk_widget_queue_draw (logo_area);
 
 	  if (frame == ANIMATION_STEPS)
 	    {
@@ -449,72 +533,53 @@ about_dialog_timer (gpointer data)
 	      do_scrolling = TRUE;
 	      frame = 0;
 
-	      timer = gtk_timeout_add (75, about_dialog_timer, NULL);
+	      timer = g_timeout_add (75, about_dialog_timer, NULL);
 
-	      return FALSE;
+	      return G_SOURCE_REMOVE;
 	    }
 	}
     }
 
   if (do_scrolling)
     {
-      if (!scroll_pixmap)
-	scroll_pixmap = gdk_pixmap_new (scroll_area->window,
-					scroll_area->allocation.width,
-					scroll_area->allocation.height,
-					-1);
-  
+      width = gtk_widget_get_width (scroll_area);
 
       switch (scroll_state)
 	{
 	case 1:
 	  scroll_state = 2;
-	  timer = gtk_timeout_add (700, about_dialog_timer, NULL);
-	  return_val = FALSE;
+	  timer = g_timeout_add (700, about_dialog_timer, NULL);
+	  return_val = G_SOURCE_REMOVE;
 	  break;
 	case 2:
 	  scroll_state = 3;
-	  timer = gtk_timeout_add (75, about_dialog_timer, NULL);
-	  return_val = FALSE;
+	  timer = g_timeout_add (75, about_dialog_timer, NULL);
+	  return_val = G_SOURCE_REMOVE;
 	  break;
 	}
 
-      if (offset > (scroll_text_widths[cur_scroll_text] + scroll_area->allocation.width))
+      if (offset > (scroll_text_widths[cur_scroll_text] + width))
 	{
 	  scroll_state = 0;
 	  cur_scroll_index += 1;
 	  if (cur_scroll_index == nscroll_texts)
 	    cur_scroll_index = 0;
-	  
+
 	  cur_scroll_text = shuffle_array[cur_scroll_index];
 
 	  offset = 0;
 	}
 
-      gdk_draw_rectangle (scroll_pixmap,
-			  scroll_area->style->white_gc,
-			  TRUE, 0, 0,
-			  scroll_area->allocation.width,
-			  scroll_area->allocation.height);
-      gdk_draw_string (scroll_pixmap,
-		       scroll_area->style->font,
-		       scroll_area->style->black_gc,
-		       scroll_area->allocation.width - offset,
-		       scroll_area->style->font->ascent,
-		       scroll_text[cur_scroll_text]);
-      gdk_draw_pixmap (scroll_area->window,
-		       scroll_area->style->black_gc,
-		       scroll_pixmap, 0, 0, 0, 0,
-		       scroll_area->allocation.width,
-		       scroll_area->allocation.height);
+      draw_offset = offset;
+      gtk_widget_queue_draw (scroll_area);
 
       offset += 15;
       if (scroll_state == 0)
 	{
-	  if (offset > ((scroll_area->allocation.width + scroll_text_widths[cur_scroll_text]) / 2))
+	  if (offset > ((width + scroll_text_widths[cur_scroll_text]) / 2))
 	    {
 	      scroll_state = 1;
-	      offset = (scroll_area->allocation.width + scroll_text_widths[cur_scroll_text]) / 2;
+	      offset = (width + scroll_text_widths[cur_scroll_text]) / 2;
 	    }
 	}
     }

@@ -28,10 +28,12 @@
  
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <libgimp/gimp.h>
 #include <gtk/gtk.h>
+#include <libgimp/gimpui.h>
 #include <plug-ins/megawidget/megawidget.h>
 
 #ifndef M_PI
@@ -235,46 +237,31 @@ pluginCoreIA(struct piArgs *argp, gint32 drawable) {
     { "Blacken", 0 },
     { NULL, 0 },
   };
-  gchar **argv;
-  gint argc;
-
-  /* Set args */
-  argc = 1;
-  argv = g_new(gchar *, 1);
-  argv[0] = g_strdup("waves");
-  gtk_init(&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
-  
   dlg = mw_app_new("plug_in_waves", "Waves", &runp);
 
-  hbox = gtk_hbox_new(FALSE, 5);
-  gtk_container_border_width(GTK_CONTAINER(hbox), 5);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), hbox, TRUE, TRUE, 0);
-  gtk_widget_show(hbox);
+  hbox = gimp_hbox_new(FALSE, 5);
+  gimp_container_set_border_width(hbox, 5);
+  gimp_box_pack_start(gimp_dialog_get_vbox(dlg), hbox, TRUE, TRUE, 0);
 
-  vbox = gtk_vbox_new(FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(hbox), vbox, FALSE, FALSE, 0);
-  gtk_widget_show(vbox);
+  vbox = gimp_vbox_new(FALSE, 0);
+  gimp_box_pack_start(hbox, vbox, FALSE, FALSE, 0);
 
   preview = mw_preview_new(vbox, mwp, &waves_do_preview);
-  gtk_object_set_data(GTK_OBJECT(preview), "piArgs", argp);
-  gtk_object_set_data(GTK_OBJECT(preview), "mwRadioGroup", mode);
+  g_object_set_data(G_OBJECT(preview), "piArgs", argp);
+  g_object_set_data(G_OBJECT(preview), "mwRadioGroup", mode);
   waves_do_preview(preview);
 
   mw_toggle_button_new(vbox, NULL, "Reflective", &argp->reflective);
 
-  vbox = gtk_vbox_new(FALSE, 5);
-  gtk_box_pack_start(GTK_BOX(hbox), vbox, TRUE, TRUE, 0);
-  gtk_widget_show(vbox);
+  vbox = gimp_vbox_new(FALSE, 5);
+  gimp_box_pack_start(hbox, vbox, TRUE, TRUE, 0);
 
   frame = gtk_frame_new("Parameters");
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start(GTK_BOX(vbox), frame, FALSE, FALSE, 0);
-  gtk_widget_show(frame);
+  gimp_box_pack_start(vbox, frame, FALSE, FALSE, 0);
 
-  table = gtk_table_new(4, 2, FALSE);
-  gtk_container_border_width(GTK_CONTAINER (table), 5);
-  gtk_container_add(GTK_CONTAINER(frame), table);
+  table = gimp_table_new(4, 2, FALSE);
+  gimp_container_set_border_width(table, 5);
+  gtk_frame_set_child(GTK_FRAME(frame), table);
 
   mw_fscale_entry_new(table, "Amplitude", 0.0, 101.0, 1.0, 5.0, 0.0,
                       0, 1, 1, 2, &argp->amplitude);
@@ -282,14 +269,11 @@ pluginCoreIA(struct piArgs *argp, gint32 drawable) {
                       0, 1, 2, 3, &argp->phase);
   mw_fscale_entry_new(table, "Wavelength", 0.1, 50.0, 1.0, 5.0, 0.0,
                       0, 1, 3, 4, &argp->wavelength);
-  gtk_widget_show(table);
 
   mw_radio_group_new(vbox, "Mode", mode);
 
-  gtk_widget_show(table);
-  gtk_widget_show(dlg);
-  gtk_main();
-  gdk_flush();
+  gtk_window_present(GTK_WINDOW(dlg));
+  gimp_main_loop_run();
 
   argp->type = mw_radio_result(mode);
 
@@ -322,8 +306,8 @@ waves_do_preview(GtkWidget *w) {
     theWidget=w;
   }
 
-  argp = gtk_object_get_data(GTK_OBJECT(theWidget), "piArgs");
-  rgp = gtk_object_get_data(GTK_OBJECT(theWidget), "mwRadioGroup");
+  argp = g_object_get_data(G_OBJECT(theWidget), "piArgs");
+  rgp = g_object_get_data(G_OBJECT(theWidget), "mwRadioGroup");
   argp->type = mw_radio_result(rgp);
   dst = (guchar*)malloc(mwp->width*mwp->height*mwp->bpp);
 
@@ -332,13 +316,11 @@ waves_do_preview(GtkWidget *w) {
        argp->phase, argp->type==0, argp->reflective, 0);
 
   for(y=0;y<mwp->height; y++){
-    gtk_preview_draw_row(GTK_PREVIEW(theWidget),
-                         dst+(y*mwp->width*mwp->bpp), 0, y,
-                         mwp->width);
+    gimp_preview_draw_row(GIMP_PREVIEW(theWidget),
+                          dst+(y*mwp->width*mwp->bpp), 0, y,
+                          mwp->width);
   }
 
-  gtk_widget_draw(theWidget, NULL);
-  gdk_flush();
   free(dst);
 }
 

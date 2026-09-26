@@ -53,7 +53,8 @@ static void
 flip_type_callback (GtkWidget *w,
 		    gpointer   client_data)
 {
-  flip_change_type ((long) client_data);
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
+    flip_change_type (GPOINTER_TO_INT (client_data));
 }
 
 static FlipOptions *
@@ -64,7 +65,7 @@ create_flip_options (void)
   GtkWidget *label;
   GtkWidget *radio_box;
   GtkWidget *radio_button;
-  GSList *group = NULL;
+  GtkWidget *group = NULL;
   int i;
   char *button_names[2] =
   {
@@ -77,28 +78,26 @@ create_flip_options (void)
   options->type = FLIP_HORZ;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
+  vbox = gimp_vbox_new (FALSE, 1);
 
   /*  the main label  */
   label = gtk_label_new ("Flip Tool Options");
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (vbox), label);
 
-  radio_box = gtk_vbox_new (FALSE, 2);
-  gtk_box_pack_start (GTK_BOX (vbox), radio_box, FALSE, FALSE, 0);
+  radio_box = gimp_vbox_new (FALSE, 2);
+  gtk_box_append (GTK_BOX (vbox), radio_box);
 
   /*  the radio buttons  */
   for (i = 0; i < 2; i++)
     {
-      radio_button = gtk_radio_button_new_with_label (group, button_names[i]);
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (radio_button));
-      gtk_box_pack_start (GTK_BOX (radio_box), radio_button, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (radio_button), "toggled",
-			  (GtkSignalFunc) flip_type_callback,
-			  (gpointer) ((long) (FLIP_HORZ + i)));
-      gtk_widget_show (radio_button);
+      radio_button = gimp_radio_button_new (group, button_names[i]);
+      if (group == NULL)
+	group = radio_button;
+      gtk_box_append (GTK_BOX (radio_box), radio_button);
+      g_signal_connect (radio_button, "toggled",
+			G_CALLBACK (flip_type_callback),
+			GINT_TO_POINTER (FLIP_HORZ + i));
     }
-  gtk_widget_show (radio_box);
 
   /*  Register this selection options widget with the main tools options dialog  */
   tools_register_options (FLIP_HORZ, vbox);

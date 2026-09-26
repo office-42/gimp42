@@ -31,6 +31,7 @@
 #include "gimage_mask.h"
 #include "gimprc.h"
 #include "gximage.h"
+#include "gimpruler.h"
 #include "image_render.h"
 #include "info_window.h"
 #include "interface.h"
@@ -40,6 +41,7 @@
 #include "scale.h"
 #include "scroll.h"
 #include "tools.h"
+#include "draw_core.h"
 #include "undo.h"
 
 #include "layer_pvt.h"			/* ick. */
@@ -50,7 +52,12 @@
 /* variable declarations */
 GSList *               display_list = NULL;
 static int             display_num  = 1;
-static GdkCursorType   default_gdisplay_cursor = GDK_TOP_LEFT_ARROW;
+static GimpCursorType  default_gdisplay_cursor = GIMP_CURSOR_TOP_LEFT_ARROW;
+
+/*  The display menu commands and accelerators act on: the one whose
+ *  window was last active, or whose canvas was last clicked.
+ */
+static GDisplay       *active_display = NULL;
 
 #define ROUND(x) ((int) (x + 0.5))
 
@@ -76,7 +83,7 @@ static void       gdisplay_add_update_area  (GDisplay *, int, int, int, int);
 static void       gdisplay_add_display_area (GDisplay *, int, int, int, int);
 static void       gdisplay_paint_area       (GDisplay *, int, int, int, int);
 static void       gdisplay_display_area     (GDisplay *, int, int, int, int);
-static guint      gdisplay_hash             (GDisplay *);
+static guint      gdisplay_hash             (gconstpointer);
 
 static GHashTable *display_ht = NULL;
 
@@ -109,7 +116,7 @@ gdisplay_new (GImage       *gimage,
   gdisp->scale = scale;
   gdisp->gimage = gimage;
   gdisp->window_info_dialog = NULL;
-  gdisp->depth = g_visual->depth;
+  gdisp->depth = 24;
   gdisp->select = NULL;
   gdisp->ID = display_num++;
   gdisp->instance = instance;
@@ -120,6 +127,8 @@ gdisplay_new (GImage       *gimage,
   gdisp->current_cursor = -1;
   gdisp->draw_guides = TRUE;
   gdisp->snap_to_guides = TRUE;
+  gdisp->active_guide = NULL;
+  gdisp->backing = NULL;
 
   /*  add the new display to the list so that it isn't lost  */
   display_list = g_slist_append (display_list, (void *) gdisp);
@@ -133,7 +142,7 @@ gdisplay_new (GImage       *gimage,
 
   /*  set the user data  */
   if (!display_ht)
-    display_ht = g_hash_table_new ((GHashFunc) gdisplay_hash, NULL);
+    display_ht = g_hash_table_new (gdisplay_hash, NULL);
 
   g_hash_table_insert (display_ht, gdisp->shell, gdisp);
   g_hash_table_insert (display_ht, gdisp->canvas, gdisp);
@@ -203,8 +212,11 @@ gdisplay_delete (GDisplay *gdisp)
   /*  free the selection structure  */
   selection_free (gdisp->select);
 
-  if (gdisp->scroll_gc)
-    gdk_gc_destroy (gdisp->scroll_gc);
+  if (gdisp->backing)
+    cairo_surface_destroy (gdisp->backing);
+
+  if (active_display == gdisp)
+    active_display = NULL;
 
   /*  free the area lists  */
   gdisplay_free_area_list (gdisp->update_areas);
@@ -220,8 +232,6 @@ gdisplay_delete (GDisplay *gdisp)
   /*  set popup_shell to NULL if appropriate */
   if (popup_shell == gdisp->shell)
     popup_shell= NULL;
-
-  gtk_widget_unref (gdisp->shell);
 
   g_free (gdisp);
 }
@@ -357,20 +367,9 @@ gdisplay_flush (GDisplay *gdisp)
 void
 gdisplay_draw_guides (GDisplay *gdisp)
 {
-  GList *tmp_list;
-  Guide *guide;
-
-  if (gdisp->draw_guides)
-    {
-      tmp_list = gdisp->gimage->guides;
-      while (tmp_list)
-	{
-	  guide = tmp_list->data;
-	  tmp_list = tmp_list->next;
-
-	  gdisplay_draw_guide (gdisp, guide, FALSE);
-	}
-    }
+  /*  The guides are drawn with every frame; see gdisplay_canvas_draw.  */
+  if (gdisp->canvas)
+    gtk_widget_queue_draw (gdisp->canvas);
 }
 
 void
@@ -378,11 +377,22 @@ gdisplay_draw_guide (GDisplay *gdisp,
 		     Guide    *guide,
 		     int       active)
 {
-  static GdkGC *normal_hgc = NULL;
-  static GdkGC *active_hgc = NULL;
-  static GdkGC *normal_vgc = NULL;
-  static GdkGC *active_vgc = NULL;
-  static int initialize = TRUE;
+  if (active)
+    gdisp->active_guide = guide;
+  else if (gdisp->active_guide == guide)
+    gdisp->active_guide = NULL;
+
+  if (gdisp->canvas)
+    gtk_widget_queue_draw (gdisp->canvas);
+}
+
+static void
+gdisplay_paint_guide (GDisplay *gdisp,
+		      cairo_t  *cr,
+		      Guide    *guide,
+		      int       active)
+{
+  static const double dashes[2] = { 4.0, 4.0 };
   int x1, x2;
   int y1, y2;
   int w, h;
@@ -391,61 +401,10 @@ gdisplay_draw_guide (GDisplay *gdisp,
   if (guide->position < 0)
     return;
 
-  if (initialize)
-    {
-      GdkGCValues values;
-      char stipple[8] =
-      {
-	0xF0,    /*  ####----  */
-	0xE1,    /*  ###----#  */
-	0xC3,    /*  ##----##  */
-	0x87,    /*  #----###  */
-	0x0F,    /*  ----####  */
-	0x1E,    /*  ---####-  */
-	0x3C,    /*  --####--  */
-	0x78,    /*  -####---  */
-      };
-
-      initialize = FALSE;
-
-      values.foreground.pixel = gdisplay_black_pixel (gdisp);
-      values.background.pixel = g_normal_guide_pixel;
-      values.fill = GDK_OPAQUE_STIPPLED;
-      values.stipple = gdk_bitmap_create_from_data (gdisp->canvas->window, (char*) stipple, 8, 1);
-      normal_hgc = gdk_gc_new_with_values (gdisp->canvas->window, &values,
-					  GDK_GC_FOREGROUND |
-					  GDK_GC_BACKGROUND |
-					  GDK_GC_FILL |
-					  GDK_GC_STIPPLE);
-
-      values.background.pixel = g_active_guide_pixel;
-      active_hgc = gdk_gc_new_with_values (gdisp->canvas->window, &values,
-					   GDK_GC_FOREGROUND |
-					   GDK_GC_BACKGROUND |
-					   GDK_GC_FILL |
-					   GDK_GC_STIPPLE);
-
-      values.foreground.pixel = gdisplay_black_pixel (gdisp);
-      values.background.pixel = g_normal_guide_pixel;
-      values.fill = GDK_OPAQUE_STIPPLED;
-      values.stipple = gdk_bitmap_create_from_data (gdisp->canvas->window, (char*) stipple, 1, 8);
-      normal_vgc = gdk_gc_new_with_values (gdisp->canvas->window, &values,
-					  GDK_GC_FOREGROUND |
-					  GDK_GC_BACKGROUND |
-					  GDK_GC_FILL |
-					  GDK_GC_STIPPLE);
-
-      values.background.pixel = g_active_guide_pixel;
-      active_vgc = gdk_gc_new_with_values (gdisp->canvas->window, &values,
-					   GDK_GC_FOREGROUND |
-					   GDK_GC_BACKGROUND |
-					   GDK_GC_FILL |
-					   GDK_GC_STIPPLE);
-    }
-
   gdisplay_transform_coords (gdisp, 0, 0, &x1, &y1, FALSE);
   gdisplay_transform_coords (gdisp, gdisp->gimage->width, gdisp->gimage->height, &x2, &y2, FALSE);
-  gdk_window_get_size (gdisp->canvas->window, &w, &h);
+  w = gdisp->disp_width;
+  h = gdisp->disp_height;
 
   if (x1 < 0) x1 = 0;
   if (y1 < 0) y1 = 0;
@@ -455,21 +414,64 @@ gdisplay_draw_guide (GDisplay *gdisp,
   if (guide->orientation == HORIZONTAL_GUIDE)
     {
       gdisplay_transform_coords (gdisp, 0, guide->position, &x, &y, FALSE);
-
-      if (active)
-	gdk_draw_line (gdisp->canvas->window, active_hgc, x1, y, x2, y);
-      else
-	gdk_draw_line (gdisp->canvas->window, normal_hgc, x1, y, x2, y);
+      cairo_move_to (cr, x1, y + 0.5);
+      cairo_line_to (cr, x2, y + 0.5);
     }
   else if (guide->orientation == VERTICAL_GUIDE)
     {
       gdisplay_transform_coords (gdisp, guide->position, 0, &x, &y, FALSE);
-
-      if (active)
-	gdk_draw_line (gdisp->canvas->window, active_vgc, x, y1, x, y2);
-      else
-	gdk_draw_line (gdisp->canvas->window, normal_vgc, x, y1, x, y2);
+      cairo_move_to (cr, x + 0.5, y1);
+      cairo_line_to (cr, x + 0.5, y2);
     }
+  else
+    return;
+
+  /*  black dashes over the guide colour: blue, or red when active  */
+  if (active)
+    cairo_set_source_rgb (cr, 1.0, 0.0, 0.0);
+  else
+    cairo_set_source_rgb (cr, 0.0, 0.5, 1.0);
+  cairo_set_dash (cr, NULL, 0, 0.0);
+  cairo_stroke_preserve (cr);
+  cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+  cairo_set_dash (cr, dashes, 2, 0.0);
+  cairo_stroke (cr);
+}
+
+void
+gdisplay_canvas_draw (GDisplay *gdisp,
+		      cairo_t  *cr,
+		      int       width,
+		      int       height)
+{
+  GList *list;
+
+  if (gdisp->backing)
+    {
+      cairo_set_source_surface (cr, gdisp->backing, 0, 0);
+      cairo_paint (cr);
+    }
+  else
+    {
+      cairo_set_source_rgb (cr, 0.5, 0.5, 0.5);
+      cairo_paint (cr);
+    }
+
+  cairo_save (cr);
+  cairo_set_line_width (cr, 1.0);
+  cairo_set_antialias (cr, CAIRO_ANTIALIAS_NONE);
+
+  if (gdisp->draw_guides)
+    for (list = gdisp->gimage->guides; list; list = list->next)
+      gdisplay_paint_guide (gdisp, cr, list->data,
+			    list->data == gdisp->active_guide);
+
+  cairo_restore (cr);
+
+  if (gdisp->select)
+    selection_draw (gdisp->select, cr);
+
+  draw_core_draw_canvas (gdisp->canvas, cr);
 }
 
 Guide*
@@ -704,6 +706,44 @@ gdisplay_paint_area (GDisplay *gdisp,
 }
 
 
+/*  The backing surface matches the canvas; it is recreated (and the
+ *  whole canvas redrawn into it) when the canvas changes size.
+ */
+static void
+gdisplay_ensure_backing (GDisplay *gdisp)
+{
+  if (gdisp->backing &&
+      cairo_image_surface_get_width (gdisp->backing) == MAX (gdisp->disp_width, 1) &&
+      cairo_image_surface_get_height (gdisp->backing) == MAX (gdisp->disp_height, 1))
+    return;
+
+  if (gdisp->backing)
+    cairo_surface_destroy (gdisp->backing);
+
+  gdisp->backing = cairo_image_surface_create (CAIRO_FORMAT_RGB24,
+					       MAX (gdisp->disp_width, 1),
+					       MAX (gdisp->disp_height, 1));
+}
+
+static void
+gdisplay_clear_area (GDisplay *gdisp,
+		     int       x,
+		     int       y,
+		     int       w,
+		     int       h)
+{
+  cairo_t *cr;
+
+  if (w <= 0 || h <= 0)
+    return;
+
+  cr = cairo_create (gdisp->backing);
+  cairo_set_source_rgb (cr, 0.5, 0.5, 0.5);
+  cairo_rectangle (cr, x, y, w, h);
+  cairo_fill (cr);
+  cairo_destroy (cr);
+}
+
 static void
 gdisplay_display_area (GDisplay *gdisp,
 		       int       x,
@@ -717,6 +757,8 @@ gdisplay_display_area (GDisplay *gdisp,
   int dx, dy;
   int i, j;
 
+  gdisplay_ensure_backing (gdisp);
+
   sx = SCALE (gdisp, gdisp->gimage->width);
   sy = SCALE (gdisp, gdisp->gimage->height);
 
@@ -728,34 +770,30 @@ gdisplay_display_area (GDisplay *gdisp,
 
   if (x1 < gdisp->disp_xoffset)
     {
-      gdk_window_clear_area (gdisp->canvas->window,
-			     x, y, gdisp->disp_xoffset - x, h);
+      gdisplay_clear_area (gdisp, x, y, gdisp->disp_xoffset - x, h);
 
       x1 = gdisp->disp_xoffset;
     }
 
   if (y1 < gdisp->disp_yoffset)
     {
-      gdk_window_clear_area (gdisp->canvas->window,
-			     x, y, w, gdisp->disp_yoffset - y);
+      gdisplay_clear_area (gdisp, x, y, w, gdisp->disp_yoffset - y);
 
       y1 = gdisp->disp_yoffset;
     }
 
   if (x2 > (gdisp->disp_xoffset + sx))
     {
-      gdk_window_clear_area (gdisp->canvas->window,
-			     gdisp->disp_xoffset + sx, y,
-			     x2 - (gdisp->disp_xoffset + sx), h);
+      gdisplay_clear_area (gdisp, gdisp->disp_xoffset + sx, y,
+			   x2 - (gdisp->disp_xoffset + sx), h);
 
       x2 = gdisp->disp_xoffset + sx;
     }
 
   if (y2 > (gdisp->disp_yoffset + sy))
     {
-      gdk_window_clear_area (gdisp->canvas->window,
-			     x, gdisp->disp_yoffset + sy,
-			     w, y2 - (gdisp->disp_yoffset + sy));
+      gdisplay_clear_area (gdisp, x, gdisp->disp_yoffset + sy,
+			   w, y2 - (gdisp->disp_yoffset + sy));
 
       y2 = gdisp->disp_yoffset + sy;
     }
@@ -767,9 +805,10 @@ gdisplay_display_area (GDisplay *gdisp,
 	dx = (x2 - j < GXIMAGE_WIDTH) ? x2 - j : GXIMAGE_WIDTH;
 	dy = (y2 - i < GXIMAGE_HEIGHT) ? y2 - i : GXIMAGE_HEIGHT;
 	render_image (gdisp, j - gdisp->disp_xoffset, i - gdisp->disp_yoffset, dx, dy);
-	gximage_put (gdisp->canvas->window,
-		     j, i, dx, dy, gdisp->offset_x, gdisp->offset_y);
+	gximage_put (gdisp->backing, j, i, dx, dy);
       }
+
+  gtk_widget_queue_draw (gdisp->canvas);
 }
 
 
@@ -962,12 +1001,12 @@ gdisplay_untransform_coords_f (GDisplay *gdisp,
 /*  install and remove tool cursor from gdisplay...  */
 void
 gdisplay_install_tool_cursor (GDisplay      *gdisp,
-			      GdkCursorType  cursor_type)
+			      GimpCursorType  cursor_type)
 {
   if (gdisp->current_cursor != cursor_type)
     {
       gdisp->current_cursor = cursor_type;
-      change_win_cursor (gdisp->canvas->window, cursor_type);
+      change_win_cursor (gdisp->canvas, cursor_type);
     }
 }
 
@@ -975,7 +1014,7 @@ gdisplay_install_tool_cursor (GDisplay      *gdisp,
 void
 gdisplay_remove_tool_cursor (GDisplay *gdisp)
 {
-  unset_win_cursor (gdisp->canvas->window);
+  unset_win_cursor (gdisp->canvas);
 }
 
 
@@ -1056,7 +1095,7 @@ gdisplay_set_menu_sensitivity (GDisplay *gdisp)
   /* save selection to channel */
   menus_set_sensitive ("<Image>/Select/Save To Channel", !fs);
 
-  menus_set_state ("<Image>/View/Toggle Rulers", GTK_WIDGET_VISIBLE (gdisp->origin) ? 1 : 0);
+  menus_set_state ("<Image>/View/Toggle Rulers", gtk_widget_get_visible (gdisp->hrule) ? 1 : 0);
   menus_set_state ("<Image>/View/Toggle Guides", gdisp->draw_guides);
   menus_set_state ("<Image>/View/Snap To Guides", gdisp->snap_to_guides);
 
@@ -1111,34 +1150,24 @@ gdisplay_expose_full (GDisplay *gdisp)
 GDisplay *
 gdisplay_active ()
 {
-  GtkWidget *event_widget;
-  GtkWidget *toplevel_widget;
-  GdkEvent *event;
-  GDisplay *gdisp = NULL;
+  GSList *list;
 
-  /*  If the popup shell is valid, then get the gdisplay associated with that shell  */
-  event = gtk_get_current_event ();
-  event_widget = gtk_get_event_widget (event);
-  gdk_event_free (event);
-
-  if (event_widget == NULL)
-    return NULL;
-
-  toplevel_widget = gtk_widget_get_toplevel (event_widget);
-
-  if (display_ht)
-    gdisp = g_hash_table_lookup (display_ht, toplevel_widget);
-
-  if (gdisp)
-    return gdisp;
-
-  if (popup_shell)
+  /*  A display whose window has the focus comes first.  */
+  for (list = display_list; list; list = g_slist_next (list))
     {
-      gdisp = gtk_object_get_user_data (GTK_OBJECT (popup_shell));
-      return gdisp;
+      GDisplay *gdisp = list->data;
+
+      if (gdisp->shell && gtk_window_is_active (GTK_WINDOW (gdisp->shell)))
+	return gdisp;
     }
 
-  return NULL;
+  return active_display;
+}
+
+void
+gdisplay_set_active (GDisplay *gdisp)
+{
+  active_display = gdisp;
 }
 
 
@@ -1178,7 +1207,7 @@ gdisplays_update_title (int ID)
 	{
 	  /* format the title */
 	  gdisplay_format_title (gdisp->gimage, title);
-	  gdk_window_set_title (gdisp->shell->window, title);
+	  gtk_window_set_title (GTK_WINDOW (gdisp->shell), title);
 	}
 
       list = g_slist_next (list);
@@ -1414,7 +1443,7 @@ gdisplays_delete ()
     {
       gdisp = (GDisplay *) list->data;
       list = g_slist_next (list);
-      gtk_widget_destroy (gdisp->shell);
+      gtk_window_destroy (GTK_WINDOW (gdisp->shell));
     }
 
   /*  free up linked list data  */
@@ -1454,7 +1483,7 @@ gdisplays_flush ()
 }
 
 static guint
-gdisplay_hash (GDisplay *display)
+gdisplay_hash (gconstpointer display)
 {
-  return (gulong) display;
+  return g_direct_hash (display);
 }

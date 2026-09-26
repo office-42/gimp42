@@ -59,7 +59,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
 #include "libgimp/gimpui.h"
 
@@ -91,7 +91,7 @@ typedef struct {
 typedef void (*EntscaleIntCallbackFunc) (gint value, gpointer data);
 
 typedef struct {
-  GtkObject     *adjustment;
+  GtkAdjustment     *adjustment;
   GtkWidget     *entry;
   gint          constraint;
   EntscaleIntCallbackFunc	callback;
@@ -284,62 +284,42 @@ pixelize_dialog ()
   GtkWidget *frame;
   GtkWidget *table;
   GtkWidget *button;
-  gchar **argv;
-  gint	argc;
-
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("pixelize");
-
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
 
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Pixelize");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) pixelize_close_callback,
+  gtk_init ();
+
+
+  dlg = gimp_dialog_new ("Pixelize");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (pixelize_close_callback),
 		      NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-		      (GtkSignalFunc) pixelize_ok_callback,
+  button = gimp_dialog_add_button (dlg, "OK", NULL, NULL, TRUE);
+  g_signal_connect (button, "clicked",
+		      G_CALLBACK (pixelize_ok_callback),
 		      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			     G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Parameter Settings");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
 
-  table = gtk_table_new (3, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  table = gimp_table_new (3, 2, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (frame, table);
 
   entscale_int_new (table, 0, 0, "Pixel Width:", &pvals.pixelwidth,
 		    1, 64, FALSE,
 		    NULL, NULL);
 
-  gtk_widget_show (frame);
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return pint.run;
 }
@@ -350,7 +330,7 @@ static void
 pixelize_close_callback (GtkWidget *widget,
 			 gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -358,7 +338,7 @@ pixelize_ok_callback (GtkWidget *widget,
 		      gpointer	 data)
 {
   pint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 /*
@@ -654,14 +634,14 @@ entscale_int_new ( GtkWidget *table, gint x, gint y,
   GtkWidget *label;
   GtkWidget *entry;
   GtkWidget *scale;
-  GtkObject *adjustment;
+  GtkAdjustment *adjustment;
   gchar    buffer[256];
   gint	    constraint_val;
 
   userdata = g_new ( EntscaleIntData, 1 );
 
   label = gtk_label_new (caption);
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
 
   /*
     If the first arg of gtk_adjustment_new() isn't between min and
@@ -678,47 +658,43 @@ entscale_int_new ( GtkWidget *table, gint x, gint y,
 
   userdata->adjustment = adjustment = 
     gtk_adjustment_new ( constraint_val, min, max, 1.0, 1.0, 0.0);
-  scale = gtk_hscale_new ( GTK_ADJUSTMENT(adjustment) );
-  gtk_widget_set_usize (scale, ENTSCALE_INT_SCALE_WIDTH, 0);
+  scale = gtk_scale_new (GTK_ORIENTATION_HORIZONTAL, adjustment);
+  gtk_widget_set_size_request (scale, ENTSCALE_INT_SCALE_WIDTH, -1);
   gtk_scale_set_draw_value (GTK_SCALE (scale), FALSE);
 
   userdata->entry = entry = gtk_entry_new ();
-  gtk_widget_set_usize (entry, ENTSCALE_INT_ENTRY_WIDTH, 0);
+  gtk_widget_set_size_request (entry, ENTSCALE_INT_ENTRY_WIDTH, -1);
   sprintf( buffer, "%d", *intvar );
-  gtk_entry_set_text( GTK_ENTRY (entry), buffer );
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer );
 
   userdata->callback = callback;
   userdata->call_data = call_data;
 
   /* userdata is done */
-  gtk_object_set_user_data (GTK_OBJECT(adjustment), userdata);
-  gtk_object_set_user_data (GTK_OBJECT(entry), userdata);
+  g_object_set_data (G_OBJECT (adjustment), "user_data", userdata);
+  g_object_set_data (G_OBJECT (entry), "user_data", userdata);
 
   /* now ready for signals */
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) entscale_int_entry_update,
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (entscale_int_entry_update),
 		      intvar);
-  gtk_signal_connect (GTK_OBJECT (adjustment), "value_changed",
-		      (GtkSignalFunc) entscale_int_scale_update,
+  g_signal_connect (adjustment, "value-changed",
+		      G_CALLBACK (entscale_int_scale_update),
 		      intvar);
-  gtk_signal_connect (GTK_OBJECT (entry), "destroy",
-		      (GtkSignalFunc) entscale_int_destroy_callback,
+  g_signal_connect (entry, "destroy",
+		      G_CALLBACK (entscale_int_destroy_callback),
 		      userdata );
 
   /* start packing */
-  hbox = gtk_hbox_new (FALSE, 5);
-  gtk_box_pack_start (GTK_BOX (hbox), scale, TRUE, TRUE, 0);
-  gtk_box_pack_start (GTK_BOX (hbox), entry, FALSE, TRUE, 0);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_box_pack_start (hbox, scale, TRUE, TRUE, 0);
+  gimp_box_pack_start (hbox, entry, FALSE, TRUE, 0);
 
-  gtk_table_attach (GTK_TABLE (table), label, x, x+1, y, y+1,
-		    GTK_FILL, GTK_FILL, 0, 0);
-  gtk_table_attach (GTK_TABLE (table), hbox, x+1, x+2, y, y+1,
-		    GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0);
+  gimp_table_attach (table, label, x, x+1, y, y+1,
+		    GIMP_FILL, GIMP_FILL, 0, 0);
+  gimp_table_attach (table, hbox, x+1, x+2, y, y+1,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0);
 
-  gtk_widget_show (label);
-  gtk_widget_show (entry);
-  gtk_widget_show (scale);
-  gtk_widget_show (hbox);
 }  
 
 
@@ -738,24 +714,24 @@ entscale_int_scale_update (GtkAdjustment *adjustment,
 			   gpointer      data)
 {
   EntscaleIntData *userdata;
-  GtkEntry	*entry;
+  GtkWidget	*entry;
   gchar		buffer[256];
   gint		*intvar = data;
   gint		new_val;
 
-  userdata = gtk_object_get_user_data (GTK_OBJECT (adjustment));
+  userdata = g_object_get_data (G_OBJECT (adjustment), "user_data");
 
-  new_val = (gint) adjustment->value;
+  new_val = (gint) gtk_adjustment_get_value (adjustment);
 
   *intvar = new_val;
 
-  entry = GTK_ENTRY( userdata->entry );
+  entry = userdata->entry;
   sprintf (buffer, "%d", (int) new_val );
   
   /* avoid infinite loop (scale, entry, scale, entry ...) */
-  gtk_signal_handler_block_by_data ( GTK_OBJECT(entry), data );
-  gtk_entry_set_text ( entry, buffer);
-  gtk_signal_handler_unblock_by_data ( GTK_OBJECT(entry), data );
+  g_signal_handlers_block_matched (entry, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, data );
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_handlers_unblock_matched (entry, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, data );
 
   if (userdata->callback)
     (*userdata->callback) (*intvar, userdata->call_data);
@@ -770,25 +746,24 @@ entscale_int_entry_update (GtkWidget *widget,
   int		new_val, constraint_val;
   int		*intvar = data;
 
-  userdata = gtk_object_get_user_data (GTK_OBJECT (widget));
+  userdata = g_object_get_data (G_OBJECT (widget), "user_data");
   adjustment = GTK_ADJUSTMENT( userdata->adjustment );
 
-  new_val = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+  new_val = atoi (gtk_editable_get_text (GTK_EDITABLE (widget)));
   constraint_val = new_val;
-  if ( constraint_val < adjustment->lower )
-    constraint_val = adjustment->lower;
-  if ( constraint_val > adjustment->upper )
-    constraint_val = adjustment->upper;
+  if ( constraint_val < gtk_adjustment_get_lower (adjustment) )
+    constraint_val = gtk_adjustment_get_lower (adjustment);
+  if ( constraint_val > gtk_adjustment_get_upper (adjustment) )
+    constraint_val = gtk_adjustment_get_upper (adjustment);
 
   if ( userdata->constraint )
     *intvar = constraint_val;
   else
     *intvar = new_val;
 
-  adjustment->value = constraint_val;
-  gtk_signal_handler_block_by_data ( GTK_OBJECT(adjustment), data );
-  gtk_signal_emit_by_name ( GTK_OBJECT(adjustment), "value_changed");
-  gtk_signal_handler_unblock_by_data ( GTK_OBJECT(adjustment), data );
+  g_signal_handlers_block_matched (adjustment, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, data );
+  gtk_adjustment_set_value (adjustment, constraint_val);
+  g_signal_handlers_unblock_matched (adjustment, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, data );
   
   if (userdata->callback)
     (*userdata->callback) (*intvar, userdata->call_data);

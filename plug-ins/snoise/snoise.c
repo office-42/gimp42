@@ -65,8 +65,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 
 /*---- Defines ----*/
@@ -478,160 +479,122 @@ solid_noise_dialog (void)
   GtkWidget *seed_hbox;
   GtkWidget *time_button;
   GtkWidget *scale;
-  GtkObject *scale_data;
-  gchar **argv;
-  gint  argc;
+  GtkAdjustment *scale_data;
   gchar buffer[32];
 
-  /*  Set args  */
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("snoise");
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
   /*  Dialog initialization  */
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Solid Noise");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_container_border_width (GTK_CONTAINER (GTK_DIALOG (dlg)->action_area), 2);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-                      (GtkSignalFunc) dialog_close_callback, NULL);
+  dlg = gimp_dialog_new ("Solid Noise");
+  gimp_container_set_border_width (gimp_dialog_get_action_area (dlg), 2);
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (dialog_close_callback), NULL);
 
   /*  Table  */
-  table = gtk_table_new (4, 3, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 2);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), table, TRUE, TRUE, 0);
+  table = gimp_table_new (4, 3, FALSE);
+  gimp_container_set_border_width (table, 2);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), table, TRUE, TRUE, 0);
 
   /*  Entry #1  */
   label = gtk_label_new ("Seed");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1,
-                    GTK_FILL, GTK_FILL, 1, 0);
-  gtk_widget_show (label);
-  
-  seed_hbox = gtk_hbox_new (FALSE, 2);
-  gtk_table_attach (GTK_TABLE (table), seed_hbox, 1, 2, 0, 1,
-		    GTK_FILL, GTK_FILL, 0, 0);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 0, 1,
+		     GIMP_FILL, GIMP_FILL, 1, 0);
+
+  seed_hbox = gimp_hbox_new (FALSE, 2);
+  gimp_table_attach (table, seed_hbox, 1, 2, 0, 1,
+		     GIMP_FILL, GIMP_FILL, 0, 0);
 
   entry = gtk_entry_new ();
-  gtk_box_pack_start (GTK_BOX (seed_hbox), entry, TRUE, TRUE, 0);
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
-  sprintf(buffer, "%d", snvals.seed);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                      (GtkSignalFunc) dialog_entry_callback, &snvals.seed);
-  gtk_widget_show (entry);
+  gimp_box_pack_start (seed_hbox, entry, TRUE, TRUE, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
+  gtk_editable_set_width_chars (GTK_EDITABLE (entry), 6);
+  g_snprintf (buffer, sizeof (buffer), "%d", snvals.seed);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (dialog_entry_callback), &snvals.seed);
 
   time_button = gtk_toggle_button_new_with_label ("Time");
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON(time_button), snvals.timeseed);
-  gtk_signal_connect (GTK_OBJECT (time_button), "toggled",
-		      (GtkSignalFunc) dialog_toggle_update,
-		      &snvals.timeseed);
-  gtk_box_pack_end (GTK_BOX (seed_hbox), time_button, FALSE, FALSE, 0);
-  gtk_widget_show (time_button);
-  gtk_widget_show (seed_hbox);
+  gtk_toggle_button_set_active (GTK_TOGGLE_BUTTON (time_button),
+				snvals.timeseed);
+  g_signal_connect (time_button, "toggled",
+		    G_CALLBACK (dialog_toggle_update), &snvals.timeseed);
+  gimp_box_pack_end (seed_hbox, time_button, FALSE, FALSE, 0);
 
   /*  Entry #2  */
   label = gtk_label_new ("Detail");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2,
-                    GTK_FILL, GTK_FILL, 1, 0);
-  gtk_widget_show (label);
-  
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 1, 2,
+		     GIMP_FILL, GIMP_FILL, 1, 0);
+
   entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry, 1, 2, 1, 2,
-                    GTK_FILL, GTK_FILL, 0, 0);
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
-  sprintf(buffer, "%d", snvals.detail);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                      (GtkSignalFunc) dialog_entry_callback, &snvals.detail);
-  gtk_widget_show (entry);
+  gimp_table_attach (table, entry, 1, 2, 1, 2,
+		     GIMP_FILL, GIMP_FILL, 0, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
+  gtk_editable_set_width_chars (GTK_EDITABLE (entry), 6);
+  g_snprintf (buffer, sizeof (buffer), "%d", snvals.detail);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (dialog_entry_callback), &snvals.detail);
 
   /*  Check button #1  */
   toggle = gtk_check_button_new_with_label ("Turbulent");
-  gtk_table_attach (GTK_TABLE (table), toggle, 2, 3, 0, 1,
-                    GTK_EXPAND | GTK_FILL, GTK_FILL, 1, 0);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), snvals.turbulent);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                      (GtkSignalFunc) dialog_toggle_update, &snvals.turbulent);
-  gtk_widget_show (toggle);
-  
+  gimp_table_attach (table, toggle, 2, 3, 0, 1,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 1, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), snvals.turbulent);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (dialog_toggle_update), &snvals.turbulent);
+
   /*  Check button #2  */
   toggle = gtk_check_button_new_with_label ("Tilable");
-  gtk_table_attach (GTK_TABLE (table), toggle, 2, 3, 1, 2,
-                    GTK_EXPAND | GTK_FILL, GTK_FILL, 1, 0);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), snvals.tilable);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                      (GtkSignalFunc) dialog_toggle_update, &snvals.tilable);
-  gtk_widget_show (toggle);
-  
+  gimp_table_attach (table, toggle, 2, 3, 1, 2,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 1, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), snvals.tilable);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (dialog_toggle_update), &snvals.tilable);
+
   /*  Scale #1  */
   label = gtk_label_new ("X Size");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 2, 3,
-                    GTK_FILL, GTK_FILL, 1, 0);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 2, 3,
+		     GIMP_FILL, GIMP_FILL, 1, 0);
 
   scale_data = gtk_adjustment_new (snvals.xsize, 0.1, SCALE_MAX,
-                                   0.1, 0.1, 0.0);
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 3, 2, 3,
-                    GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_scale_set_digits (GTK_SCALE (scale), 1);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) dialog_scale_callback, &snvals.xsize);
-  gtk_widget_show (scale);
+				   0.1, 0.1, 0.0);
+  scale = gimp_hscale_new (scale_data, 1);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+  gimp_table_attach (table, scale, 1, 3, 2, 3,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0);
+  g_signal_connect (scale_data, "value-changed",
+		    G_CALLBACK (dialog_scale_callback), &snvals.xsize);
 
   /*  Scale #2  */
   label = gtk_label_new ("Y Size");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 3, 4,
-                    GTK_FILL, GTK_FILL, 1, 0);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 3, 4,
+		     GIMP_FILL, GIMP_FILL, 1, 0);
 
   scale_data = gtk_adjustment_new (snvals.ysize, 0.1, SCALE_MAX,
-                                   0.1, 0.1, 0.0);
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 3, 3, 4,
-                    GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_scale_set_digits (GTK_SCALE (scale), 1);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) dialog_scale_callback, &snvals.ysize);
-  gtk_widget_show (scale);
+				   0.1, 0.1, 0.0);
+  scale = gimp_hscale_new (scale_data, 1);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+  gimp_table_attach (table, scale, 1, 3, 3, 4,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0);
+  g_signal_connect (scale_data, "value-changed",
+		    G_CALLBACK (dialog_scale_callback), &snvals.ysize);
 
   /*  Button #1  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) dialog_ok_callback, dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
-                      TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (dialog_ok_callback),
+			  dlg, TRUE);
 
   /*  Button #2  */
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-                             GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
-                      TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return snint.run;
 }
@@ -640,7 +603,7 @@ solid_noise_dialog (void)
 static void
 dialog_close_callback (GtkWidget *widget, gpointer data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 
@@ -648,10 +611,16 @@ static void
 dialog_toggle_update (GtkWidget *widget, gpointer data)
 {
   int *toggle_val;
+  gboolean active;
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (GTK_IS_CHECK_BUTTON (widget))
+    active = gtk_check_button_get_active (GTK_CHECK_BUTTON (widget));
+  else
+    active = gtk_toggle_button_get_active (GTK_TOGGLE_BUTTON (widget));
+
+  if (active)
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -665,14 +634,14 @@ dialog_entry_callback (GtkWidget *widget, gpointer data)
 
   text_val = (gint *) data;
 
-  *text_val = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+  *text_val = atoi (gtk_editable_get_text (GTK_EDITABLE (widget)));
 }
 
 
 static void
 dialog_scale_callback (GtkAdjustment *adjustment, gdouble *value)
 {
-  *value = adjustment->value;
+  *value = gtk_adjustment_get_value (adjustment);
 }
 
 
@@ -680,5 +649,5 @@ static void
 dialog_ok_callback (GtkWidget *widget, gpointer data)
 {
   snint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }

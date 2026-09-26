@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Windows
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'COPYING']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # UCRT64: MSYS2 is retiring the msvcrt (MINGW64) environment.
+      - name: Set up MSYS2 / UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          cache: true
+          install: >-
+            git
+          pacboy: >-
+            toolchain:p
+            pkgconf:p
+            meson:p
+            ninja:p
+            ccache:p
+            gtk4:p
+            pango:p
+            cairo:p
+            glib2:p
+            gdk-pixbuf2:p
+            libjpeg-turbo:p
+            libpng:p
+            libtiff:p
+            zlib:p
+            bzip2:p
+            librsvg:p
+
+      - name: Show toolchain
+        run: |
+          gcc --version | head -1
+          meson --version
+          pkg-config --modversion gtk4
+
+      - name: Restore ccache
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-windows-${{ github.sha }}
+          restore-keys: ccache-windows-
+
+      - name: Configure
+        run: |
+          export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
+          export CC="ccache gcc"
+          ccache --max-size=300M
+          # The bundle is installed straight into dist; the program finds
+          # its data and plug-ins relative to itself, so dist can move.
+          meson setup builddir --prefix="$(cygpath -m "$PWD/dist")"
+
+      - name: Build
+        run: |
+          export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
+          meson compile -C builddir
+
+      - name: Install
+        run: meson install -C builddir
+
+      - name: Bundle
+        run: |
+          bash build-aux/bundle-windows.sh dist
+          cp README COPYING dist/ 2>/dev/null || true
+
+      - name: Smoke test
+        run: ./dist/bin/gimp42.exe --version
+
+      - name: Upload bundle
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gimp42-windows
+          path: dist
+          retention-days: 30
+
+      # Inno Setup is on the runner image; the installer wraps the bundle.
+      - name: Installer
+        run: |
+          version=$(sed -n "s/^  version: '\([^']*\)',/\1/p" meson.build | head -1)
+          # MSYS would turn /D... into D:\...; leave the arguments alone.
+          MSYS2_ARG_CONV_EXCL="*" "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+            "/DAppVersion=$version" "/DSourceDir=$(cygpath -w "$PWD/dist")" \
+            "/O$(cygpath -w "$PWD/installer")" \
+            "$(cygpath -w "$PWD/build-aux/gimp42.iss")"
+          ls -l installer
+
+      - name: Upload installer
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gimp42-windows-installer
+          path: installer/*.exe
+          retention-days: 30

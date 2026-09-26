@@ -22,7 +22,7 @@
    0.08  26th sept 97  by Thomas NOEL <thomas@minet.net> 
 */
 
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
 
 GtkWidget*

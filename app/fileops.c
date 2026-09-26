@@ -19,12 +19,10 @@
 #include <ctype.h>
 #include <errno.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/param.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <errno.h>
 #include <stdlib.h>
+#include <stdio.h>
+
+#include <glib/gstdio.h>
 
 #include "appenv.h"
 #include "actionarea.h"
@@ -38,46 +36,12 @@
 #include "procedural_db.h"
 #include "gimprc.h"
 
-typedef struct _OverwriteBox OverwriteBox;
-
-struct _OverwriteBox
-{
-  GtkWidget * obox;
-  char *      full_filename;
-  char *      raw_filename;
-};
-
 static Argument* register_load_handler_invoker (Argument *args);
 static Argument* register_magic_load_handler_invoker (Argument *args);
 static Argument* register_save_handler_invoker (Argument *args);
 static Argument* file_load_invoker             (Argument *args);
 static Argument* file_save_invoker             (Argument *args);
 static Argument* file_temp_name_invoker        (Argument *args);
-
-static void file_overwrite              (char *filename,
-					 char* raw_filename);
-static void file_overwrite_yes_callback (GtkWidget *w,
-					 gpointer   client_data);
-static void file_overwrite_no_callback  (GtkWidget *w,
-					 gpointer   client_data);
-
-static gint file_overwrite_delete_callback  (GtkWidget *w,
-					     GdkEvent  *e,
-					     gpointer   client_data);
-
-static void file_open_ok_callback   (GtkWidget *w,
-				     gpointer   client_data);
-static void file_save_ok_callback   (GtkWidget *w,
-				     gpointer   client_data);
-
-static void file_dialog_show        (GtkWidget *filesel);
-static int  file_dialog_hide        (GtkWidget *filesel);
-static void file_update_name        (PlugInProcDef *proc,
-				     GtkWidget     *filesel);
-static void file_load_type_callback (GtkWidget *w,
-				     gpointer   client_data);
-static void file_save_type_callback (GtkWidget *w,
-				     gpointer   client_data);
 
 static void file_convert_string (char *instr,
                                  char *outmem,
@@ -98,14 +62,10 @@ static int  file_check_magic_list (GSList *magics_list,
 
 static PlugInProcDef* file_proc_find         (GSList *procs,
 					 char   *filename);
-static void      file_update_menus      (GSList *procs,
-					 int     image_type);
 
 
-static GtkWidget *fileload = NULL;
-static GtkWidget *filesave = NULL;
-static GtkWidget *open_options = NULL;
-static GtkWidget *save_options = NULL;
+/*  The folder the last file was opened from or saved to.  */
+static GFile *last_folder = NULL;
 
 /* Load by extension.
  */
@@ -301,17 +261,6 @@ static PlugInProcDef *save_file_proc = NULL;
 
 static int image_ID = 0;
 
-static void
-file_message_box_close_callback (GtkWidget *w,
-				 gpointer   client_data)
-{
-  GtkFileSelection *fs;
-
-  fs = (GtkFileSelection *) client_data;
-
-  gtk_widget_set_sensitive (GTK_WIDGET (fs), TRUE);
-}
-
 void
 file_ops_pre_init ()
 {
@@ -326,40 +275,11 @@ file_ops_pre_init ()
 void
 file_ops_post_init ()
 {
-  GtkMenuEntry entry;
-  PlugInProcDef *file_proc;
-  GSList *tmp;
-
+  /*  The file types were menus in the file dialogs; the type is now
+   *  always found from the file's name and contents.
+   */
   load_procs = g_slist_reverse (load_procs);
   save_procs = g_slist_reverse (save_procs);
-
-  tmp = load_procs;
-  while (tmp)
-    {
-      file_proc = tmp->data;
-      tmp = tmp->next;
-
-      entry.path = file_proc->menu_path;
-      entry.accelerator = NULL;
-      entry.callback = file_load_type_callback;
-      entry.callback_data = file_proc;
-
-      menus_create (&entry, 1);
-    }
-
-  tmp = save_procs;
-  while (tmp)
-    {
-      file_proc = tmp->data;
-      tmp = tmp->next;
-
-      entry.path = file_proc->menu_path;
-      entry.accelerator = NULL;
-      entry.callback = file_save_type_callback;
-      entry.callback_data = file_proc;
-
-      menus_create (&entry, 1);
-    }
 }
 
 static Argument*
@@ -466,71 +386,160 @@ done:
   return return_args;
 }
 
+/*  A filter for every file type the plug-ins handle, and one for all
+ *  of them together.
+ */
+static GListModel *
+file_dialog_filters (GSList   *procs,
+		     gboolean  for_save,
+		     int       image_type)
+{
+  GListStore *filters;
+  GtkFileFilter *all;
+  GtkFileFilter *filter;
+  GSList *list;
+
+  filters = g_list_store_new (GTK_TYPE_FILE_FILTER);
+
+  all = gtk_file_filter_new ();
+  gtk_file_filter_set_name (all, for_save ? "All supported types"
+					  : "All images");
+  g_list_store_append (filters, all);
+
+  for (list = procs; list; list = list->next)
+    {
+      PlugInProcDef *file_proc = list->data;
+      GSList *ext;
+      const char *name;
+
+      if (!file_proc->extensions_list)
+	continue;
+      if (for_save && image_type &&
+	  !(file_proc->image_types_val & image_type))
+	continue;
+
+      name = file_proc->menu_path ? prune_filename (file_proc->menu_path)
+				  : file_proc->db_info.name;
+
+      filter = gtk_file_filter_new ();
+      gtk_file_filter_set_name (filter, name);
+
+      for (ext = file_proc->extensions_list; ext; ext = ext->next)
+	{
+	  char *pattern = g_strdup_printf ("*.%s", (char *) ext->data);
+
+	  gtk_file_filter_add_pattern (filter, pattern);
+	  gtk_file_filter_add_pattern (all, pattern);
+	  g_free (pattern);
+	}
+
+      g_list_store_append (filters, filter);
+      g_object_unref (filter);
+    }
+
+  if (!for_save)
+    {
+      filter = gtk_file_filter_new ();
+      gtk_file_filter_set_name (filter, "All files");
+      gtk_file_filter_add_pattern (filter, "*");
+      g_list_store_append (filters, filter);
+      g_object_unref (filter);
+    }
+
+  g_object_unref (all);
+
+  return G_LIST_MODEL (filters);
+}
+
+static void
+file_dialog_set_sensitive (int sensitive)
+{
+  menus_set_sensitive ("<Toolbox>/File/Open", sensitive);
+  menus_set_sensitive ("<Image>/File/Open", sensitive);
+  menus_set_sensitive ("<Image>/File/Save", sensitive);
+  menus_set_sensitive ("<Image>/File/Save as", sensitive);
+}
+
+static void
+file_remember_folder (GFile *file)
+{
+  GFile *parent = g_file_get_parent (file);
+
+  if (parent)
+    {
+      g_clear_object (&last_folder);
+      last_folder = parent;
+    }
+}
+
+static GtkWindow *
+file_dialog_parent (void)
+{
+  GDisplay *gdisplay = gdisplay_active ();
+
+  if (gdisplay && gdisplay->shell)
+    return GTK_WINDOW (gdisplay->shell);
+
+  return NULL;
+}
+
+static void
+file_open_done (GObject      *source,
+		GAsyncResult *result,
+		gpointer      data)
+{
+  GFile *file;
+  char *filename;
+  char *raw_filename;
+
+  file_dialog_set_sensitive (TRUE);
+
+  file = gtk_file_dialog_open_finish (GTK_FILE_DIALOG (source), result, NULL);
+  if (!file)
+    return;
+
+  file_remember_folder (file);
+
+  filename = g_file_get_path (file);
+  g_object_unref (file);
+  if (!filename)
+    return;
+
+  raw_filename = g_path_get_basename (filename);
+
+  if (!file_open (filename, raw_filename))
+    {
+      char *message = g_strdup_printf ("Open failed: %s", raw_filename);
+
+      message_box (message, NULL, NULL);
+      g_free (message);
+    }
+
+  g_free (raw_filename);
+  g_free (filename);
+}
+
 void
 file_open_callback (GtkWidget *w,
 		    gpointer   client_data)
 {
-  GtkWidget *hbox;
-  GtkWidget *label;
-  GtkWidget *option_menu;
-  GtkWidget *load_menu;
-  GDisplay *gdisplay;
+  GtkFileDialog *dialog;
+  GListModel *filters;
 
-  if (!fileload)
-    {
-      fileload = gtk_file_selection_new ("Load Image");
-      gtk_window_position (GTK_WINDOW (fileload), GTK_WIN_POS_MOUSE);
-      gtk_window_set_wmclass (GTK_WINDOW (fileload), "load_image", "Gimp");
-      gtk_signal_connect_object (GTK_OBJECT (GTK_FILE_SELECTION (fileload)->cancel_button),
-				 "clicked",
-				 GTK_SIGNAL_FUNC (file_dialog_hide),
-				 GTK_OBJECT (fileload));
-      gtk_signal_connect (GTK_OBJECT (fileload),
-			  "delete_event",
-			  GTK_SIGNAL_FUNC (file_dialog_hide),
-			  NULL);
-      gtk_signal_connect (GTK_OBJECT (GTK_FILE_SELECTION (fileload)->ok_button), "clicked", (GtkSignalFunc) file_open_ok_callback, fileload);
-      gtk_quit_add_destroy (1, GTK_OBJECT (fileload));
-    }
-  else
-    {
-      gtk_widget_set_sensitive (GTK_WIDGET (fileload), TRUE);
-      if (GTK_WIDGET_VISIBLE (fileload))
-	return;
+  dialog = gtk_file_dialog_new ();
+  gtk_file_dialog_set_title (dialog, "Load Image");
+  filters = file_dialog_filters (load_procs, FALSE, 0);
+  gtk_file_dialog_set_filters (dialog, filters);
+  g_object_unref (filters);
+  if (last_folder)
+    gtk_file_dialog_set_initial_folder (dialog, last_folder);
 
-      gtk_file_selection_set_filename (GTK_FILE_SELECTION(fileload), "./");
-      gtk_window_set_title (GTK_WINDOW (fileload), "Load Image");
-    }
+  load_file_proc = NULL;
+  file_dialog_set_sensitive (FALSE);
 
-  gdisplay = gdisplay_active ();
-
-  if (!open_options)
-    {
-      open_options = gtk_frame_new ("Open Options");
-      gtk_frame_set_shadow_type (GTK_FRAME (open_options), GTK_SHADOW_ETCHED_IN);
-
-      hbox = gtk_hbox_new (FALSE, 1);
-      gtk_container_border_width (GTK_CONTAINER (hbox), 5);
-      gtk_container_add (GTK_CONTAINER (open_options), hbox);
-      gtk_widget_show (hbox);
-
-      label = gtk_label_new ("Determine file type:");
-      gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, TRUE, 0);
-      gtk_widget_show (label);
-
-      option_menu = gtk_option_menu_new ();
-      gtk_box_pack_start (GTK_BOX (hbox), option_menu, TRUE, TRUE, 0);
-      gtk_widget_show (option_menu);
-
-      menus_get_load_menu (&load_menu, NULL);
-      gtk_option_menu_set_menu (GTK_OPTION_MENU (option_menu), load_menu);
-      gtk_box_pack_end (GTK_BOX (GTK_FILE_SELECTION (fileload)->main_vbox),
-			open_options, FALSE, FALSE, 5);
-    }
-
-  gtk_widget_show (open_options);
-
-  file_dialog_show (fileload);
+  gtk_file_dialog_open (dialog, file_dialog_parent (), NULL,
+			file_open_done, NULL);
+  g_object_unref (dialog);
 }
 
 void
@@ -540,6 +549,8 @@ file_save_callback (GtkWidget *w,
   GDisplay *gdisplay;
 
   gdisplay = gdisplay_active ();
+  if (!gdisplay)
+    return;
 
   /*  Only save if the gimage has been modified  */
   if (gdisplay->gimage->dirty != 0)
@@ -555,85 +566,107 @@ file_save_callback (GtkWidget *w,
     }
 }
 
+static void
+file_save_done (GObject      *source,
+		GAsyncResult *result,
+		gpointer      data)
+{
+  int save_image_ID = GPOINTER_TO_INT (data);
+  GFile *file;
+  char *filename;
+  char *raw_filename;
+
+  file_dialog_set_sensitive (TRUE);
+
+  file = gtk_file_dialog_save_finish (GTK_FILE_DIALOG (source), result, NULL);
+  if (!file)
+    return;
+
+  file_remember_folder (file);
+
+  filename = g_file_get_path (file);
+  g_object_unref (file);
+  if (!filename)
+    return;
+
+  raw_filename = g_path_get_basename (filename);
+
+  /*  The dialog has already asked whether to overwrite.  */
+  if (gimage_get_ID (save_image_ID) == NULL ||
+      !file_save (save_image_ID, filename, raw_filename))
+    {
+      char *message;
+
+      if (!save_file_proc && !file_proc_find (save_procs, raw_filename))
+	message = g_strdup_printf ("Save failed: %s\n"
+				   "The file type is chosen by the extension; "
+				   "use one like .xcf, .png or .jpg.",
+				   raw_filename);
+      else
+	message = g_strdup_printf ("Save failed: %s", raw_filename);
+
+      message_box (message, NULL, NULL);
+      g_free (message);
+    }
+
+  g_free (raw_filename);
+  g_free (filename);
+}
+
 void
 file_save_as_callback (GtkWidget *w,
 		       gpointer   client_data)
 {
-  GtkWidget *hbox;
-  GtkWidget *label;
-  GtkWidget *option_menu;
-  GtkWidget *save_menu;
+  GtkFileDialog *dialog;
+  GListModel *filters;
   GDisplay *gdisplay;
-
-  if (!filesave)
-    {
-      filesave = gtk_file_selection_new ("Save Image");
-      gtk_window_set_wmclass (GTK_WINDOW (filesave), "save_image", "Gimp");
-      gtk_window_position (GTK_WINDOW (filesave), GTK_WIN_POS_MOUSE);
-      gtk_signal_connect_object (GTK_OBJECT (GTK_FILE_SELECTION (filesave)->cancel_button),
-			  "clicked",
-			  GTK_SIGNAL_FUNC (file_dialog_hide),
-			  GTK_OBJECT (filesave));
-      gtk_signal_connect (GTK_OBJECT (filesave),
-			  "delete_event",
-			  GTK_SIGNAL_FUNC (file_dialog_hide),
-			  NULL);
-      gtk_signal_connect (GTK_OBJECT (GTK_FILE_SELECTION (filesave)->ok_button), "clicked", (GtkSignalFunc) file_save_ok_callback, filesave);
-      gtk_quit_add_destroy (1, GTK_OBJECT (filesave));
-    }
-  else
-    {
-      gtk_widget_set_sensitive (GTK_WIDGET (filesave), TRUE);
-      if (GTK_WIDGET_VISIBLE (filesave))
-	return;
-
-      gtk_file_selection_set_filename (GTK_FILE_SELECTION(filesave), "./");
-      gtk_window_set_title (GTK_WINDOW (filesave), "Save Image");
-    }
+  int image_type = 0;
 
   gdisplay = gdisplay_active ();
+  if (!gdisplay)
+    return;
+
   image_ID = gdisplay->gimage->ID;
-
-  if (!save_options)
-    {
-      save_options = gtk_frame_new ("Save Options");
-      gtk_frame_set_shadow_type (GTK_FRAME (save_options), GTK_SHADOW_ETCHED_IN);
-
-      hbox = gtk_hbox_new (FALSE, 1);
-      gtk_container_border_width (GTK_CONTAINER (hbox), 5);
-      gtk_container_add (GTK_CONTAINER (save_options), hbox);
-      gtk_widget_show (hbox);
-
-      label = gtk_label_new ("Determine file type:");
-      gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, TRUE, 0);
-      gtk_widget_show (label);
-
-      option_menu = gtk_option_menu_new ();
-      gtk_box_pack_start (GTK_BOX (hbox), option_menu, TRUE, TRUE, 0);
-      gtk_widget_show (option_menu);
-
-      menus_get_save_menu (&save_menu, NULL);
-      gtk_option_menu_set_menu (GTK_OPTION_MENU (option_menu), save_menu);
-      gtk_box_pack_end (GTK_BOX (GTK_FILE_SELECTION (filesave)->main_vbox),
-			save_options, FALSE, FALSE, 5);
-    }
 
   switch (gdisplay->gimage->base_type)
     {
     case RGB:
-      file_update_menus (save_procs, RGB_IMAGE);
+      image_type = RGB_IMAGE;
       break;
     case GRAY:
-      file_update_menus (save_procs, GRAY_IMAGE);
+      image_type = GRAY_IMAGE;
       break;
     case INDEXED:
-      file_update_menus (save_procs, INDEXED_IMAGE);
+      image_type = INDEXED_IMAGE;
       break;
     }
 
-  gtk_widget_show (save_options);
+  dialog = gtk_file_dialog_new ();
+  gtk_file_dialog_set_title (dialog, "Save Image");
+  filters = file_dialog_filters (save_procs, TRUE, image_type);
+  gtk_file_dialog_set_filters (dialog, filters);
+  g_object_unref (filters);
 
-  file_dialog_show (filesave);
+  if (gdisplay->gimage->has_filename)
+    {
+      GFile *current = g_file_new_for_path (gimage_filename (gdisplay->gimage));
+
+      gtk_file_dialog_set_initial_file (dialog, current);
+      g_object_unref (current);
+    }
+  else
+    {
+      if (last_folder)
+	gtk_file_dialog_set_initial_folder (dialog, last_folder);
+      gtk_file_dialog_set_initial_name (dialog, "Untitled.xcf");
+    }
+
+  save_file_proc = NULL;
+  file_dialog_set_sensitive (FALSE);
+
+  gtk_file_dialog_save (dialog, GTK_WINDOW (gdisplay->shell), NULL,
+			file_save_done, GINT_TO_POINTER (image_ID));
+  g_object_unref (dialog);
 }
 
 void
@@ -648,54 +681,6 @@ file_save_by_extension_callback (GtkWidget *w,
 				 gpointer   client_data)
 {
   save_file_proc = NULL;
-}
-
-static void
-file_update_name (PlugInProcDef *proc, GtkWidget *filesel)
-{
-  if (proc->extensions_list)
-    {
-      char* text = gtk_entry_get_text (GTK_ENTRY(GTK_FILE_SELECTION(filesel)->selection_entry));
-      char* last_dot = strrchr (text, '.');
-      GString *s;
-
-      if (last_dot == text || !text[0])
-	return;
-
-      s = g_string_new (text);
-
-      if (last_dot)
-	g_string_truncate (s, last_dot-text);
-
-      g_string_append (s, ".");
-      g_string_append (s, (char*) proc->extensions_list->data);
-
-      gtk_entry_set_text (GTK_ENTRY(GTK_FILE_SELECTION(filesel)->selection_entry), s->str);
-
-      g_string_free (s, TRUE);
-    }
-}
-
-static void
-file_load_type_callback (GtkWidget *w,
-			 gpointer   client_data)
-{
-  PlugInProcDef* proc = (PlugInProcDef *) client_data;
-
-  file_update_name (proc, fileload);
-
-  load_file_proc = proc;
-}
-
-static void
-file_save_type_callback (GtkWidget *w,
-			 gpointer   client_data)
-{
-  PlugInProcDef* proc = (PlugInProcDef *) client_data;
-
-  file_update_name (proc, filesave);
-
-  save_file_proc = proc;
 }
 
 int
@@ -811,250 +796,6 @@ file_save (int   image_ID,
   return return_val;
 }
 
-
-static void
-file_open_ok_callback (GtkWidget *w,
-		       gpointer   client_data)
-{
-  GtkFileSelection *fs;
-  char* filename, *raw_filename;
-  struct stat buf;
-  int err;
-  GString *s;
-
-  fs = GTK_FILE_SELECTION (client_data);
-  filename = gtk_file_selection_get_filename (fs);
-  raw_filename = gtk_entry_get_text (GTK_ENTRY(fs->selection_entry));
-
-  g_assert (filename && raw_filename);
-
-  if (strlen (raw_filename) == 0)
-    return;
-
-  err = stat (filename, &buf);
-
-  if (err == 0 && (buf.st_mode & S_IFDIR))
-    {
-      GString *s = g_string_new (filename);
-      if (s->str[s->len - 1] != '/')
-        {
-          g_string_append_c (s, '/');
-        }
-      gtk_file_selection_set_filename (fs, s->str);
-      g_string_free (s, TRUE);
-      return;
-    }
-
-  gtk_widget_set_sensitive (GTK_WIDGET (fs), FALSE);
-
-  if (err)
-    filename = raw_filename;
-
-  if (file_open (filename, raw_filename))
-    {
-      file_dialog_hide (client_data);
-      gtk_widget_set_sensitive (GTK_WIDGET (fs), TRUE);
-      return;
-    }
-
-  s = g_string_new ("Open failed: ");
-
-  g_string_append (s, raw_filename);
-
-  message_box (s->str, file_message_box_close_callback, (void *) fs);
-
-  g_string_free (s, TRUE);
-}
-
-static void
-file_save_ok_callback (GtkWidget *w,
-		       gpointer   client_data)
-{
-  GtkFileSelection *fs;
-  char* filename, *raw_filename;
-  GString* s;
-  struct stat buf;
-  int err;
-
-  fs = GTK_FILE_SELECTION (client_data);
-  filename = gtk_file_selection_get_filename (fs);
-  raw_filename = gtk_entry_get_text (GTK_ENTRY(fs->selection_entry));
-  err = stat (filename, &buf);
-
-  g_assert (filename && raw_filename);
-
-  if (err == 0)
-    {
-      if (buf.st_mode & S_IFDIR)
-	{
-	  GString *s = g_string_new (filename);
-	  g_string_append_c (s, '/');
-	  gtk_file_selection_set_filename (fs, s->str);
-	  g_string_free (s, TRUE);
-	  return;
-	}
-      else if (buf.st_mode & S_IFREG)
-	{
-	  gtk_widget_set_sensitive (GTK_WIDGET (fs), FALSE);
-	  file_overwrite (g_strdup (filename), g_strdup (raw_filename));
-	  return;
-	}
-      else
-	{
-	  s = g_string_new (NULL);
-	  g_string_sprintf (s, "%s is an irregular file (%s)", raw_filename, g_strerror(errno));
-	}
-    } else {
-      gtk_widget_set_sensitive (GTK_WIDGET (fs), FALSE);
-      if (file_save (image_ID, filename, raw_filename))
-	{
-	  file_dialog_hide (client_data);
-	  gtk_widget_set_sensitive (GTK_WIDGET (fs), TRUE);
-	  return;
-	}
-      else
-	{
-	  s = g_string_new ("Save failed: ");
-	  g_string_append (s, raw_filename);
-	}
-    }
-  message_box (s->str, file_message_box_close_callback, (void *) fs);
-
-
-  g_string_free (s, TRUE);
-}
-
-static void
-file_dialog_show (GtkWidget *filesel)
-{
-  menus_set_sensitive ("<Toolbox>/File/Open", FALSE);
-  menus_set_sensitive ("<Image>/File/Open", FALSE);
-  menus_set_sensitive ("<Image>/File/Save", FALSE);
-  menus_set_sensitive ("<Image>/File/Save as", FALSE);
-
-  gtk_widget_show (filesel);
-}
-
-static int
-file_dialog_hide (GtkWidget *filesel)
-{
-  gtk_widget_hide (filesel);
-
-  menus_set_sensitive ("<Toolbox>/File/Open", TRUE);
-  menus_set_sensitive ("<Image>/File/Open", TRUE);
-  menus_set_sensitive ("<Image>/File/Save", TRUE);
-  menus_set_sensitive ("<Image>/File/Save as", TRUE);
-
-  return TRUE;
-}
-
-static void
-file_overwrite (char *filename, char* raw_filename)
-{
-  static ActionAreaItem obox_action_items[2] =
-  {
-    { "Yes", file_overwrite_yes_callback, NULL, NULL },
-    { "No", file_overwrite_no_callback, NULL, NULL }
-  };
-
-  OverwriteBox *overwrite_box;
-  GtkWidget *vbox;
-  GtkWidget *label;
-  char *overwrite_text;
-
-  overwrite_box = (OverwriteBox *) g_malloc (sizeof (OverwriteBox));
-  overwrite_text = (char *) g_malloc (strlen (" exists, overwrite?") + strlen (filename) + 1);
-  sprintf (overwrite_text, "%s exists, overwrite?", filename);
-
-  overwrite_box->full_filename = filename;
-  overwrite_box->raw_filename = raw_filename;
-  overwrite_box->obox = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (overwrite_box->obox), "file_exists", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (overwrite_box->obox), "File Exists!");
-  gtk_window_position (GTK_WINDOW (overwrite_box->obox), GTK_WIN_POS_MOUSE);
-
-  gtk_signal_connect (GTK_OBJECT (overwrite_box->obox),
-		      "delete_event",
-		      (GtkSignalFunc) file_overwrite_delete_callback,
-		      overwrite_box);
-
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (overwrite_box->obox)->vbox), vbox, TRUE, TRUE, 0);
-
-  label = gtk_label_new (overwrite_text);
-  gtk_box_pack_start (GTK_BOX (vbox), label, TRUE, FALSE, 0);
-
-  obox_action_items[0].user_data = overwrite_box;
-  obox_action_items[1].user_data = overwrite_box;
-  build_action_area (GTK_DIALOG (overwrite_box->obox), obox_action_items, 2, 0);
-
-  gtk_widget_show (label);
-  gtk_widget_show (vbox);
-  gtk_widget_show (overwrite_box->obox);
-
-  g_free (overwrite_text);
-}
-
-static void
-file_overwrite_yes_callback (GtkWidget *w,
-			     gpointer   client_data)
-{
-  OverwriteBox *overwrite_box;
-  GImage *gimage;
-
-  overwrite_box = (OverwriteBox *) client_data;
-
-  gtk_widget_destroy (overwrite_box->obox);
-
-  if (((gimage = gimage_get_ID (image_ID)) != NULL) &&
-      file_save (image_ID, overwrite_box->full_filename, overwrite_box->raw_filename))
-    {
-      image_ID = 0;
-      file_dialog_hide (filesave);
-    }
-  else
-    {
-      GString* s;
-
-      s = g_string_new ("Save failed: ");
-
-      g_string_append (s, overwrite_box->raw_filename);
-
-      message_box (s->str, file_message_box_close_callback, (void *) filesave);
-      g_string_free (s, TRUE);
-    }
-
-  g_free (overwrite_box->full_filename);
-  g_free (overwrite_box->raw_filename);
-  g_free (overwrite_box);
-}
-
-static gint
-file_overwrite_delete_callback (GtkWidget *w,
-				GdkEvent  *e,
-				gpointer   client_data)
-{
-  file_overwrite_no_callback (w, client_data);
-
-  return TRUE;
-}
-
-static void
-file_overwrite_no_callback (GtkWidget *w,
-			    gpointer   client_data)
-{
-  OverwriteBox *overwrite_box;
-
-  overwrite_box = (OverwriteBox *) client_data;
-
-  gtk_widget_destroy (overwrite_box->obox);
-  g_free (overwrite_box->full_filename);
-  g_free (overwrite_box->raw_filename);
-  g_free (overwrite_box);
-
-  gtk_widget_set_sensitive (GTK_WIDGET(filesave), TRUE);
-}
 
 static PlugInProcDef*
 file_proc_find (GSList *procs,
@@ -1373,22 +1114,6 @@ static int file_check_magic_list (GSList *magics_list,
   return (0);
 }
 
-static void
-file_update_menus (GSList *procs,
-		   int     image_type)
-{
-  PlugInProcDef *file_proc;
-
-  while (procs)
-    {
-      file_proc = procs->data;
-      procs = procs->next;
-
-      if (file_proc->db_info.proc_type != PDB_EXTENSION)
-	menus_set_sensitive (file_proc->menu_path, (file_proc->image_types_val & image_type));
-    }
-}
-
 static Argument*
 file_load_invoker (Argument *args)
 {
@@ -1437,21 +1162,29 @@ static Argument*
 file_temp_name_invoker (Argument *args)
 {
   static gint id = 0;
-  static gint pid;
   Argument *return_args;
+  const char *dir;
+  char *name;
 
-  GString *s = g_string_new (NULL);
+  /*  temp-path from gimprc, if it exists, otherwise the system's  */
+  dir = temp_path;
+  if (!dir || !g_file_test (dir, G_FILE_TEST_IS_DIR))
+    {
+      if (dir && g_mkdir_with_parents (dir, 0755) == 0)
+	;
+      else
+	dir = g_get_tmp_dir ();
+    }
 
-  if (id == 0)
-    pid = getpid();
-
-  g_string_sprintf (s, "%s/gimp_temp.%d%d.%s", temp_path, pid, id++, (char*)args[0].value.pdb_pointer);
+  name = g_strdup_printf ("gimp_temp.%lu%d.%s",
+			  (unsigned long) g_get_real_time () % 100000,
+			  id++, (char*)args[0].value.pdb_pointer);
 
   return_args = procedural_db_return_args (&file_temp_name_proc, TRUE);
 
-  return_args[1].value.pdb_pointer = s->str;
+  return_args[1].value.pdb_pointer = g_build_filename (dir, name, NULL);
 
-  g_string_free (s, FALSE);
+  g_free (name);
 
   return return_args;
 }

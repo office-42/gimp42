@@ -24,6 +24,7 @@
 
 #include <glib.h>
 #include <gdk/gdk.h>
+#include <cairo.h>
 #include <gtk/gtk.h>
 
 #ifdef __cplusplus
@@ -65,17 +66,12 @@ typedef struct
   const char *name;
 } GckNamedRGB;
 
+/* gimp42: GTK 4 renders in true color with cairo, so there is no  */
+/* visual, colormap or color cube to keep track of any more; the   */
+/* dither method is remembered for compatibility but not used.     */
+
 typedef struct
 {
-  GdkVisual    *visual;
-  GdkColormap  *colormap;
-  gulong        allocedpixels[256];
-  guint32       colorcube[256];
-  GdkColor      rgbpalette[256];
-  guchar        map_r[256],map_g[256],map_b[256];
-  guchar        indextab[7][7][7];
-  guchar        invmap_r[256],invmap_g[256],invmap_b[256];
-  int           shades_r,shades_g,shades_b,numcolors;
   GckDitherType dithermethod;
 } GckVisualInfo;
 
@@ -94,7 +90,6 @@ typedef struct
   double step_inc;
   double page_inc;
   double page_size;
-  GtkUpdateType update_type;
   gint   draw_value_flag;
 } GckScaleValues;
 
@@ -105,6 +100,18 @@ typedef enum
   GCK_TOP,
   GCK_BOTTOM
 } GckPosition;
+
+/* Frame styles.  GTK 4 frames have a single look; GCK_SHADOW_NONE */
+/* draws no border at all, the others the normal frame border.     */
+
+typedef enum
+{
+  GCK_SHADOW_NONE,
+  GCK_SHADOW_IN,
+  GCK_SHADOW_OUT,
+  GCK_SHADOW_ETCHED_IN,
+  GCK_SHADOW_ETCHED_OUT
+} GckShadowType;
 
 typedef struct
 {
@@ -118,8 +125,6 @@ typedef struct
 typedef struct
 {
   GtkWidget *widget;
-  GtkStyle *style;
-  GtkAccelGroup *accelerator_group;
   GckVisualInfo *visinfo;
 } GckApplicationWindow;
 
@@ -128,7 +133,7 @@ typedef struct _GckMenuItem
   char *label;
   char accelerator_key;
   gint accelerator_mods;
-  GtkSignalFunc item_selected_func;
+  GCallback item_selected_func;
   gpointer user_data;
   struct _GckMenuItem *subitems;
   GtkWidget *widget;
@@ -139,7 +144,6 @@ typedef struct
   GtkWidget *widget;
   GtkWidget *list;
   GckEventFunction event_handler;
-  GdkEvent last_event;
   GList *itemlist;
   GList *current_selection;
   gint *selected_items,num_selected_items;
@@ -173,8 +177,7 @@ typedef struct
 typedef struct
 {
   char *label;
-  GdkImage *image;
-  GdkPixmap *pixmap;
+  cairo_surface_t *surface;
   GdkRectangle area;
 } GckNoteBookTab;
 
@@ -191,8 +194,9 @@ typedef struct
 
 typedef struct {
   int x,y,w,h;
-  GdkImage *buffer;
+  cairo_surface_t *buffer;
 } _GckBackBuffer;
+
 
 typedef struct
 {

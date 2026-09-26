@@ -83,18 +83,57 @@ typedef enum
   HISTOGRAM
 } ToolType;
 
-#define XButtonEvent GdkEventButton
-#define XMotionEvent GdkEventMotion
+/*  What the tools are told about the pointer and the keyboard.  The
+ *  display fills these in from GTK 4's events (see disp_callbacks.c);
+ *  positions are in canvas coordinates.
+ */
+typedef enum
+{
+  GIMP_BUTTON_PRESS,
+  GIMP_2BUTTON_PRESS,
+  GIMP_3BUTTON_PRESS,
+  GIMP_BUTTON_RELEASE
+} GimpButtonEventType;
+
+typedef struct _GimpButtonEvent GimpButtonEvent;
+typedef struct _GimpMotionEvent GimpMotionEvent;
+typedef struct _GimpKeyEvent    GimpKeyEvent;
+
+struct _GimpButtonEvent
+{
+  GimpButtonEventType type;
+  guint32  time;
+  gdouble  x, y;
+  gdouble  pressure;
+  guint    state;          /*  GdkModifierType  */
+  guint    button;
+};
+
+struct _GimpMotionEvent
+{
+  guint32  time;
+  gdouble  x, y;
+  gdouble  pressure;
+  guint    state;          /*  GdkModifierType  */
+  gint     is_hint;        /*  always FALSE     */
+};
+
+struct _GimpKeyEvent
+{
+  guint32  time;
+  guint    state;          /*  GdkModifierType  */
+  guint    keyval;
+};
 
 /*  Structure definitions  */
 
 typedef struct _tool Tool;
 typedef struct _ToolInfo ToolInfo;
-typedef void (* ButtonPressFunc)   (Tool *, GdkEventButton *, gpointer);
-typedef void (* ButtonReleaseFunc) (Tool *, GdkEventButton *, gpointer);
-typedef void (* MotionFunc)        (Tool *, GdkEventMotion *, gpointer);
-typedef void (* ArrowKeysFunc)     (Tool *, GdkEventKey *, gpointer);
-typedef void (* CursorUpdateFunc)  (Tool *, GdkEventMotion *, gpointer);
+typedef void (* ButtonPressFunc)   (Tool *, GimpButtonEvent *, gpointer);
+typedef void (* ButtonReleaseFunc) (Tool *, GimpButtonEvent *, gpointer);
+typedef void (* MotionFunc)        (Tool *, GimpMotionEvent *, gpointer);
+typedef void (* ArrowKeysFunc)     (Tool *, GimpKeyEvent *, gpointer);
+typedef void (* CursorUpdateFunc)  (Tool *, GimpMotionEvent *, gpointer);
 typedef void (* ToolCtlFunc)       (Tool *, int, gpointer);
 
 
@@ -151,6 +190,6 @@ void     active_tool_control       (int, void *);
 
 
 /*  Standard member functions  */
-void     standard_arrow_keys_func  (Tool *, GdkEventKey *, gpointer);
+void     standard_arrow_keys_func  (Tool *, GimpKeyEvent *, gpointer);
 
 #endif  /*  __TOOLS_H__  */

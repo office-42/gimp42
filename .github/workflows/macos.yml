@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: macOS
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'COPYING']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+  HOMEBREW_NO_INSTALL_CLEANUP: '1'
+  HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: '1'
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          brew install meson ninja pkg-config gtk4 pango cairo glib gdk-pixbuf \
+            jpeg-turbo libpng libtiff ccache dylibbundler
+
+      - name: Restore ccache
+        uses: actions/cache@v6
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-macos-${{ github.sha }}
+          restore-keys: ccache-macos-
+
+      - name: Configure
+        run: |
+          export CC="ccache clang"
+          ccache --max-size=300M
+          meson setup builddir --prefix="$PWD/dist"
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Install
+        run: meson install -C builddir
+
+      - name: Bundle
+        run: |
+          if ! GIMP42_BUNDLE_VERBOSE=1 bash build-aux/bundle-macos.sh dist GIMP42.app > bundle.log 2>&1; then
+            tail -n 60 bundle.log
+            echo "::error title=bundle::$(tail -n 25 bundle.log | tr '\n' ' ' | cut -c1-1500)"
+            exit 1
+          fi
+          tail -n 5 bundle.log
+          ditto -c -k --keepParent GIMP42.app gimp42-macos.zip
+          ls -l gimp42-macos.zip
+
+      - name: Upload app
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gimp42-macos-app
+          path: gimp42-macos.zip
+          retention-days: 30

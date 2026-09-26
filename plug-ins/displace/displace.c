@@ -40,9 +40,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <unistd.h>
-#include <signal.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
 #include "libgimp/gimpui.h"
 
@@ -162,7 +160,7 @@ static DisplaceInterface dint =
 MAIN ()
 
 static void
-query ()
+query (void)
 {
   static GParamDef args[] =
   {
@@ -288,169 +286,113 @@ displace_dialog (GDrawable *drawable)
   GtkWidget *table;
   GtkWidget *entry;
   GtkWidget *option_menu;
-  GtkWidget *menu;
-  GSList *group = NULL;
-  gchar **argv;
   gchar buffer[32];
-  gint argc;
   gint use_wrap = (dvals.displace_type == WRAP);
   gint use_smear = (dvals.displace_type == SMEAR);
   gint use_black = (dvals.displace_type == BLACK);
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("displace");
-
-#if 0
-  printf("displace: pid = %d\n", (int)getpid());
-  kill(getpid(), SIGSTOP);
-#endif 
-
-  gtk_init (&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Displace");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) displace_close_callback,
-		      NULL);
+  gtk_init ();
+  dlg = gimp_dialog_new ("Displace");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (displace_close_callback), NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) displace_ok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (displace_ok_callback),
+			  dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  The main table  */
   frame = gtk_frame_new ("Displace Options");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
 
-  table = gtk_table_new (3, 3, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 5);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  table = gimp_table_new (3, 3, FALSE);
+  gimp_container_set_border_width (table, 5);
+  gtk_frame_set_child (GTK_FRAME (frame), table);
 
-  gtk_table_set_row_spacing (GTK_TABLE (table), 0, 10);
-  gtk_table_set_row_spacing (GTK_TABLE (table), 1, 10);
-  gtk_table_set_col_spacing (GTK_TABLE (table), 0, 10);
-  gtk_table_set_col_spacing (GTK_TABLE (table), 1, 10);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 10);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 10);
 
   /*  on_x, on_y  */
   toggle = gtk_check_button_new_with_label ("X Displacement: ");
-  gtk_table_attach (GTK_TABLE (table), toggle, 0, 1, 0, 1, GTK_FILL, GTK_FILL, 0, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) displace_x_toggle_update,
-		      &dvals.do_x);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), dvals.do_x);
-  gtk_widget_show (toggle);
+  gimp_table_attach (table, toggle, 0, 1, 0, 1, GIMP_FILL, GIMP_FILL, 0, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), dvals.do_x);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (displace_x_toggle_update), &dvals.do_x);
 
   toggle = gtk_check_button_new_with_label ("Y Displacement: ");
-  gtk_table_attach (GTK_TABLE (table), toggle, 0, 1, 1, 2, GTK_FILL, GTK_FILL, 0, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) displace_y_toggle_update,
-		      &dvals.do_y);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), dvals.do_y);
-  gtk_widget_show (toggle);
+  gimp_table_attach (table, toggle, 0, 1, 1, 2, GIMP_FILL, GIMP_FILL, 0, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), dvals.do_y);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (displace_y_toggle_update), &dvals.do_y);
 
   /*  amount_x, amount_y  */
   dint.amount_x = entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry, 1, 2, 0, 1, GTK_FILL, GTK_FILL, 0, 0);
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
-  sprintf (buffer, "%f", dvals.amount_x);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) displace_entry_callback,
-		      &dvals.amount_x);
-  
+  gimp_table_attach (table, entry, 1, 2, 0, 1, GIMP_FILL, GIMP_FILL, 0, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
+  gtk_editable_set_width_chars (GTK_EDITABLE (entry), 8);
+  g_ascii_formatd (buffer, sizeof (buffer), "%f", dvals.amount_x);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (displace_entry_callback), &dvals.amount_x);
   gtk_widget_set_sensitive (dint.amount_x, dvals.do_x);
-  gtk_widget_show (entry);
 
   dint.amount_y = entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry, 1, 2, 1, 2, GTK_FILL, GTK_FILL, 0, 0);
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
-  sprintf (buffer, "%f", dvals.amount_y);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) displace_entry_callback,
-		      &dvals.amount_y);
+  gimp_table_attach (table, entry, 1, 2, 1, 2, GIMP_FILL, GIMP_FILL, 0, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
+  gtk_editable_set_width_chars (GTK_EDITABLE (entry), 8);
+  g_ascii_formatd (buffer, sizeof (buffer), "%f", dvals.amount_y);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (displace_entry_callback), &dvals.amount_y);
   gtk_widget_set_sensitive (dint.amount_y, dvals.do_y);
-  gtk_widget_show (entry);
 
   /*  menu_x, menu_y  */
-  dint.menu_x = option_menu = gtk_option_menu_new ();
-  gtk_table_attach (GTK_TABLE (table), option_menu, 2, 3, 0, 1,
-		    GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  menu = gimp_drawable_menu_new (displace_map_constrain, displace_map_x_callback,
-				 drawable, dvals.displace_map_x);
-  gtk_option_menu_set_menu (GTK_OPTION_MENU (option_menu), menu);
+  dint.menu_x = option_menu =
+    gimp_drawable_menu_new (displace_map_constrain, displace_map_x_callback,
+			    drawable, dvals.displace_map_x);
+  gimp_table_attach (table, option_menu, 2, 3, 0, 1,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
   gtk_widget_set_sensitive (dint.menu_x, dvals.do_x);
-  gtk_widget_show (option_menu);
 
-  dint.menu_y = option_menu = gtk_option_menu_new ();
-  gtk_table_attach (GTK_TABLE (table), option_menu, 2, 3, 1, 2,
-		    GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  menu = gimp_drawable_menu_new (displace_map_constrain, displace_map_y_callback,
-				 drawable, dvals.displace_map_y);
-  gtk_option_menu_set_menu (GTK_OPTION_MENU (option_menu), menu);
+  dint.menu_y = option_menu =
+    gimp_drawable_menu_new (displace_map_constrain, displace_map_y_callback,
+			    drawable, dvals.displace_map_y);
+  gimp_table_attach (table, option_menu, 2, 3, 1, 2,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
   gtk_widget_set_sensitive (dint.menu_y, dvals.do_y);
-  gtk_widget_show (option_menu);
 
   /*  Displacement Type  */
-  toggle_hbox = gtk_hbox_new (FALSE, 10);
-  gtk_container_border_width (GTK_CONTAINER (toggle_hbox), 5);
-  gtk_table_attach (GTK_TABLE (table), toggle_hbox, 0, 3, 2, 3, GTK_FILL, GTK_FILL, 0, 0);
+  toggle_hbox = gimp_hbox_new (FALSE, 10);
+  gimp_container_set_border_width (toggle_hbox, 5);
+  gimp_table_attach (table, toggle_hbox, 0, 3, 2, 3, GIMP_FILL, GIMP_FILL, 0, 0);
 
   label = gtk_label_new ("On Edges: ");
-  gtk_box_pack_start (GTK_BOX (toggle_hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_box_append (GTK_BOX (toggle_hbox), label);
 
-  toggle = gtk_radio_button_new_with_label (group, "Wrap");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_hbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) displace_toggle_update,
-		      &use_wrap);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_wrap);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (NULL, "Wrap");
+  gtk_box_append (GTK_BOX (toggle_hbox), toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_wrap);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (displace_toggle_update), &use_wrap);
 
-  toggle = gtk_radio_button_new_with_label (group, "Smear");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_hbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) displace_toggle_update,
-		      &use_smear);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_smear);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (toggle, "Smear");
+  gtk_box_append (GTK_BOX (toggle_hbox), toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_smear);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (displace_toggle_update), &use_smear);
 
-  toggle = gtk_radio_button_new_with_label (group, "Black");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_hbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) displace_toggle_update,
-		      &use_black);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), use_black);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (toggle, "Black");
+  gtk_box_append (GTK_BOX (toggle_hbox), toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), use_black);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (displace_toggle_update), &use_black);
 
-  gtk_widget_show (toggle_hbox);
-  gtk_widget_show (table);
-  gtk_widget_show (frame);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   /*  determine displace type  */
   if (use_wrap)
@@ -807,7 +749,7 @@ static void
 displace_close_callback (GtkWidget *widget,
 			 gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -815,7 +757,7 @@ displace_ok_callback (GtkWidget *widget,
 		      gpointer   data)
 {
   dint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -826,7 +768,7 @@ displace_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -840,7 +782,7 @@ displace_x_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -859,7 +801,7 @@ displace_y_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -878,5 +820,5 @@ displace_entry_callback (GtkWidget *widget,
 
   text_val = (double *) data;
 
-  *text_val = atof (gtk_entry_get_text (GTK_ENTRY (widget)));
+  *text_val = g_ascii_strtod (gtk_editable_get_text (GTK_EDITABLE (widget)), NULL);
 }

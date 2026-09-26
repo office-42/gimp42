@@ -29,8 +29,10 @@ typedef void (*ColorSelectCallback) (int, int, int, ColorSelectState, void *);
 
 struct _ColorSelect {
   GtkWidget *shell;
-  GtkWidget *xy_color;
+  GtkWidget *xy_color;          /*  GimpPreviews holding the planes  */
   GtkWidget *z_color;
+  GtkWidget *xy_marker;         /*  drawing areas laid over them     */
+  GtkWidget *z_marker;
   GtkWidget *new_color;
   GtkWidget *orig_color;
   GtkWidget *toggles[6];
@@ -44,7 +46,6 @@ struct _ColorSelect {
   ColorSelectCallback callback;
   void *client_data;
   int wants_updates;
-  GdkGC *gc;
 };
 
 ColorSelectP color_select_new (int, int, int, ColorSelectCallback, void *, int);

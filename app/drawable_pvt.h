@@ -18,13 +18,13 @@
 #ifndef __DRAWABLE_PVT_H__
 #define __DRAWABLE_PVT_H__
 
-#include <gtk/gtkdata.h>
+#include <glib-object.h>
 #include "tile_manager.h"
 #include "temp_buf.h"
 
 struct _GimpDrawable
 {
-  GtkData data;
+  GInitiallyUnowned data;
 
   char *name;				/* name of drawable */
   TileManager *tiles;			/* tiles for drawable data */
@@ -46,9 +46,9 @@ struct _GimpDrawable
 
 struct _GimpDrawableClass
 {
-  GtkDataClass parent_class;
+  GInitiallyUnownedClass parent_class;
 
-  void (*invalidate_preview) (GtkObject *);
+  void (*invalidate_preview) (GimpDrawable *);
 };
 
 #endif /* __DRAWABLE_PVT_H__ */

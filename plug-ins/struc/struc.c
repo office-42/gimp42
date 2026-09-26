@@ -35,8 +35,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "struc.h"
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 /* --- Typedefs --- */
 typedef struct {
@@ -58,7 +59,7 @@ static gint struc_dialog (void);
 static void struc_close_callback (GtkWidget *widget, gpointer data);
 static void struc_ok_callback (GtkWidget *widget, gpointer data);
 static void struc_scale_update (GtkAdjustment *adjustment, gpointer data);
-static void struc_toggle_update (GtkWidget *widget, gint32 value);
+static void struc_toggle_update (GtkWidget *widget, gpointer data);
 static void strucpi (GDrawable *drawable);
 
 /* --- Variables --- */
@@ -207,67 +208,44 @@ static gint struc_dialog(void)
   GtkWidget *abox, *bbox, *cbox;
   GtkWidget *button, *label;
   GtkWidget *scale;
-  GtkObject *adjustment;
-  gchar	**argv;	
-  gint  argc;
+  GtkAdjustment *adjustment;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup("struc");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Struc");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_container_border_width (GTK_CONTAINER (dlg), 0);
-  gtk_signal_connect (GTK_OBJECT(dlg), "destroy",
-		     (GtkSignalFunc) struc_close_callback,
-		     NULL);
+  dlg = gimp_dialog_new ("Struc");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (struc_close_callback),
+		    NULL);
   /* Action area */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT(button), "clicked",
-		     (GtkSignalFunc) struc_ok_callback,
-		     dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show(button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (struc_ok_callback),
+			  dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /* Parameter settings */
-  abox = gtk_vbox_new (FALSE, 5); 
-  gtk_container_border_width (GTK_CONTAINER (abox), 5);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox),
-		      abox, FALSE, FALSE, 0);
+  abox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (abox, 5);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg),
+		       abox, FALSE, FALSE, 0);
 
   oframe = gtk_frame_new ("Filter options");
-  gtk_frame_set_shadow_type (GTK_FRAME (oframe), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start (GTK_BOX (abox),
-		     oframe, TRUE, TRUE, 0);
-  
-  bbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (bbox), 5);
-  gtk_container_add (GTK_CONTAINER (oframe), bbox);
+  gimp_box_pack_start (abox,
+		       oframe, TRUE, TRUE, 0);
+
+  bbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (bbox, 5);
+  gtk_frame_set_child (GTK_FRAME (oframe), bbox);
 
   /* Radio buttons */
   iframe = gtk_frame_new ("Direction");
-  gtk_frame_set_shadow_type (GTK_FRAME (iframe), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start (GTK_BOX (bbox),
-		     iframe, FALSE, FALSE, 0);
+  gimp_box_pack_start (bbox,
+		       iframe, FALSE, FALSE, 0);
 
-  cbox= gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (cbox), 5);
-  gtk_container_add (GTK_CONTAINER (iframe), cbox);
-  
+  cbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (cbox, 5);
+  gtk_frame_set_child (GTK_FRAME (iframe), cbox);
+
   {
     int   i;
     char * name[4]= {"Top-right", "Top-left", "Bottom-left", "Bottom-right"};
@@ -275,50 +253,34 @@ static gint struc_dialog(void)
     button = NULL;
     for (i=0; i < 4; i++)
       {
-	button = gtk_radio_button_new_with_label (
-           (button==NULL) ? NULL :
-	      gtk_radio_button_group (GTK_RADIO_BUTTON (button)), name[i]);
-	gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), 
-				    (svals.direction==i));
+	button = gimp_radio_button_new (button, name[i]);
+	gtk_check_button_set_active (GTK_CHECK_BUTTON (button),
+				     (svals.direction==i));
 
-	gtk_signal_connect (GTK_OBJECT (button), "toggled",
-			    (GtkSignalFunc) struc_toggle_update,
-			    (gpointer) i);
+	g_signal_connect (button, "toggled",
+			  G_CALLBACK (struc_toggle_update),
+			  GINT_TO_POINTER (i));
 
-	gtk_box_pack_start (GTK_BOX (cbox), button, FALSE, FALSE, 0);
-	gtk_widget_show (button);
+	gtk_box_append (GTK_BOX (cbox), button);
       }
   }
 
-  gtk_widget_show(cbox);
-  gtk_widget_show(iframe);
-
   /* Horizontal scale */
-  label=gtk_label_new ("Depth");
-  gtk_misc_set_alignment (GTK_MISC(label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX(bbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  label = gtk_label_new ("Depth");
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gtk_box_append (GTK_BOX (bbox), label);
 
   adjustment = gtk_adjustment_new (svals.depth, 1, 50, 1, 1, 1);
-  gtk_signal_connect (adjustment, "value_changed",
-		     (GtkSignalFunc) struc_scale_update,
-		     &(svals.depth));
-  scale= gtk_hscale_new (GTK_ADJUSTMENT (adjustment));
-  gtk_widget_set_usize (GTK_WIDGET (scale), 150, 30);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_scale_set_digits (GTK_SCALE (scale), 0);
-  gtk_scale_set_draw_value (GTK_SCALE (scale), TRUE);
-  gtk_box_pack_start (GTK_BOX (bbox), scale, FALSE, FALSE,0);
-  gtk_widget_show (scale );
+  g_signal_connect (adjustment, "value-changed",
+		    G_CALLBACK (struc_scale_update),
+		    &(svals.depth));
+  scale = gimp_hscale_new (adjustment, 0);
+  gtk_widget_set_size_request (scale, 150, 30);
+  gtk_box_append (GTK_BOX (bbox), scale);
 
-  gtk_widget_show(bbox);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_widget_show(oframe);
-  gtk_widget_show(abox);
-  gtk_widget_show(dlg);
-
-  gtk_main();  
-  gdk_flush();
+  gimp_main_loop_run ();
 
   return s_int.run;
 }
@@ -326,25 +288,25 @@ static gint struc_dialog(void)
 /* Interface functions */
 static void struc_close_callback (GtkWidget *widget, gpointer data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void struc_ok_callback (GtkWidget *widget, gpointer data)
 {
   s_int.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void struc_scale_update (GtkAdjustment *adjustment, gpointer data)
 {
   gint *dptr = (gint*) data;
-  *dptr = (gint) adjustment->value;
+  *dptr = (gint) gtk_adjustment_get_value (adjustment);
 }
 
-static void struc_toggle_update (GtkWidget *widget, gint32 value)
+static void struc_toggle_update (GtkWidget *widget, gpointer data)
 {
-   if (GTK_TOGGLE_BUTTON (widget)->active)
-     svals.direction = value;
+   if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
+     svals.direction = GPOINTER_TO_INT (data);
 }
 
 /* Filter function */

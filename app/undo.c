@@ -318,7 +318,8 @@ pop_stack (GImage  *gimage,
 	  if (gdisp != NULL) {
 	    if (gdisp->disp_xoffset || gdisp->disp_yoffset)
 	      {
-		gdk_window_get_size (gdisp->canvas->window, &x, &y);
+		x = gtk_widget_get_width (gdisp->canvas);
+		y = gtk_widget_get_height (gdisp->canvas);
 		if (gdisp->disp_yoffset)
 		  {
 		    gdisplay_expose_area (gdisp, 0, 0, gdisp->disp_width,

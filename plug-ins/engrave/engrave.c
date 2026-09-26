@@ -25,8 +25,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 /* Some useful macros */
 
@@ -70,7 +71,7 @@ static void      engrave_scale_update    (GtkAdjustment *adjustment,
 static void      engrave_entry_update    (GtkWidget *widget,
 					  gint *value);
 static void      dialog_create_value     (char *title,
-					  GtkTable *table,
+					  GtkWidget *table,
 					  int row,
 					  gint *value,
 					  int left,
@@ -202,73 +203,48 @@ run(gchar * name,
 
 
 static gint
-engrave_dialog()
+engrave_dialog(void)
 {
     GtkWidget *dlg;
     GtkWidget *frame;
     GtkWidget *table;
     GtkWidget *button;
     GtkWidget *toggle;
-    gchar **argv;
-    gint argc;
 
-    argc = 1;
-    argv = g_new(gchar *, 1);
-    argv[0] = g_strdup("engrave");
+    gtk_init();
 
-    gtk_init(&argc, &argv);
-    gtk_rc_parse(gimp_gtkrc());
-
-    dlg = gtk_dialog_new();
-    gtk_window_set_title(GTK_WINDOW(dlg), "Engrave");
-    gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-    gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-		       (GtkSignalFunc) engrave_close_callback,
-		       NULL);
+    dlg = gimp_dialog_new("Engrave");
+    g_signal_connect(dlg, "destroy",
+		     G_CALLBACK(engrave_close_callback),
+		     NULL);
 
     /*  Action area  */
-    button = gtk_button_new_with_label("OK");
-    GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-    gtk_signal_connect(GTK_OBJECT(button), "clicked",
-		       (GtkSignalFunc) engrave_ok_callback,
-		       dlg);
-    gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-    gtk_widget_grab_default(button);
-    gtk_widget_show(button);
-
-    button = gtk_button_new_with_label("Cancel");
-    GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-    gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-			      (GtkSignalFunc) gtk_widget_destroy,
-			      GTK_OBJECT(dlg));
-    gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-    gtk_widget_show(button);
+    gimp_dialog_add_button(dlg, "OK", G_CALLBACK(engrave_ok_callback),
+			   dlg, TRUE);
+    button = gimp_dialog_add_button(dlg, "Cancel", NULL, NULL, FALSE);
+    g_signal_connect_swapped(button, "clicked",
+			     G_CALLBACK(gtk_window_destroy), dlg);
 
     /*  parameter settings  */
     frame = gtk_frame_new("Parameter Settings");
-    gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-    gtk_container_border_width(GTK_CONTAINER(frame), 10);
-    gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), frame, TRUE, TRUE, 0);
-    table = gtk_table_new(2, 3, FALSE);
-    gtk_container_border_width(GTK_CONTAINER(table), 10);
-    gtk_container_add(GTK_CONTAINER(frame), table);
+    gimp_container_set_border_width(frame, 10);
+    gimp_box_pack_start(gimp_dialog_get_vbox(dlg), frame, TRUE, TRUE, 0);
+    table = gimp_table_new(2, 3, FALSE);
+    gimp_container_set_border_width(table, 10);
+    gtk_frame_set_child(GTK_FRAME(frame), table);
 
     toggle = gtk_check_button_new_with_label ("Limit line width");
-    gtk_table_attach (GTK_TABLE (table), toggle, 0, 2, 0, 1, GTK_FILL, 0, 0, 0);
-    gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-			(GtkSignalFunc) engrave_toggle_update,
-			&pvals.limit);
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), pvals.limit);
-    gtk_widget_show (toggle);
+    gimp_table_attach (table, toggle, 0, 2, 0, 1, GIMP_FILL, 0, 0, 0);
+    gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), pvals.limit);
+    g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (engrave_toggle_update),
+		      &pvals.limit);
 
-    dialog_create_value("Height", GTK_TABLE(table), 1, &pvals.height, 2.0, 16.0);
+    dialog_create_value("Height", table, 1, &pvals.height, 2.0, 16.0);
 
-    gtk_widget_show(frame);
-    gtk_widget_show(table);
-    gtk_widget_show(dlg);
+    gtk_window_present(GTK_WINDOW(dlg));
 
-    gtk_main();
-    gdk_flush();
+    gimp_main_loop_run();
 
     return pint.run;
 }
@@ -279,7 +255,7 @@ static void
 engrave_close_callback(GtkWidget * widget,
 		       gpointer data)
 {
-    gtk_main_quit();
+    gimp_main_loop_quit();
 }
 
 static void
@@ -287,7 +263,7 @@ engrave_ok_callback(GtkWidget * widget,
 		    gpointer data)
 {
     pint.run = TRUE;
-    gtk_widget_destroy(GTK_WIDGET(data));
+    gtk_window_destroy(GTK_WINDOW(data));
 }
 
 static void
@@ -549,7 +525,7 @@ engrave_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -560,47 +536,43 @@ engrave_toggle_update (GtkWidget *widget,
  * Thanks to Quartic for these.
  */
 static void
-dialog_create_value(char *title, GtkTable *table, int row, gint *value, int left, int right)
+dialog_create_value(char *title, GtkWidget *table, int row, gint *value, int left, int right)
 {
     GtkWidget *label;
     GtkWidget *scale;
     GtkWidget *entry;
-    GtkObject *scale_data;
+    GtkAdjustment *scale_data;
     char       buf[256];
-    
+
     label = gtk_label_new(title);
-    gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
-    gtk_table_attach(table, label, 0, 1, row, row + 1, GTK_FILL, GTK_FILL, 4, 0);
-    gtk_widget_show(label);
-    
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+    gimp_table_attach(table, label, 0, 1, row, row + 1, GIMP_FILL, GIMP_FILL, 4, 0);
+
     scale_data = gtk_adjustment_new(*value, left, right,
 				    1.0,
 				    1.0,
 				    0.0);
-    
-    gtk_signal_connect(GTK_OBJECT(scale_data), "value_changed",
-		       (GtkSignalFunc) engrave_scale_update,
-		       value);
-    
-    scale = gtk_hscale_new(GTK_ADJUSTMENT(scale_data));
-    gtk_widget_set_usize(scale, SCALE_WIDTH, 0);
-    gtk_table_attach(table, scale, 1, 2, row, row + 1, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0);
+
+    g_signal_connect(scale_data, "value-changed",
+		     G_CALLBACK(engrave_scale_update),
+		     value);
+
+    scale = gtk_scale_new(GTK_ORIENTATION_HORIZONTAL, scale_data);
+    gtk_widget_set_size_request(scale, SCALE_WIDTH, -1);
+    gimp_table_attach(table, scale, 1, 2, row, row + 1, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0);
     gtk_scale_set_draw_value(GTK_SCALE(scale), FALSE);
     gtk_scale_set_digits(GTK_SCALE(scale), 0);
-    gtk_range_set_update_policy(GTK_RANGE(scale), GTK_UPDATE_CONTINUOUS);
-    gtk_widget_show(scale);
-    
+
     entry = gtk_entry_new();
-    gtk_object_set_user_data(GTK_OBJECT(entry), scale_data);
-    gtk_object_set_user_data(scale_data, entry);
-    gtk_widget_set_usize(entry, ENTRY_WIDTH, 0);
+    g_object_set_data(G_OBJECT(entry), "user_data", scale_data);
+    g_object_set_data(G_OBJECT(scale_data), "user_data", entry);
+    gtk_widget_set_size_request(entry, ENTRY_WIDTH, -1);
     sprintf(buf, "%d", *value);
-    gtk_entry_set_text(GTK_ENTRY(entry), buf);
-    gtk_signal_connect(GTK_OBJECT(entry), "changed",
-		       (GtkSignalFunc) engrave_entry_update,
-		       value);
-    gtk_table_attach(GTK_TABLE(table), entry, 2, 3, row, row + 1, GTK_FILL, GTK_FILL, 4, 0);
-    gtk_widget_show(entry);
+    gtk_editable_set_text(GTK_EDITABLE(entry), buf);
+    g_signal_connect(entry, "changed",
+		     G_CALLBACK(engrave_entry_update),
+		     value);
+    gimp_table_attach(table, entry, 2, 3, row, row + 1, GIMP_FILL, GIMP_FILL, 4, 0);
 }
 
 static void
@@ -608,21 +580,19 @@ engrave_entry_update(GtkWidget *widget, gint *value)
 {
     GtkAdjustment *adjustment;
     gint        new_value;
-    
-    new_value = atoi(gtk_entry_get_text(GTK_ENTRY(widget)));
-    
+
+    new_value = atoi(gtk_editable_get_text(GTK_EDITABLE(widget)));
+
     if (*value != new_value) {
-	adjustment = gtk_object_get_user_data(GTK_OBJECT(widget));
-	
-	if ((new_value >= adjustment->lower) &&
-	    (new_value <= adjustment->upper)) {
+	adjustment = g_object_get_data(G_OBJECT(widget), "user_data");
+
+	if ((new_value >= gtk_adjustment_get_lower(adjustment)) &&
+	    (new_value <= gtk_adjustment_get_upper(adjustment))) {
 	    *value            = new_value;
-	    adjustment->value = new_value;
-	    
-	    gtk_signal_emit_by_name(GTK_OBJECT(adjustment), "value_changed");
+	    gtk_adjustment_set_value(adjustment, new_value);
 	} /* if */
     } /* if */
-}	
+}
 
 static void
 engrave_scale_update (GtkAdjustment *adjustment, gint *value)
@@ -630,14 +600,17 @@ engrave_scale_update (GtkAdjustment *adjustment, gint *value)
     GtkWidget *entry;
     char       buf[256];
 
-    if (*value != adjustment->value) {
-	*value = adjustment->value;
-	
-	entry = gtk_object_get_user_data(GTK_OBJECT(adjustment));
+    if (*value != gtk_adjustment_get_value(adjustment)) {
+	*value = gtk_adjustment_get_value(adjustment);
+
+	entry = g_object_get_data(G_OBJECT(adjustment), "user_data");
 	sprintf(buf, "%d", *value);
-	
-	gtk_signal_handler_block_by_data(GTK_OBJECT(entry), value);
-	gtk_entry_set_text(GTK_ENTRY(entry), buf);
-	gtk_signal_handler_unblock_by_data(GTK_OBJECT(entry), value);
+
+	g_signal_handlers_block_matched(entry, G_SIGNAL_MATCH_DATA,
+					0, 0, NULL, NULL, value);
+	gtk_editable_set_text(GTK_EDITABLE(entry), buf);
+	g_signal_handlers_unblock_matched(entry, G_SIGNAL_MATCH_DATA,
+					  0, 0, NULL, NULL, value);
     } /* if */
 }
+

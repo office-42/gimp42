@@ -123,7 +123,7 @@ static int subsample[5][5][9] = {
 void
 paint_core_button_press (tool, bevent, gdisp_ptr)
      Tool *tool;
-     GdkEventButton *bevent;
+     GimpButtonEvent *bevent;
      gpointer gdisp_ptr;
 {
   PaintCore * paint_core;
@@ -165,19 +165,11 @@ paint_core_button_press (tool, bevent, gdisp_ptr)
   tool->gdisp_ptr = gdisp_ptr;
   tool->paused_count = 0;
 
-  /*  pause the current selection and grab the pointer  */
+  /*  pause the current selection  (no pointer grab is needed: the
+   *  canvas' gestures keep delivering motion while a button is held)
+   */
   gdisplays_selection_visibility (gdisp->gimage->ID, SelectionPause);
 
-  /* add motion memory if you press mod1 first */
-  if (bevent->state & GDK_MOD1_MASK)
-    gdk_pointer_grab (gdisp->canvas->window, FALSE,
-		      GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-		      NULL, NULL, bevent->time);
-  else
-    gdk_pointer_grab (gdisp->canvas->window, FALSE,
-		      GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-		      NULL, NULL, bevent->time);
-  
   /*  Let the specific painting function initialize itself  */
   (* paint_core->paint_func) (paint_core, drawable, INIT_PAINT);
 
@@ -197,22 +189,17 @@ paint_core_button_press (tool, bevent, gdisp_ptr)
 void
 paint_core_button_release (tool, bevent, gdisp_ptr)
      Tool *tool;
-     GdkEventButton *bevent;
+     GimpButtonEvent *bevent;
      gpointer gdisp_ptr;
 {
   GDisplay * gdisp;
-  GImage * gimage;
   PaintCore * paint_core;
 
   gdisp = (GDisplay *) gdisp_ptr;
-  gimage = gdisp->gimage;
   paint_core = (PaintCore *) tool->private;
 
-  /*  resume the current selection and ungrab the pointer  */
+  /*  resume the current selection  */
   gdisplays_selection_visibility (gdisp->gimage->ID, SelectionResume);
-
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
 
   /*  Let the specific painting function finish up  */
   (* paint_core->paint_func) (paint_core, gimage_active_drawable (gdisp->gimage), FINISH_PAINT);
@@ -227,7 +214,7 @@ paint_core_button_release (tool, bevent, gdisp_ptr)
 void
 paint_core_motion (tool, mevent, gdisp_ptr)
      Tool *tool;
-     GdkEventMotion *mevent;
+     GimpMotionEvent *mevent;
      gpointer gdisp_ptr;
 {
   GDisplay * gdisp;
@@ -251,12 +238,12 @@ paint_core_motion (tool, mevent, gdisp_ptr)
 void
 paint_core_cursor_update (tool, mevent, gdisp_ptr)
      Tool *tool;
-     GdkEventMotion *mevent;
+     GimpMotionEvent *mevent;
      gpointer gdisp_ptr;
 {
   GDisplay *gdisp;
   Layer *layer;
-  GdkCursorType ctype = GDK_TOP_LEFT_ARROW;
+  GimpCursorType ctype = GIMP_CURSOR_TOP_LEFT_ARROW;
   int x, y;
 
   gdisp = (GDisplay *) gdisp_ptr;
@@ -274,9 +261,9 @@ paint_core_cursor_update (tool, mevent, gdisp_ptr)
 	 *  if so, is cursor inside?
 	 */
 	if (gimage_mask_is_empty (gdisp->gimage))
-	  ctype = GDK_PENCIL;
+	  ctype = GIMP_CURSOR_PENCIL;
 	else if (gimage_mask_value (gdisp->gimage, x, y))
-	  ctype = GDK_PENCIL;
+	  ctype = GIMP_CURSOR_PENCIL;
       }
     }
   gdisplay_install_tool_cursor (gdisp, ctype);

@@ -32,11 +32,9 @@
 int active_color = 0;
 
 /*  Static variables  */
-static GdkGC *color_area_gc = NULL;
 static GtkWidget *color_area = NULL;
-static GdkPixmap *color_area_pixmap = NULL;
-static GdkPixmap *default_pixmap = NULL;
-static GdkPixmap *swap_pixmap = NULL;
+static GdkTexture *default_texture = NULL;
+static GdkTexture *swap_texture = NULL;
 static ColorSelectP color_select = NULL;
 static int color_select_active = 0;
 static int edit_color;
@@ -51,7 +49,8 @@ color_area_target (int x,
   int rect_w, rect_h;
   int width, height;
 
-  gdk_window_get_size (color_area_pixmap, &width, &height);
+  width = gtk_widget_get_width (color_area);
+  height = gtk_widget_get_height (color_area);
 
   rect_w = width * 0.65;
   rect_h = height * 0.65;
@@ -73,67 +72,97 @@ color_area_target (int x,
     return -1;
 }
 
+/*  A raised (out) or sunken (in) bevel around a swatch.  */
 static void
-color_area_draw (void)
+color_area_draw_shadow (cairo_t *cr,
+			gboolean sunken,
+			int      x,
+			int      y,
+			int      w,
+			int      h)
 {
-  GdkColor *win_bg;
-  GdkColor fg, bg, bd;
-  int rect_w, rect_h;
-  int width, height;
-  int def_width, def_height;
-  int swap_width, swap_height;
+  double light = sunken ? 0.3 : 1.0;
+  double dark  = sunken ? 1.0 : 0.3;
 
-  if (!color_area_pixmap)     /* we haven't gotten initial expose yet,
-                               * no point in drawing anything */
+  cairo_set_line_width (cr, 1.0);
+
+  cairo_set_source_rgb (cr, light, light, light);
+  cairo_move_to (cr, x + 0.5, y + h - 0.5);
+  cairo_line_to (cr, x + 0.5, y + 0.5);
+  cairo_line_to (cr, x + w - 0.5, y + 0.5);
+  cairo_stroke (cr);
+
+  cairo_set_source_rgb (cr, dark, dark, dark);
+  cairo_move_to (cr, x + w - 0.5, y + 0.5);
+  cairo_line_to (cr, x + w - 0.5, y + h - 0.5);
+  cairo_line_to (cr, x + 0.5, y + h - 0.5);
+  cairo_stroke (cr);
+}
+
+static void
+color_area_draw_texture (cairo_t    *cr,
+			 GdkTexture *texture,
+			 int         x,
+			 int         y)
+{
+  cairo_surface_t *surface;
+  int w, h;
+
+  if (!texture)
     return;
 
-  gdk_window_get_size (color_area_pixmap, &width, &height);
+  w = gdk_texture_get_width (texture);
+  h = gdk_texture_get_height (texture);
+  surface = cairo_image_surface_create (CAIRO_FORMAT_ARGB32, w, h);
+  gdk_texture_download (texture, cairo_image_surface_get_data (surface),
+			cairo_image_surface_get_stride (surface));
+  cairo_surface_mark_dirty (surface);
 
-  win_bg = &(color_area->style->bg[GTK_STATE_NORMAL]);
-  fg.pixel = foreground_pixel;
-  bg.pixel = background_pixel;
-  bd.pixel = g_black_pixel;
+  cairo_set_source_surface (cr, surface, x, y);
+  cairo_paint (cr);
+  cairo_surface_destroy (surface);
+}
+
+static void
+color_area_draw_func (GtkDrawingArea *area,
+		      cairo_t        *cr,
+		      int             width,
+		      int             height,
+		      gpointer        data)
+{
+  unsigned char r, g, b;
+  int rect_w, rect_h;
 
   rect_w = width * 0.65;
   rect_h = height * 0.65;
 
-  gdk_gc_set_foreground (color_area_gc, win_bg);
-  gdk_draw_rectangle (color_area_pixmap, color_area_gc, 1,
-		      0, 0, width, height);
+  palette_get_background (&r, &g, &b);
+  cairo_set_source_rgb (cr, r / 255.0, g / 255.0, b / 255.0);
+  cairo_rectangle (cr, (width - rect_w), (height - rect_h), rect_w, rect_h);
+  cairo_fill (cr);
+  color_area_draw_shadow (cr, active_color != FOREGROUND,
+			  (width - rect_w), (height - rect_h), rect_w, rect_h);
 
-  gdk_gc_set_foreground (color_area_gc, &bg);
-  gdk_draw_rectangle (color_area_pixmap, color_area_gc, 1,
-		      (width - rect_w), (height - rect_h), rect_w, rect_h);
+  palette_get_foreground (&r, &g, &b);
+  cairo_set_source_rgb (cr, r / 255.0, g / 255.0, b / 255.0);
+  cairo_rectangle (cr, 0, 0, rect_w, rect_h);
+  cairo_fill (cr);
+  color_area_draw_shadow (cr, active_color == FOREGROUND,
+			  0, 0, rect_w, rect_h);
 
-  if (active_color == FOREGROUND)
-    gtk_draw_shadow (color_area->style, color_area_pixmap, GTK_STATE_NORMAL, GTK_SHADOW_OUT,
-		     (width - rect_w), (height - rect_h), rect_w, rect_h);
-  else
-    gtk_draw_shadow (color_area->style, color_area_pixmap, GTK_STATE_NORMAL, GTK_SHADOW_IN,
-		     (width - rect_w), (height - rect_h), rect_w, rect_h);
+  if (default_texture)
+    color_area_draw_texture (cr, default_texture, 0,
+			     height - gdk_texture_get_height (default_texture));
+  if (swap_texture)
+    color_area_draw_texture (cr, swap_texture,
+			     width - gdk_texture_get_width (swap_texture), 0);
+}
 
-  gdk_gc_set_foreground (color_area_gc, &fg);
-  gdk_draw_rectangle (color_area_pixmap, color_area_gc, 1,
-		      0, 0, rect_w, rect_h);
-
-  if (active_color == FOREGROUND)
-    gtk_draw_shadow (color_area->style, color_area_pixmap, GTK_STATE_NORMAL, GTK_SHADOW_IN,
-		     0, 0, rect_w, rect_h);
-  else
-    gtk_draw_shadow (color_area->style, color_area_pixmap, GTK_STATE_NORMAL, GTK_SHADOW_OUT,
-		     0, 0, rect_w, rect_h);
-
-
-  gdk_window_get_size (default_pixmap, &def_width, &def_height);
-  gdk_draw_pixmap (color_area_pixmap, color_area_gc, default_pixmap,
-		   0, 0, 0, height - def_height, def_width, def_height);
-
-  gdk_window_get_size (swap_pixmap, &swap_width, &swap_height);
-  gdk_draw_pixmap (color_area_pixmap, color_area_gc, swap_pixmap,
-		   0, 0, width - swap_width, 0, swap_width, swap_height);
-
-  gdk_draw_pixmap (color_area->window, color_area_gc, color_area_pixmap,
-		   0, 0, 0, 0, width, height);
+static void
+color_area_draw (void)
+{
+  if (color_area)
+    gtk_widget_queue_draw (color_area);
 }
 
 static void
@@ -199,85 +228,59 @@ color_area_edit (void)
     }
 }
 
-static gint
-color_area_events (GtkWidget *widget,
-		   GdkEvent  *event)
+static void
+color_area_pressed (GtkGestureClick *gesture,
+		    int              n_press,
+		    double           x,
+		    double           y,
+		    gpointer         data)
 {
-  GdkEventButton *bevent;
   int target;
 
-  switch (event->type)
+  switch ((target = color_area_target (x, y)))
     {
-    case GDK_CONFIGURE:
-      if (color_area_pixmap)
-	gdk_pixmap_unref (color_area_pixmap);
-
-      color_area_pixmap = gdk_pixmap_new (widget->window,
-					  widget->allocation.width,
-					  widget->allocation.height, -1);
-
-      break;
-
-    case GDK_EXPOSE:
-      if (GTK_WIDGET_DRAWABLE (widget))
+    case FORE_AREA:
+    case BACK_AREA:
+      if (target == active_color)
+	color_area_edit ();
+      else
 	{
-	  if (!color_area_gc)
-	    color_area_gc = gdk_gc_new (widget->window);
-
+	  active_color = target;
 	  color_area_draw ();
 	}
       break;
-
-    case GDK_BUTTON_PRESS:
-      bevent = (GdkEventButton *) event;
-
-      if (bevent->button == 1)
-	{
-	  switch ((target = color_area_target (bevent->x, bevent->y)))
-	    {
-	    case FORE_AREA:
-	    case BACK_AREA:
-	      if (target == active_color)
-		color_area_edit ();
-	      else
-		{
-		  active_color = target;
-		  color_area_draw ();
-		}
-	      break;
-	    case SWAP_AREA:
-	      palette_swap_colors();
-	      color_area_draw ();
-	      break;
-	    case DEF_AREA:
-	      palette_set_default_colors();
-	      color_area_draw ();
-	      break;
-	    }
-	}
+    case SWAP_AREA:
+      palette_swap_colors();
+      color_area_draw ();
       break;
-
-    default:
+    case DEF_AREA:
+      palette_set_default_colors();
+      color_area_draw ();
       break;
     }
-
-  return FALSE;
 }
 
 GtkWidget *
-color_area_create (int        width,
-		   int        height,
-		   GdkPixmap *default_pmap,
-		   GdkPixmap *swap_pmap)
+color_area_create (int         width,
+		   int         height,
+		   GdkTexture *default_tex,
+		   GdkTexture *swap_tex)
 {
+  GtkGesture *click;
+
   color_area = gtk_drawing_area_new ();
-  gtk_drawing_area_size (GTK_DRAWING_AREA (color_area), width, height);
-  gtk_widget_set_events (color_area, GDK_EXPOSURE_MASK | GDK_BUTTON_PRESS_MASK);
-  gtk_signal_connect (GTK_OBJECT (color_area), "event",
-		      (GtkSignalFunc) color_area_events,
-		      NULL);
-  default_pixmap = default_pmap;
-  swap_pixmap    = swap_pmap;
+  gtk_drawing_area_set_content_width (GTK_DRAWING_AREA (color_area), width);
+  gtk_drawing_area_set_content_height (GTK_DRAWING_AREA (color_area), height);
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (color_area),
+				  color_area_draw_func, NULL, NULL);
+
+  click = gtk_gesture_click_new ();
+  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (click), 1);
+  g_signal_connect (click, "pressed", G_CALLBACK (color_area_pressed), NULL);
+  gtk_widget_add_controller (color_area, GTK_EVENT_CONTROLLER (click));
+
+  default_texture = default_tex;
+  swap_texture    = swap_tex;
 
   return color_area;
 }

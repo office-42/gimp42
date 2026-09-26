@@ -3,10 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/param.h>
 #include <sys/types.h>
-#include <netinet/in.h>
-#include <unistd.h>
 #include <errno.h>
 
 #include <glib.h>
@@ -2145,7 +2142,7 @@ xcf_read_int32 (FILE     *fp,
 
       while (count--)
         {
-          *data = ntohl (*data);
+          *data = g_ntohl (*data);
           data++;
         }
     }
@@ -2213,7 +2210,7 @@ xcf_write_int32 (FILE     *fp,
     {
       for (i = 0; i < count; i++)
         {
-          tmp = htonl (data[i]);
+          tmp = g_htonl (data[i]);
           xcf_write_int8 (fp, (guint8*) &tmp, 4);
         }
     }

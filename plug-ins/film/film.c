@@ -36,8 +36,9 @@ static char ident[] = "@(#) GIMP Film plug-in v1.03 20-Dec-97";
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 /* Maximum number of pictures per film */
 #define MAX_FILM_PICTURES 64
@@ -78,7 +79,7 @@ typedef struct {
 typedef struct
 {
   GtkWidget *activate;   /* The button that activates the color sel. dialog */
-  GtkWidget *colselect;  /* The colour selection dialog itself */
+  GtkWidget *colselect;  /* Unused (the colour dialog is asynchronous) */
   GtkWidget *preview;    /* The colour preview */
   unsigned char color[3];/* The selected colour */
 } CSEL;
@@ -135,6 +136,7 @@ static void      add_color_button (int csel_index, int tab_index,
 
 static void      add_list_item_callback (GtkWidget *widget, GtkWidget *list);
 static void      del_list_item_callback (GtkWidget *widget, GtkWidget *list);
+static GtkWidget *image_list_item_new (gint32 image_ID);
 
 static GtkWidget *add_image_list (int add_box_flag, int n, gint32 *image_id,
                                   GtkWidget *frame);
@@ -150,9 +152,7 @@ static void      numbering_toggle_update (GtkWidget *widget,
                                       gpointer data);
 static void      keepheight_toggle_update (GtkWidget *widget,
                                       gpointer data);
-static void      color_select_ok_callback (GtkWidget *widget,
-                                      gpointer data);
-static void      color_select_cancel_callback (GtkWidget *widget,
+static void      color_select_ok_callback (const guchar *rgb,
                                       gpointer data);
 static void      color_preview_show (GtkWidget *widget,
                                      unsigned char *color);
@@ -208,7 +208,7 @@ static GRunModeType run_mode;
 MAIN ()
 
 static void
-query ()
+query (void)
 {
   static GParamDef args[] =
   {
@@ -1018,17 +1018,15 @@ add_label_with_entry (char *label_text,
  GtkWidget *entry;
 
  label = gtk_label_new (label_text);
- gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
- gtk_table_attach (GTK_TABLE (table), label, 0, 1, tab_index, tab_index+1,
-                   GTK_FILL, GTK_FILL, 0, 0);
- gtk_widget_show (label);
+ gimp_misc_set_alignment (label, 0.0, 0.5);
+ gimp_table_attach (table, label, 0, 1, tab_index, tab_index+1,
+                   GIMP_FILL, GIMP_FILL, 0, 0);
 
  entry = gtk_entry_new ();
- gtk_widget_set_usize (entry, 60, 0);
- gtk_entry_set_text (GTK_ENTRY (entry), entry_text);
- gtk_table_attach (GTK_TABLE (table), entry, 1, 2, tab_index, tab_index+1,
+ gtk_widget_set_size_request (entry, 60, -1);
+ gtk_editable_set_text (GTK_EDITABLE (entry), entry_text);
+ gimp_table_attach (table, entry, 1, 2, tab_index, tab_index+1,
                    0, 0, 0, 0);
- gtk_widget_show (entry);
 
  return (entry);
 }
@@ -1045,30 +1043,27 @@ add_color_button (int csel_index,
  GtkWidget *preview;
 
  label = gtk_label_new ("Color:");
- gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
- gtk_table_attach (GTK_TABLE (table), label, 0, 1, tab_index, tab_index+1,
-                   GTK_FILL, GTK_FILL, 0, 0);
- gtk_widget_show (label);
+ gimp_misc_set_alignment (label, 0.0, 0.5);
+ gimp_table_attach (table, label, 0, 1, tab_index, tab_index+1,
+                   GIMP_FILL, GIMP_FILL, 0, 0);
 
  button = filmint.csel[csel_index].activate = gtk_button_new ();
 
  memcpy (&(filmint.csel[csel_index].color[0]),
          (csel_index == 0) ? filmvals.film_color : filmvals.number_color, 3);
 
- preview = filmint.csel[csel_index].preview = gtk_preview_new(GTK_PREVIEW_COLOR);
- gtk_preview_size (GTK_PREVIEW (preview), filmint.prv_width,
+ preview = filmint.csel[csel_index].preview = gimp_preview_new (GIMP_PREVIEW_COLOR);
+ gimp_preview_size (GIMP_PREVIEW (preview), filmint.prv_width,
                    filmint.prv_height);
- gtk_container_add (GTK_CONTAINER (button), preview);
- gtk_widget_show (preview);
+ gimp_container_add (button, preview);
 
  color_preview_show (preview, &(filmint.csel[csel_index].color[0]));
 
- gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                     (GtkSignalFunc) film_color_button_callback,
-                     (gpointer)csel_index);
- gtk_table_attach (GTK_TABLE (table), button, 1, 2, tab_index, tab_index+1,
+ g_signal_connect (button, "clicked",
+                     G_CALLBACK (film_color_button_callback),
+                     GINT_TO_POINTER (csel_index));
+ gimp_table_attach (table, button, 1, 2, tab_index, tab_index+1,
                    0, 0, 0, 0);
- gtk_widget_show (button);
 }
 
 
@@ -1082,21 +1077,20 @@ add_list_item_callback (GtkWidget *widget,
  GtkWidget *list_item;
  gint32 image_ID;
 
- tmp_list = GTK_LIST (list)->selection;
+ GList *selection;
 
- while (tmp_list)
+ selection = gtk_list_box_get_selected_rows (GTK_LIST_BOX (list));
+
+ for (tmp_list = selection; tmp_list; tmp_list = tmp_list->next)
  {
    if ((label = (GtkWidget *)tmp_list->data) != NULL)
    {
-     image_ID = (gint32)gtk_object_get_user_data (GTK_OBJECT (label));
-     list_item = gtk_list_item_new_with_label (compose_image_name (image_ID));
-
-     gtk_object_set_user_data (GTK_OBJECT (list_item), (gpointer)image_ID);
-     gtk_container_add (GTK_CONTAINER (filmint.image_list_film), list_item);
-     gtk_widget_show (list_item);
+     image_ID = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (label), "user_data"));
+     list_item = image_list_item_new (image_ID);
+     gtk_list_box_append (GTK_LIST_BOX (filmint.image_list_film), list_item);
    }
-   tmp_list = tmp_list->next;
  }
+ g_list_free (selection);
 }
 
 
@@ -1108,20 +1102,30 @@ del_list_item_callback (GtkWidget *widget,
  GList *tmp_list;
  GList *clear_list;
 
- tmp_list = GTK_LIST (list)->selection;
- clear_list = NULL;
+ clear_list = gtk_list_box_get_selected_rows (GTK_LIST_BOX (list));
 
- while (tmp_list)
- {
-   clear_list = g_list_prepend (clear_list, tmp_list->data);
-   tmp_list = tmp_list->next;
- }
-
- clear_list = g_list_reverse (clear_list);
-
- gtk_list_remove_items (GTK_LIST (list), clear_list);
+ for (tmp_list = clear_list; tmp_list; tmp_list = tmp_list->next)
+   gtk_list_box_remove (GTK_LIST_BOX (list), GTK_WIDGET (tmp_list->data));
 
  g_list_free (clear_list);
+}
+
+
+/* A list row showing the name of an image, with the image ID attached */
+static GtkWidget *
+image_list_item_new (gint32 image_ID)
+
+{
+ GtkWidget *row;
+ GtkWidget *label;
+
+ label = gtk_label_new (compose_image_name (image_ID));
+ gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+ row = gtk_list_box_row_new ();
+ gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), label);
+ g_object_set_data (G_OBJECT (row), "user_data", GINT_TO_POINTER (image_ID));
+
+ return row;
 }
 
 
@@ -1141,50 +1145,40 @@ add_image_list (int add_box_flag,
   GtkWidget *button;
   int i;
 
-  box1 = gtk_vbox_new (FALSE, 0);
-  gtk_container_add (GTK_CONTAINER (box), box1);
-  gtk_widget_show (box1);
+  box1 = gimp_vbox_new (FALSE, 0);
+  gimp_container_add (box, box1);
 
-  box2 = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (box2), 0);
-  gtk_box_pack_start (GTK_BOX (box1), box2, TRUE, TRUE, 0);
-  gtk_widget_show (box2);
+  box2 = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (box2, 0);
+  gimp_box_pack_start (box1, box2, TRUE, TRUE, 0);
 
   label = gtk_label_new (add_box_flag ? "Available images:"
                                       : "On film:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (box2), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_box_pack_start (box2, label, FALSE, FALSE, 0);
 
-  scrolled_win = gtk_scrolled_window_new (NULL, NULL);
+  scrolled_win = gtk_scrolled_window_new ();
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolled_win),
                                   GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-  gtk_box_pack_start (GTK_BOX (box2), scrolled_win, TRUE, TRUE, 0);
-  gtk_widget_show (scrolled_win);
+  gimp_box_pack_start (box2, scrolled_win, TRUE, TRUE, 0);
 
-  list = gtk_list_new ();
-  gtk_list_set_selection_mode (GTK_LIST (list), GTK_SELECTION_MULTIPLE);
-  gtk_list_set_selection_mode (GTK_LIST (list), GTK_SELECTION_BROWSE);
-  gtk_scrolled_window_add_with_viewport (GTK_SCROLLED_WINDOW (scrolled_win), list);
-  gtk_widget_show (list);
+  list = gtk_list_box_new ();
+  gtk_list_box_set_selection_mode (GTK_LIST_BOX (list), GTK_SELECTION_BROWSE);
+  gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolled_win), list);
 
   for (i = 0; i < n; i++)
   {
-    list_item = gtk_list_item_new_with_label (compose_image_name (image_id[i]));
-
-    gtk_object_set_user_data (GTK_OBJECT (list_item), (gpointer)image_id[i]);
-    gtk_container_add (GTK_CONTAINER (list), list_item);
-    gtk_widget_show (list_item);
+    list_item = image_list_item_new (image_id[i]);
+    gtk_list_box_append (GTK_LIST_BOX (list), list_item);
   }
 
   button = gtk_button_new_with_label (add_box_flag ? "add -->" : "remove");
-  GTK_WIDGET_UNSET_FLAGS (button, GTK_CAN_FOCUS);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      add_box_flag ? (GtkSignalFunc) add_list_item_callback
-                                   : (GtkSignalFunc) del_list_item_callback,
+  gtk_widget_set_focusable (button, FALSE);
+  g_signal_connect (button, "clicked",
+                      add_box_flag ? G_CALLBACK (add_list_item_callback)
+                                   : G_CALLBACK (del_list_item_callback),
                       list);
-  gtk_box_pack_start (GTK_BOX (box2), button, FALSE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_box_pack_start (box2, button, FALSE, TRUE, 0);
 
   return (list);
 }
@@ -1201,96 +1195,68 @@ film_dialog (gint32 image_ID)
   GtkWidget *frame;
   GtkWidget *toggle;
   GtkWidget *vbox, *v0box;
-  guchar *color_cube;
   char buffer[80];
   gint32 *image_id_list;
   int nimages, j;
 
-  gchar **argv;
-  gint argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("Film");
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  gdk_set_use_xshm(gimp_use_xshm());
 
-  gtk_preview_set_gamma(gimp_gamma());
-  gtk_preview_set_install_cmap(gimp_install_cmap());
-  color_cube = gimp_color_cube();
-  gtk_preview_set_color_cube(color_cube[0], color_cube[1], color_cube[2],
-                             color_cube[3]);
-  gtk_widget_set_default_visual(gtk_preview_get_visual());
-  gtk_widget_set_default_colormap(gtk_preview_get_cmap());
 
-  filmint.dialog = dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Film");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-                      (GtkSignalFunc) film_close_callback,
+  filmint.dialog = dlg = gimp_dialog_new ("Film");
+  g_signal_connect (dlg, "destroy",
+                      G_CALLBACK (film_close_callback),
                       NULL);
 
   /*  Action area  */
   button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) film_ok_callback, dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
+  g_signal_connect (button, "clicked",
+                      G_CALLBACK (film_ok_callback), dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button,
                       TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
   button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-                             (GtkSignalFunc) gtk_widget_destroy,
-                             GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
+  g_signal_connect_swapped (button, "clicked", G_CALLBACK (gtk_window_destroy), dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button,
                       TRUE, TRUE, 0);
-  gtk_widget_show (button);
 
   /* parameter settings */
-  hbox = gtk_hbox_new (FALSE, 0);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 0);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), hbox, TRUE, TRUE, 0);
-  gtk_widget_show (hbox);
+  hbox = gimp_hbox_new (FALSE, 0);
+  gimp_container_set_border_width (hbox, 0);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), hbox, TRUE, TRUE, 0);
 
   /*** The frames on the left keep film options ***/
 
-  v0box = gtk_vbox_new (FALSE, 0);
-  gtk_container_border_width (GTK_CONTAINER (v0box), 0);
-  gtk_box_pack_start (GTK_BOX (hbox), v0box, TRUE, TRUE, 0);
-  gtk_widget_show (v0box);
+  v0box = gimp_vbox_new (FALSE, 0);
+  gimp_container_set_border_width (v0box, 0);
+  gimp_box_pack_start (hbox, v0box, TRUE, TRUE, 0);
 
   /* Film height/colour */
   frame = gtk_frame_new ("Film");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 5);
-  gtk_box_pack_start (GTK_BOX (v0box), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 5);
+  gimp_box_pack_start (v0box, frame, TRUE, TRUE, 0);
 
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 5);
+  gimp_container_add (frame, vbox);
 
   /* Keep maximum image height */
   toggle = gtk_check_button_new_with_label ("Fit height to images");
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
+  gimp_box_pack_start (vbox, toggle, TRUE, TRUE, 0);
   filmint.keep_height = filmvals.keep_height;
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                      (GtkSignalFunc) keepheight_toggle_update,
+  g_signal_connect (toggle, "toggled",
+                      G_CALLBACK (keepheight_toggle_update),
                       &(filmint.keep_height));
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle),
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle),
                                filmint.keep_height);
-  gtk_widget_show (toggle);
 
-  table = gtk_table_new (2, 2, FALSE);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 5);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 5);
-  gtk_box_pack_start (GTK_BOX (vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show (table);
+  table = gimp_table_new (2, 2, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 5);
+  gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
   /* Film height */
   sprintf (buffer, "%d", (int)filmvals.film_height);
@@ -1299,24 +1265,20 @@ film_dialog (gint32 image_ID)
   /* Film colour */
   add_color_button (0, 1, table);
 
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
 
   /* Film numbering: Startindex/Font/colour */
   frame = gtk_frame_new ("Numbering");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 5);
-  gtk_box_pack_start (GTK_BOX (v0box), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 5);
+  gimp_box_pack_start (v0box, frame, TRUE, TRUE, 0);
 
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 5);
+  gimp_container_add (frame, vbox);
 
-  table = gtk_table_new (3, 2, FALSE);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 5);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 5);
-  gtk_box_pack_start (GTK_BOX (vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show (table);
+  table = gimp_table_new (3, 2, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 5);
+  gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
   /* Startindex */
   sprintf (buffer, "%d", (int)filmvals.number_start);
@@ -1331,34 +1293,28 @@ film_dialog (gint32 image_ID)
   for (j = 0; j < 2; j++)
   {
     toggle = gtk_check_button_new_with_label (j ? "at bottom" : "at top");
-    gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
+    gimp_box_pack_start (vbox, toggle, TRUE, TRUE, 0);
     filmint.number_pos[j] = filmvals.number_pos[j];
-    gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                        (GtkSignalFunc) numbering_toggle_update,
+    g_signal_connect (toggle, "toggled",
+                        G_CALLBACK (numbering_toggle_update),
                         &(filmint.number_pos[j]));
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle),
+    gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle),
                                  filmint.number_pos[j]);
-    gtk_widget_show (toggle);
   }
 
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
-  gtk_widget_show (v0box);
 
-  h0box = gtk_hbox_new (FALSE, 0);
-  gtk_container_border_width (GTK_CONTAINER (h0box), 0);
-  gtk_box_pack_start (GTK_BOX (hbox), h0box, TRUE, TRUE, 0);
-  gtk_widget_show (h0box);
+  h0box = gimp_hbox_new (FALSE, 0);
+  gimp_container_set_border_width (h0box, 0);
+  gimp_box_pack_start (hbox, h0box, TRUE, TRUE, 0);
 
   /*** The right frame keeps the image selection ***/
   frame = gtk_frame_new ("Image selection");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 5);
-  gtk_box_pack_start (GTK_BOX (h0box), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 5);
+  gimp_box_pack_start (h0box, frame, TRUE, TRUE, 0);
 
-  hbox = gtk_hbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), hbox);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_container_set_border_width (hbox, 5);
+  gimp_container_add (frame, hbox);
 
   /* Get a list of all image names */
   image_id_list = gimp_query_images (&nimages);
@@ -1367,14 +1323,10 @@ film_dialog (gint32 image_ID)
   /* Get a list of the images used for the film */
   filmint.image_list_film = add_image_list (0, 1, &image_ID, hbox);
 
-  gtk_widget_show (hbox);
-  gtk_widget_show (frame);
-  gtk_widget_show (h0box);
 
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return filmint.run;
 }
@@ -1385,7 +1337,8 @@ film_close_callback (GtkWidget *widget,
                      gpointer data)
 
 {
-  gtk_main_quit ();
+  filmint.dialog = NULL;
+  gimp_main_loop_quit ();
 }
 
 
@@ -1393,37 +1346,17 @@ static void
 film_color_button_callback (GtkWidget *widget,
                             gpointer data)
 
-{int idx, j;
- GtkColorSelectionDialog *csd;
- GtkWidget *dialog;
- gdouble colour[3];
+{int idx;
 
- idx = (int)data;
+ idx = GPOINTER_TO_INT (data);
 
- /* Is the colour selection dialog already running ? */
- if (filmint.csel[idx].colselect != NULL) return;
-
- for (j = 0; j < 3; j++)
-   colour[j] = filmint.csel[idx].color[j] / 255.0;
-
- dialog = filmint.csel[idx].colselect = gtk_color_selection_dialog_new (
-           (idx == 0) ? "Films color Color Picker"
-                      : "Numbers color Color Picker");
- csd = GTK_COLOR_SELECTION_DIALOG (dialog);
-
- gtk_widget_destroy (csd->help_button);
-
- gtk_signal_connect (GTK_OBJECT (dialog), "destroy",
-                      (GtkSignalFunc) color_select_cancel_callback, data);
- gtk_signal_connect (GTK_OBJECT (csd->ok_button), "clicked",
-                     (GtkSignalFunc) color_select_ok_callback, data);
- gtk_signal_connect (GTK_OBJECT (csd->cancel_button), "clicked",
-                     (GtkSignalFunc) color_select_cancel_callback, data);
-
- gtk_color_selection_set_color (GTK_COLOR_SELECTION (csd->colorsel), colour);
-
- gtk_window_position (GTK_WINDOW (dialog), GTK_WIN_POS_MOUSE);
- gtk_widget_show (dialog);
+ /* The colour dialog is asynchronous: color_select_ok_callback is called
+    when a colour was chosen, and not at all when it was cancelled. */
+ gimp_color_dialog_run (GTK_WINDOW (filmint.dialog),
+                        (idx == 0) ? "Films color Color Picker"
+                                   : "Numbers color Color Picker",
+                        &(filmint.csel[idx].color[0]),
+                        color_select_ok_callback, data);
 }
 
 
@@ -1432,24 +1365,22 @@ film_ok_callback (GtkWidget *widget,
                   gpointer data)
 
 {int v, num_images;
- char *s;
- GtkWidget *dialog;
- GtkWidget *label;
- GList *tmp_list;
+ const char *s;
+ GtkListBoxRow *label;
  gint32 image_ID;
 
   /* Read film height */
-  s = gtk_entry_get_text (GTK_ENTRY (filmint.left_entry[0]));
+  s = gtk_editable_get_text (GTK_EDITABLE (filmint.left_entry[0]));
   if ((sscanf (s, "%d", &v) == 1) && (v > 9))
     filmvals.film_height = v;
 
   /* Read numbers start index */
-  s = gtk_entry_get_text (GTK_ENTRY (filmint.left_entry[1]));
+  s = gtk_editable_get_text (GTK_EDITABLE (filmint.left_entry[1]));
   if ((sscanf (s, "%d", &v) == 1) && (v >= 0))
     filmvals.number_start = v;
 
   /* Read font family */
-  s = gtk_entry_get_text (GTK_ENTRY (filmint.left_entry[2]));
+  s = gtk_editable_get_text (GTK_EDITABLE (filmint.left_entry[2]));
   if (strlen (s) > 0)
   {
     strncpy (filmvals.number_fontf, s, sizeof (filmvals.number_fontf));
@@ -1473,31 +1404,19 @@ film_ok_callback (GtkWidget *widget,
   num_images = 0;
   if (filmint.image_list_film != NULL)
   {
-    tmp_list = GTK_LIST (filmint.image_list_film)->children;
-    while (tmp_list)
+    for (v = 0;
+         (label = gtk_list_box_get_row_at_index (GTK_LIST_BOX (filmint.image_list_film), v)) != NULL;
+         v++)
     {
-      if ((label = (GtkWidget *)tmp_list->data) != NULL)
-      {
-        image_ID = (gint32)gtk_object_get_user_data (GTK_OBJECT (label));
-        if ((image_ID > 0) && (num_images < MAX_FILM_PICTURES))
-          filmvals.image[num_images++] = image_ID;
-      }
-      tmp_list = tmp_list->next;
+      image_ID = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (label), "user_data"));
+      if ((image_ID > 0) && (num_images < MAX_FILM_PICTURES))
+        filmvals.image[num_images++] = image_ID;
     }
     filmvals.num_images = num_images;
   }
 
-  for (v = 0; v < sizeof(filmint.csel)/sizeof (filmint.csel[0]); v++)
-  {
-    if ((dialog = filmint.csel[v].colselect) != NULL)
-    {
-      filmint.csel[v].colselect = NULL;
-      gtk_widget_destroy (GTK_WIDGET (dialog));
-    }
-  }
-
   filmint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 
@@ -1510,7 +1429,7 @@ numbering_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  *toggle_val = ((GTK_TOGGLE_BUTTON (widget)->active) != 0);
+  *toggle_val = ((gtk_check_button_get_active (GTK_CHECK_BUTTON (widget))) != 0);
 }
 
 
@@ -1523,7 +1442,7 @@ keepheight_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  *toggle_val = ((GTK_TOGGLE_BUTTON (widget)->active) != 0);
+  *toggle_val = ((gtk_check_button_get_active (GTK_CHECK_BUTTON (widget))) != 0);
 
   if (filmint.left_entry[0] != NULL)
     gtk_widget_set_sensitive (filmint.left_entry[0], *toggle_val == 0);
@@ -1531,42 +1450,20 @@ keepheight_toggle_update (GtkWidget *widget,
 
 
 static void
-color_select_ok_callback (GtkWidget *widget,
+color_select_ok_callback (const guchar *rgb,
                           gpointer data)
 
-{gdouble color[3];
- int idx, j;
- GtkWidget *dialog;
+{int idx, j;
 
- idx = (int)data;
- if ((dialog = filmint.csel[idx].colselect) == NULL) return;
+ idx = GPOINTER_TO_INT (data);
 
- gtk_color_selection_get_color (
-   GTK_COLOR_SELECTION (GTK_COLOR_SELECTION_DIALOG (dialog)->colorsel),
-   color);
+ /* The film dialog may be gone by the time a colour is picked */
+ if (filmint.dialog == NULL) return;
 
  for (j = 0; j < 3; j++)
-   filmint.csel[idx].color[j] = (unsigned char)(color[j]*255.0);
+   filmint.csel[idx].color[j] = rgb[j];
 
  color_preview_show (filmint.csel[idx].preview, &(filmint.csel[idx].color[0]));
-
- filmint.csel[idx].colselect = NULL;
- gtk_widget_destroy (dialog);
-}
-
-
-static void
-color_select_cancel_callback (GtkWidget *widget,
-                              gpointer data)
-
-{int idx;
- GtkWidget *dialog;
-
- idx = (int)data;
- if ((dialog = filmint.csel[idx].colselect) == NULL) return;
-
- filmint.csel[idx].colselect = NULL;
- gtk_widget_destroy (dialog);
 }
 
 
@@ -1590,9 +1487,9 @@ color_preview_show (GtkWidget *widget,
    *(bp++) = rgb[2];
  }
  for (j = 0; j < height; j++)
-   gtk_preview_draw_row (GTK_PREVIEW (widget), buf, 0, j, width);
+   gimp_preview_draw_row (GIMP_PREVIEW (widget), buf, 0, j, width);
 
- gtk_widget_draw (widget, NULL);
+ gtk_widget_queue_draw (widget);
 
  g_free (buf);
 }

@@ -23,8 +23,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
-#include "gdk/gdk.h"
 #include "ifscompose.h"
 
 #ifndef RAND_MAX
@@ -32,7 +32,7 @@
 #endif /* RAND_MAX */
 
 typedef struct {
-  GdkPoint point;
+  IPoint point;
   gdouble angle;
 } SortPoint;
 
@@ -215,19 +215,19 @@ IPolygon *
 ipolygon_convex_hull(IPolygon *poly)
 {
   gint num_new = poly->npoints;
-  GdkPoint *new_points = g_new(GdkPoint,num_new);
+  IPoint *new_points = g_new(IPoint,num_new);
   SortPoint *sort_points = g_new(SortPoint,num_new);
   IPolygon *new_poly = g_new(IPolygon,1);
 
   gint i,j;
   gint x1,x2,y1,y2;
   gint lowest;
-  GdkPoint lowest_pt;
+  IPoint lowest_pt;
 
   new_poly->points = new_points;
   if (num_new <= 3)
     {
-      memcpy(new_points,poly->points,num_new*sizeof(GdkPoint));
+      memcpy(new_points,poly->points,num_new*sizeof(IPoint));
       new_poly->npoints = num_new;
       return new_poly;
     }
@@ -558,7 +558,7 @@ aff_element_compute_click_boundary(AffElement *elem, int num_elements,
 
   if (axis1 < 8.0 || axis2 < 8.0)
     {
-      GdkPoint *points = g_new(GdkPoint,4);
+      IPoint *points = g_new(IPoint,4);
 
       elem->click_boundary = g_new(IPolygon,1);
       elem->click_boundary->points = points;
@@ -597,7 +597,7 @@ aff_element_compute_boundary(AffElement *elem, gint width,
     g_free(elem->draw_boundary);
 
   tmp_poly.npoints = num_elements;
-  tmp_poly.points = g_new(GdkPoint,num_elements);
+  tmp_poly.points = g_new(IPoint,num_elements);
   points_x = g_new(gdouble,num_elements);
   points_y = g_new(gdouble,num_elements);
   
@@ -615,32 +615,70 @@ aff_element_compute_boundary(AffElement *elem, gint width,
   g_free(tmp_poly.points);
 }
 
-void 
+/* Adds the outline of poly to cr's path, on pixel centres so a 1 pixel
+   line is sharp. */
+static void
+ipolygon_path (cairo_t  *cr,
+	       IPolygon *poly)
+{
+  gint i;
+
+  if (poly->npoints < 1)
+    return;
+
+  cairo_move_to (cr, poly->points[0].x + 0.5, poly->points[0].y + 0.5);
+  for (i = 1; i < poly->npoints; i++)
+    cairo_line_to (cr, poly->points[i].x + 0.5, poly->points[i].y + 0.5);
+  cairo_close_path (cr);
+}
+
+void
 aff_element_draw(AffElement *elem, gint selected,
 		 gint width, gint height, 
-		 GdkDrawable *win,
-		 GdkGC *normal_gc,GdkGC *selected_gc,
-		 GdkFont *font)
+		 cairo_t *cr,
+		 const GdkRGBA *normal_color,
+		 const GdkRGBA *selected_color,
+		 PangoLayout *layout)
 {
-  GdkGC *gc;
-  gint string_width = gdk_string_width (font,elem->name);
-  gint string_height = font->ascent  + font->descent + 2;
+  const GdkRGBA *color;
+  gint string_width, string_height;
 
   if (selected)
-    gc = selected_gc;
+    color = selected_color;
   else
-    gc = normal_gc;
+    color = normal_color;
 
-  gdk_draw_string(win,font,gc,
-		  elem->v.x*width-string_width/2,
-		  elem->v.y*width+string_height/2,elem->name);
+  pango_layout_set_text (layout, elem->name, -1);
+  pango_layout_get_pixel_size (layout, &string_width, &string_height);
+
+  gdk_cairo_set_source_rgba (cr, color);
+  cairo_move_to (cr,
+		 (gint) (elem->v.x*width) - string_width/2,
+		 (gint) (elem->v.y*width) - string_height/2);
+  pango_cairo_show_layout (cr, layout);
+
+  cairo_set_line_width (cr, 1.0);
 
   if (elem->click_boundary != elem->draw_boundary)
-    gdk_draw_polygon(win,normal_gc,FALSE,elem->click_boundary->points,
-		     elem->click_boundary->npoints);
+    {
+      gdk_cairo_set_source_rgba (cr, normal_color);
+      ipolygon_path (cr, elem->click_boundary);
+      cairo_stroke (cr);
+    }
 
-  gdk_draw_polygon(win,gc,FALSE,elem->draw_boundary->points,
-		   elem->draw_boundary->npoints);
+  /* the selected outline is drawn twice as thick, with round joins */
+  if (selected)
+    {
+      cairo_save (cr);
+      cairo_set_line_width (cr, 2.0);
+      cairo_set_line_join (cr, CAIRO_LINE_JOIN_ROUND);
+      cairo_set_line_cap (cr, CAIRO_LINE_CAP_ROUND);
+    }
+  gdk_cairo_set_source_rgba (cr, color);
+  ipolygon_path (cr, elem->draw_boundary);
+  cairo_stroke (cr);
+  if (selected)
+    cairo_restore (cr);
 }
 
 AffElement *
@@ -763,8 +801,8 @@ ifs_render(AffElement **elements, gint num_elements,
   gint subdivide;
 
   guchar *brush = NULL;
-  gint brush_size;
-  gdouble brush_offset;
+  gint brush_size = 0;
+  gdouble brush_offset = 0.0;
 
   if (preview)
     subdivide = 1;

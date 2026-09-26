@@ -70,6 +70,7 @@
  *   Initial revision
  */
 
+#include <glib/gstdio.h>
 #include "sgi.h"
 
 
@@ -222,9 +223,9 @@ sgiOpen(char *filename,	/* I - File to open */
 
 
   if (mode == SGI_READ)
-    file = fopen(filename, "rb");
+    file = g_fopen (filename, "rb");
   else
-    file = fopen(filename, "wb+");
+    file = g_fopen (filename, "wb+");
 
   if (file == NULL)
     return (NULL);

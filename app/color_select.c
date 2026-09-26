@@ -18,7 +18,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "appenv.h"
-#include "actionarea.h"
 #include "color_select.h"
 #include "colormaps.h"
 #include "errors.h"
@@ -30,10 +29,6 @@
 #define Z_DEF_HEIGHT       192
 #define COLOR_AREA_WIDTH   74
 #define COLOR_AREA_HEIGHT  20
-
-#define COLOR_AREA_MASK GDK_EXPOSURE_MASK | \
-                        GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK | \
-			GDK_BUTTON1_MOTION_MASK | GDK_ENTER_NOTIFY_MASK
 
 typedef enum {
   HUE = 0,
@@ -84,20 +79,28 @@ static void color_select_update_colors (ColorSelectP, int);
 
 static void color_select_ok_callback (GtkWidget *, gpointer);
 static void color_select_cancel_callback (GtkWidget *, gpointer);
-static gint color_select_delete_callback (GtkWidget *, GdkEvent *, gpointer);
-static gint color_select_xy_expose (GtkWidget *, GdkEventExpose *, ColorSelectP);
-static gint color_select_xy_events (GtkWidget *, GdkEvent *, ColorSelectP);
-static gint color_select_z_expose (GtkWidget *, GdkEventExpose *, ColorSelectP);
-static gint color_select_z_events (GtkWidget *, GdkEvent *, ColorSelectP);
-static gint color_select_color_events (GtkWidget *, GdkEvent *);
+static gboolean color_select_delete_callback (GtkWindow *, gpointer);
+static void color_select_xy_marker_draw (GtkDrawingArea *, cairo_t *, int, int, gpointer);
+static void color_select_xy_set_pos (ColorSelectP, double, double);
+static void color_select_xy_pressed (GtkGestureDrag *, double, double, gpointer);
+static void color_select_xy_motion (GtkGestureDrag *, double, double, gpointer);
+static void color_select_xy_released (GtkGestureDrag *, double, double, gpointer);
+static void color_select_z_marker_draw (GtkDrawingArea *, cairo_t *, int, int, gpointer);
+static void color_select_z_set_pos (ColorSelectP, double);
+static void color_select_z_pressed (GtkGestureDrag *, double, double, gpointer);
+static void color_select_z_motion (GtkGestureDrag *, double, double, gpointer);
+static void color_select_z_released (GtkGestureDrag *, double, double, gpointer);
+static void color_select_color_draw (GtkDrawingArea *, cairo_t *, int, int, gpointer);
 static void color_select_slider_update (GtkAdjustment *, gpointer);
 static void color_select_entry_update (GtkWidget *, gpointer);
 static void color_select_toggle_update (GtkWidget *, gpointer);
 
 static void color_select_image_fill (GtkWidget *, ColorSelectFillType, int *);
+static void color_select_paint_inverted (cairo_t *, GtkWidget *,
+					 int, int, int, int, int, int);
 
-static void color_select_draw_z_marker (ColorSelectP, GdkRectangle *);
-static void color_select_draw_xy_marker (ColorSelectP, GdkRectangle *);
+static void color_select_draw_z_marker (ColorSelectP);
+static void color_select_draw_xy_marker (ColorSelectP);
 
 static void color_select_update_red (ColorSelectFill *);
 static void color_select_update_green (ColorSelectFill *);
@@ -128,12 +131,6 @@ static ColorSelectFillUpdateProc update_procs[] =
   color_select_update_green_blue,
 };
 
-static ActionAreaItem action_items[2] =
-{
-  { "OK", color_select_ok_callback, NULL, NULL },
-  { "Cancel", color_select_cancel_callback, NULL, NULL },
-};
-
 ColorSelectP
 color_select_new (int                  r,
 		  int                  g,
@@ -152,12 +149,14 @@ color_select_new (int                  r,
   GtkWidget *main_hbox;
   GtkWidget *xy_frame;
   GtkWidget *z_frame;
+  GtkWidget *overlay;
   GtkWidget *colors_frame;
   GtkWidget *colors_hbox;
   GtkWidget *right_vbox;
   GtkWidget *table;
   GtkWidget *slider;
-  GSList *group;
+  GtkWidget *group;
+  GtkGesture *drag;
   char buffer[16];
   int i;
 
@@ -167,8 +166,9 @@ color_select_new (int                  r,
   csp->client_data = client_data;
   csp->z_color_fill = HUE;
   csp->xy_color_fill = SATURATION_VALUE;
-  csp->gc = NULL;
   csp->wants_updates = wants_updates;
+  csp->xy_marker = NULL;
+  csp->z_marker = NULL;
 
   csp->values[RED] = csp->orig_values[0] = r;
   csp->values[GREEN] = csp->orig_values[1] = g;
@@ -176,162 +176,169 @@ color_select_new (int                  r,
   color_select_update_hsv_values (csp);
   color_select_update_pos (csp);
 
-  csp->shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (csp->shell), "color_selection", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (csp->shell), "Color Selection");
-  gtk_window_set_policy (GTK_WINDOW (csp->shell), FALSE, FALSE, FALSE);
-  gtk_widget_set_uposition (csp->shell, color_select_x, color_select_y);
+  /*  The window position (color_select_x, color_select_y from gimprc)
+   *  can no longer be chosen by the application in GTK 4.
+   */
+  csp->shell = gimp_dialog_new ("Color Selection");
+  gtk_window_set_resizable (GTK_WINDOW (csp->shell), FALSE);
 
   /*  handle the wm close signal */
-  gtk_signal_connect (GTK_OBJECT (csp->shell), "delete_event",
-		      (GtkSignalFunc) color_select_delete_callback, csp);
-  
-  main_vbox = gtk_vbox_new (FALSE, 2);
-  gtk_container_border_width (GTK_CONTAINER (main_vbox), 2);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (csp->shell)->vbox), main_vbox, TRUE, TRUE, 0);
-  gtk_widget_show (main_vbox);
+  g_signal_connect (csp->shell, "close-request",
+		    G_CALLBACK (color_select_delete_callback), csp);
 
-  main_hbox = gtk_hbox_new (FALSE, 2);
-  gtk_container_border_width (GTK_CONTAINER (main_hbox), 0);
-  gtk_box_pack_start (GTK_BOX (main_vbox), main_hbox, TRUE, TRUE, 2);
-  gtk_widget_show (main_hbox);
+  main_vbox = gimp_vbox_new (FALSE, 2);
+  gimp_container_set_border_width (main_vbox, 2);
+  gimp_box_pack_start (gimp_dialog_get_vbox (csp->shell), main_vbox, TRUE, TRUE, 0);
 
+  main_hbox = gimp_hbox_new (FALSE, 2);
+  gimp_box_pack_start (main_vbox, main_hbox, TRUE, TRUE, 2);
+
+  /*  The XY plane: the colors in a preview, the cross hair marker and
+   *  the pointer handling in a drawing area laid over it
+   */
   xy_frame = gtk_frame_new (NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (xy_frame), GTK_SHADOW_IN);
-  gtk_box_pack_start (GTK_BOX (main_hbox), xy_frame, FALSE, FALSE, 2);
-  gtk_widget_show (xy_frame);
+  gtk_widget_set_valign (xy_frame, GTK_ALIGN_START);
+  gimp_box_pack_start (main_hbox, xy_frame, FALSE, FALSE, 2);
 
-  csp->xy_color = gtk_preview_new (GTK_PREVIEW_COLOR);
-  gtk_preview_size (GTK_PREVIEW (csp->xy_color), XY_DEF_WIDTH, XY_DEF_HEIGHT);
-  gtk_widget_set_events (csp->xy_color, COLOR_AREA_MASK);
-  gtk_signal_connect_after (GTK_OBJECT (csp->xy_color), "expose_event",
-			    (GtkSignalFunc) color_select_xy_expose,
-			    csp);
-  gtk_signal_connect (GTK_OBJECT (csp->xy_color), "event",
-		      (GtkSignalFunc) color_select_xy_events,
-		      csp);
-  gtk_container_add (GTK_CONTAINER (xy_frame), csp->xy_color);
-  gtk_widget_show (csp->xy_color);
+  overlay = gtk_overlay_new ();
+  gtk_frame_set_child (GTK_FRAME (xy_frame), overlay);
 
+  csp->xy_color = gimp_preview_new (GIMP_PREVIEW_COLOR);
+  gimp_preview_size (GIMP_PREVIEW (csp->xy_color), XY_DEF_WIDTH, XY_DEF_HEIGHT);
+  gtk_overlay_set_child (GTK_OVERLAY (overlay), csp->xy_color);
+
+  csp->xy_marker = gtk_drawing_area_new ();
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (csp->xy_marker),
+				  color_select_xy_marker_draw, csp, NULL);
+  gtk_overlay_add_overlay (GTK_OVERLAY (overlay), csp->xy_marker);
+
+  drag = gtk_gesture_drag_new ();
+  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (drag), 0);
+  g_signal_connect (drag, "drag-begin",
+		    G_CALLBACK (color_select_xy_pressed), csp);
+  g_signal_connect (drag, "drag-update",
+		    G_CALLBACK (color_select_xy_motion), csp);
+  g_signal_connect (drag, "drag-end",
+		    G_CALLBACK (color_select_xy_released), csp);
+  gtk_widget_add_controller (csp->xy_marker, GTK_EVENT_CONTROLLER (drag));
+
+  /*  The Z strip, built the same way  */
   z_frame = gtk_frame_new (NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (z_frame), GTK_SHADOW_IN);
-  gtk_box_pack_start (GTK_BOX (main_hbox), z_frame, FALSE, FALSE, 2);
-  gtk_widget_show (z_frame);
+  gtk_widget_set_valign (z_frame, GTK_ALIGN_START);
+  gimp_box_pack_start (main_hbox, z_frame, FALSE, FALSE, 2);
 
-  csp->z_color = gtk_preview_new (GTK_PREVIEW_COLOR);
-  gtk_preview_size (GTK_PREVIEW (csp->z_color), Z_DEF_WIDTH, Z_DEF_HEIGHT);
-  gtk_widget_set_events (csp->z_color, COLOR_AREA_MASK);
-  gtk_signal_connect_after (GTK_OBJECT (csp->z_color), "expose_event",
-			    (GtkSignalFunc) color_select_z_expose,
-			    csp);
-  gtk_signal_connect (GTK_OBJECT (csp->z_color), "event",
-		      (GtkSignalFunc) color_select_z_events,
-		      csp);
-  gtk_container_add (GTK_CONTAINER (z_frame), csp->z_color);
-  gtk_widget_show (csp->z_color);
+  overlay = gtk_overlay_new ();
+  gtk_frame_set_child (GTK_FRAME (z_frame), overlay);
+
+  csp->z_color = gimp_preview_new (GIMP_PREVIEW_COLOR);
+  gimp_preview_size (GIMP_PREVIEW (csp->z_color), Z_DEF_WIDTH, Z_DEF_HEIGHT);
+  gtk_overlay_set_child (GTK_OVERLAY (overlay), csp->z_color);
+
+  csp->z_marker = gtk_drawing_area_new ();
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (csp->z_marker),
+				  color_select_z_marker_draw, csp, NULL);
+  gtk_overlay_add_overlay (GTK_OVERLAY (overlay), csp->z_marker);
+
+  drag = gtk_gesture_drag_new ();
+  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (drag), 0);
+  g_signal_connect (drag, "drag-begin",
+		    G_CALLBACK (color_select_z_pressed), csp);
+  g_signal_connect (drag, "drag-update",
+		    G_CALLBACK (color_select_z_motion), csp);
+  g_signal_connect (drag, "drag-end",
+		    G_CALLBACK (color_select_z_released), csp);
+  gtk_widget_add_controller (csp->z_marker, GTK_EVENT_CONTROLLER (drag));
 
   /*  The right vertical box with old/new color area and color space sliders  */
-  right_vbox = gtk_vbox_new (FALSE, 2);
-  gtk_container_border_width (GTK_CONTAINER (right_vbox), 0);
-  gtk_box_pack_start (GTK_BOX (main_hbox), right_vbox, TRUE, TRUE, 0);
-  gtk_widget_show (right_vbox);
+  right_vbox = gimp_vbox_new (FALSE, 2);
+  gimp_box_pack_start (main_hbox, right_vbox, TRUE, TRUE, 0);
 
   /*  The old/new color area  */
   colors_frame = gtk_frame_new (NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (colors_frame), GTK_SHADOW_IN);
-  gtk_box_pack_start (GTK_BOX (right_vbox), colors_frame, FALSE, FALSE, 0);
-  gtk_widget_show (colors_frame);
+  gimp_box_pack_start (right_vbox, colors_frame, FALSE, FALSE, 0);
 
-  colors_hbox = gtk_hbox_new (TRUE, 2);
-  gtk_container_add (GTK_CONTAINER (colors_frame), colors_hbox);
-  gtk_widget_show (colors_hbox);
+  colors_hbox = gimp_hbox_new (TRUE, 2);
+  gtk_frame_set_child (GTK_FRAME (colors_frame), colors_hbox);
 
   csp->new_color = gtk_drawing_area_new ();
-  gtk_drawing_area_size (GTK_DRAWING_AREA (csp->new_color), COLOR_AREA_WIDTH, COLOR_AREA_HEIGHT);
-  gtk_widget_set_events (csp->new_color, GDK_EXPOSURE_MASK);
-  gtk_signal_connect (GTK_OBJECT (csp->new_color), "event",
-		      (GtkSignalFunc) color_select_color_events,
-		      csp);
-  gtk_object_set_user_data (GTK_OBJECT (csp->new_color), csp);
-  gtk_box_pack_start (GTK_BOX (colors_hbox), csp->new_color, TRUE, TRUE, 0);
-  gtk_widget_show (csp->new_color);
+  gtk_drawing_area_set_content_width (GTK_DRAWING_AREA (csp->new_color), COLOR_AREA_WIDTH);
+  gtk_drawing_area_set_content_height (GTK_DRAWING_AREA (csp->new_color), COLOR_AREA_HEIGHT);
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (csp->new_color),
+				  color_select_color_draw, csp, NULL);
+  gimp_box_pack_start (colors_hbox, csp->new_color, TRUE, TRUE, 0);
 
   csp->orig_color = gtk_drawing_area_new ();
-  gtk_drawing_area_size (GTK_DRAWING_AREA (csp->orig_color), COLOR_AREA_WIDTH, COLOR_AREA_HEIGHT);
-  gtk_widget_set_events (csp->orig_color, GDK_EXPOSURE_MASK);
-  gtk_signal_connect (GTK_OBJECT (csp->orig_color), "event",
-		      (GtkSignalFunc) color_select_color_events,
-		      csp);
-  gtk_object_set_user_data (GTK_OBJECT (csp->orig_color), csp);
-  gtk_box_pack_start (GTK_BOX (colors_hbox), csp->orig_color, TRUE, TRUE, 0);
-  gtk_widget_show (csp->orig_color);
+  gtk_drawing_area_set_content_width (GTK_DRAWING_AREA (csp->orig_color), COLOR_AREA_WIDTH);
+  gtk_drawing_area_set_content_height (GTK_DRAWING_AREA (csp->orig_color), COLOR_AREA_HEIGHT);
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (csp->orig_color),
+				  color_select_color_draw, csp, NULL);
+  gimp_box_pack_start (colors_hbox, csp->orig_color, TRUE, TRUE, 0);
 
   /*  The color space sliders, toggle buttons and entries  */
-  table = gtk_table_new (6, 3, FALSE);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 3);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 3);
-  gtk_container_border_width (GTK_CONTAINER (table), 2);
-  gtk_box_pack_start (GTK_BOX (right_vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show (table);
+  table = gimp_table_new (6, 3, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 3);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 3);
+  gimp_container_set_border_width (table, 2);
+  gimp_box_pack_start (right_vbox, table, TRUE, TRUE, 0);
 
   group = NULL;
   for (i = 0; i < 6; i++)
     {
-      csp->toggles[i] = gtk_radio_button_new_with_label (group, toggle_titles[i]);
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (csp->toggles[i]));
-      gtk_table_attach (GTK_TABLE (table), csp->toggles[i],
-			0, 1, i, i+1, GTK_FILL, GTK_EXPAND, 0, 0);
-      gtk_signal_connect (GTK_OBJECT (csp->toggles[i]), "toggled",
-			  (GtkSignalFunc) color_select_toggle_update,
-			  csp);
-      gtk_widget_show (csp->toggles[i]);
+      csp->toggles[i] = gimp_radio_button_new (group, toggle_titles[i]);
+      group = csp->toggles[i];
+      gimp_table_attach (table, csp->toggles[i],
+			 0, 1, i, i+1, GIMP_FILL, GIMP_EXPAND, 0, 0);
+      g_signal_connect (csp->toggles[i], "toggled",
+			G_CALLBACK (color_select_toggle_update),
+			csp);
 
-      csp->slider_data[i] = GTK_ADJUSTMENT (gtk_adjustment_new (csp->values[i], 0.0,
-								slider_max_vals[i],
-								slider_incs[i],
-								1.0, 0.0));
+      csp->slider_data[i] = gtk_adjustment_new (csp->values[i], 0.0,
+						slider_max_vals[i],
+						slider_incs[i],
+						1.0, 0.0);
 
-      slider = gtk_hscale_new (csp->slider_data[i]);
-      gtk_table_attach (GTK_TABLE (table), slider, 1, 2, i, i+1,
-			GTK_EXPAND | GTK_FILL, GTK_EXPAND, 0, 0);
-      gtk_scale_set_value_pos (GTK_SCALE (slider), GTK_POS_TOP);
+      slider = gtk_scale_new (GTK_ORIENTATION_HORIZONTAL, csp->slider_data[i]);
       gtk_scale_set_draw_value (GTK_SCALE (slider), FALSE);
-      gtk_signal_connect (GTK_OBJECT (csp->slider_data[i]), "value_changed",
-			  (GtkSignalFunc) color_select_slider_update,
-			  csp);
-      gtk_widget_show (slider);
+      gtk_widget_set_size_request (slider, 100, -1);
+      gimp_table_attach (table, slider, 1, 2, i, i+1,
+			 GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND, 0, 0);
+      g_signal_connect (csp->slider_data[i], "value-changed",
+			G_CALLBACK (color_select_slider_update),
+			csp);
 
       csp->entries[i] = gtk_entry_new ();
       sprintf (buffer, "%d", csp->values[i]);
-      gtk_entry_set_text (GTK_ENTRY (csp->entries[i]), buffer);
-      gtk_widget_set_usize (GTK_WIDGET (csp->entries[i]), 40, 0);
-      gtk_table_attach (GTK_TABLE (table), csp->entries[i],
-			2, 3, i, i+1, GTK_FILL, GTK_EXPAND, 0, 0);
-      gtk_signal_connect (GTK_OBJECT (csp->entries[i]), "changed",
-			  (GtkSignalFunc) color_select_entry_update,
-			  csp);
-      gtk_widget_show (csp->entries[i]);
+      gtk_editable_set_text (GTK_EDITABLE (csp->entries[i]), buffer);
+      gtk_editable_set_width_chars (GTK_EDITABLE (csp->entries[i]), 4);
+      gtk_editable_set_max_width_chars (GTK_EDITABLE (csp->entries[i]), 4);
+      gtk_widget_set_size_request (csp->entries[i], 40, -1);
+      gimp_table_attach (table, csp->entries[i],
+			 2, 3, i, i+1, GIMP_FILL, GIMP_EXPAND, 0, 0);
+      g_signal_connect (csp->entries[i], "changed",
+			G_CALLBACK (color_select_entry_update),
+			csp);
     }
 
   /*  The action area  */
-  action_items[0].user_data = csp;
-  action_items[1].user_data = csp;
   if (csp->wants_updates)
     {
-      action_items[0].label = "Close";
-      action_items[1].label = "Revert to Old Color";
+      gimp_dialog_add_button (csp->shell, "Close",
+			      G_CALLBACK (color_select_ok_callback), csp, TRUE);
+      gimp_dialog_add_button (csp->shell, "Revert to Old Color",
+			      G_CALLBACK (color_select_cancel_callback), csp, FALSE);
     }
   else
     {
-      action_items[0].label = "OK";
-      action_items[1].label = "Cancel";
+      gimp_dialog_add_button (csp->shell, "OK",
+			      G_CALLBACK (color_select_ok_callback), csp, TRUE);
+      gimp_dialog_add_button (csp->shell, "Cancel",
+			      G_CALLBACK (color_select_cancel_callback), csp, FALSE);
     }
-  build_action_area (GTK_DIALOG (csp->shell), action_items, 2, 0);
 
   color_select_image_fill (csp->z_color, csp->z_color_fill, csp->values);
   color_select_image_fill (csp->xy_color, csp->xy_color_fill, csp->values);
 
-  gtk_widget_show (csp->shell);
+  gtk_window_present (GTK_WINDOW (csp->shell));
 
   return csp;
 }
@@ -340,23 +347,28 @@ void
 color_select_show (ColorSelectP csp)
 {
   if (csp)
-    gtk_widget_show (csp->shell);
+    gtk_window_present (GTK_WINDOW (csp->shell));
 }
 
 void
 color_select_hide (ColorSelectP csp)
 {
   if (csp)
-    gtk_widget_hide (csp->shell);
+    gtk_widget_set_visible (csp->shell, FALSE);
 }
 
 void
 color_select_free (ColorSelectP csp)
 {
+  int i;
+
   if (csp)
     {
-      gtk_widget_destroy (csp->shell);
-      gdk_gc_destroy (csp->gc);
+      /*  the adjustments may outlive the window for a moment  */
+      for (i = 0; i < 6; i++)
+	g_signal_handlers_disconnect_by_data (csp->slider_data[i], csp);
+
+      gtk_window_destroy (GTK_WINDOW (csp->shell));
       g_free (csp);
     }
 }
@@ -416,13 +428,13 @@ color_select_update (ColorSelectP          csp,
       if (update & UPDATE_XY_COLOR)
 	{
 	  color_select_image_fill (csp->xy_color, csp->xy_color_fill, csp->values);
-	  gtk_widget_draw (csp->xy_color, NULL);
+	  color_select_draw_xy_marker (csp);
 	}
 
       if (update & UPDATE_Z_COLOR)
 	{
 	  color_select_image_fill (csp->z_color, csp->z_color_fill, csp->values);
-	  gtk_widget_draw (csp->z_color, NULL);
+	  color_select_draw_z_marker (csp);
 	}
 
       if (update & UPDATE_NEW_COLOR)
@@ -692,11 +704,11 @@ color_select_update_sliders (ColorSelectP csp,
       for (i = 0; i < 6; i++)
 	if (i != skip)
 	  {
-	    csp->slider_data[i]->value = (gfloat) csp->values[i];
-
-	    gtk_signal_handler_block_by_data (GTK_OBJECT (csp->slider_data[i]), csp);
-	    gtk_signal_emit_by_name (GTK_OBJECT (csp->slider_data[i]), "value_changed");
-	    gtk_signal_handler_unblock_by_data (GTK_OBJECT (csp->slider_data[i]), csp);
+	    g_signal_handlers_block_by_func (csp->slider_data[i],
+					     color_select_slider_update, csp);
+	    gtk_adjustment_set_value (csp->slider_data[i], (gdouble) csp->values[i]);
+	    g_signal_handlers_unblock_by_func (csp->slider_data[i],
+					       color_select_slider_update, csp);
 	  }
     }
 }
@@ -715,9 +727,11 @@ color_select_update_entries (ColorSelectP csp,
 	  {
 	    sprintf (buffer, "%d", csp->values[i]);
 
-	    gtk_signal_handler_block_by_data (GTK_OBJECT (csp->entries[i]), csp);
-	    gtk_entry_set_text (GTK_ENTRY (csp->entries[i]), buffer);
-	    gtk_signal_handler_unblock_by_data (GTK_OBJECT (csp->entries[i]), csp);
+	    g_signal_handlers_block_by_func (csp->entries[i],
+					     color_select_entry_update, csp);
+	    gtk_editable_set_text (GTK_EDITABLE (csp->entries[i]), buffer);
+	    g_signal_handlers_unblock_by_func (csp->entries[i],
+					       color_select_entry_update, csp);
 	  }
     }
 }
@@ -726,40 +740,13 @@ static void
 color_select_update_colors (ColorSelectP csp,
 			    int          which)
 {
-  GdkWindow *window;
-  GdkColor color;
-  int red, green, blue;
-  int width, height;
-
+  /*  the swatches draw themselves from csp in color_select_color_draw  */
   if (csp)
     {
       if (which)
-	{
-	  window = csp->orig_color->window;
-	  color.pixel = old_color_pixel;
-	  red = csp->orig_values[0];
-	  green = csp->orig_values[1];
-	  blue = csp->orig_values[2];
-	}
+	gtk_widget_queue_draw (csp->orig_color);
       else
-	{
-	  window = csp->new_color->window;
-	  color.pixel = new_color_pixel;
-	  red = csp->values[RED];
-	  green = csp->values[GREEN];
-	  blue = csp->values[BLUE];
-	}
-
-      gdk_window_get_size (window, &width, &height);
-
-      store_color (&color.pixel, red, green, blue);
-
-      if (csp->gc)
-	{
-	  gdk_gc_set_foreground (csp->gc, &color);
-	  gdk_draw_rectangle (window, csp->gc, 1,
-			      0, 0, width, height);
-	}
+	gtk_widget_queue_draw (csp->new_color);
     }
 }
 
@@ -781,12 +768,11 @@ color_select_ok_callback (GtkWidget *w,
     }
 }
 
-static gint
-color_select_delete_callback (GtkWidget *w,
-			      GdkEvent  *e,
+static gboolean
+color_select_delete_callback (GtkWindow *w,
 			      gpointer   client_data)
 {
-  color_select_cancel_callback (w, client_data);
+  color_select_cancel_callback (GTK_WIDGET (w), client_data);
 
   return TRUE;
 }
@@ -810,224 +796,182 @@ color_select_cancel_callback (GtkWidget *w,
     }
 }
 
-static gint
-color_select_xy_expose (GtkWidget      *widget,
-			GdkEventExpose *event,
-			ColorSelectP    csp)
+static void
+color_select_xy_marker_draw (GtkDrawingArea *area,
+			     cairo_t        *cr,
+			     int             width,
+			     int             height,
+			     gpointer        data)
 {
-  if (!csp->gc)
-    csp->gc = gdk_gc_new (widget->window);
+  ColorSelectP csp = data;
+  int x, y;
 
-  color_select_draw_xy_marker (csp, &event->area);
+  x = ((XY_DEF_WIDTH - 1) * csp->pos[0]) / 255;
+  y = (XY_DEF_HEIGHT - 1) - ((XY_DEF_HEIGHT - 1) * csp->pos[1]) / 255;
 
-  return FALSE;
+  /*  an inverted cross hair, like the XOR lines it replaces: the pixel
+   *  where the lines cross is inverted twice
+   */
+  color_select_paint_inverted (cr, csp->xy_color,
+			       0, y, XY_DEF_WIDTH, 1, -1, -1);
+  color_select_paint_inverted (cr, csp->xy_color,
+			       x, 0, 1, XY_DEF_HEIGHT, x, y);
 }
 
-static gint
-color_select_xy_events (GtkWidget    *widget,
-			GdkEvent     *event,
-			ColorSelectP  csp)
+static void
+color_select_xy_set_pos (ColorSelectP csp,
+			 double       x,
+			 double       y)
 {
-  GdkEventButton *bevent;
-  GdkEventMotion *mevent;
-  int tx, ty;
+  csp->pos[0] = (x * 255) / (XY_DEF_WIDTH - 1);
+  csp->pos[1] = 255 - (y * 255) / (XY_DEF_HEIGHT - 1);
 
-  switch (event->type)
+  if (csp->pos[0] < 0)
+    csp->pos[0] = 0;
+  if (csp->pos[0] > 255)
+    csp->pos[0] = 255;
+  if (csp->pos[1] < 0)
+    csp->pos[1] = 0;
+  if (csp->pos[1] > 255)
+    csp->pos[1] = 255;
+
+  color_select_draw_xy_marker (csp);
+}
+
+static void
+color_select_xy_pressed (GtkGestureDrag *gesture,
+			 double          x,
+			 double          y,
+			 gpointer        data)
+{
+  ColorSelectP csp = data;
+
+  color_select_xy_set_pos (csp, x, y);
+  color_select_update (csp, UPDATE_VALUES);
+}
+
+static void
+color_select_xy_motion (GtkGestureDrag *gesture,
+			double          offset_x,
+			double          offset_y,
+			gpointer        data)
+{
+  ColorSelectP csp = data;
+  double x, y;
+
+  gtk_gesture_drag_get_start_point (gesture, &x, &y);
+  color_select_xy_set_pos (csp, x + offset_x, y + offset_y);
+  color_select_update (csp, UPDATE_VALUES);
+}
+
+static void
+color_select_xy_released (GtkGestureDrag *gesture,
+			  double          offset_x,
+			  double          offset_y,
+			  gpointer        data)
+{
+  ColorSelectP csp = data;
+  double x, y;
+
+  gtk_gesture_drag_get_start_point (gesture, &x, &y);
+  color_select_xy_set_pos (csp, x + offset_x, y + offset_y);
+  color_select_update (csp, UPDATE_VALUES);
+}
+
+static void
+color_select_z_marker_draw (GtkDrawingArea *area,
+			    cairo_t        *cr,
+			    int             width,
+			    int             height,
+			    gpointer        data)
+{
+  ColorSelectP csp = data;
+  int y;
+
+  y = (Z_DEF_HEIGHT - 1) - ((Z_DEF_HEIGHT - 1) * csp->pos[2]) / 255;
+
+  color_select_paint_inverted (cr, csp->z_color,
+			       0, y, Z_DEF_WIDTH, 1, -1, -1);
+}
+
+static void
+color_select_z_set_pos (ColorSelectP csp,
+			double       y)
+{
+  csp->pos[2] = 255 - (y * 255) / (Z_DEF_HEIGHT - 1);
+  if (csp->pos[2] < 0)
+    csp->pos[2] = 0;
+  if (csp->pos[2] > 255)
+    csp->pos[2] = 255;
+
+  color_select_draw_z_marker (csp);
+}
+
+static void
+color_select_z_pressed (GtkGestureDrag *gesture,
+			double          x,
+			double          y,
+			gpointer        data)
+{
+  ColorSelectP csp = data;
+
+  color_select_z_set_pos (csp, y);
+  color_select_update (csp, UPDATE_VALUES);
+}
+
+static void
+color_select_z_motion (GtkGestureDrag *gesture,
+		       double          offset_x,
+		       double          offset_y,
+		       gpointer        data)
+{
+  ColorSelectP csp = data;
+  double x, y;
+
+  gtk_gesture_drag_get_start_point (gesture, &x, &y);
+  color_select_z_set_pos (csp, y + offset_y);
+  color_select_update (csp, UPDATE_VALUES);
+}
+
+static void
+color_select_z_released (GtkGestureDrag *gesture,
+			 double          offset_x,
+			 double          offset_y,
+			 gpointer        data)
+{
+  ColorSelectP csp = data;
+  double x, y;
+
+  gtk_gesture_drag_get_start_point (gesture, &x, &y);
+  color_select_z_set_pos (csp, y + offset_y);
+  color_select_update (csp, UPDATE_VALUES | UPDATE_XY_COLOR);
+}
+
+static void
+color_select_color_draw (GtkDrawingArea *area,
+			 cairo_t        *cr,
+			 int             width,
+			 int             height,
+			 gpointer        data)
+{
+  ColorSelectP csp = data;
+  int red, green, blue;
+
+  if (GTK_WIDGET (area) == csp->orig_color)
     {
-    case GDK_BUTTON_PRESS:
-      bevent = (GdkEventButton *) event;
-
-      color_select_draw_xy_marker (csp, NULL);
-
-      csp->pos[0] = (bevent->x * 255) / (XY_DEF_WIDTH - 1);
-      csp->pos[1] = 255 - (bevent->y * 255) / (XY_DEF_HEIGHT - 1);
-
-      if (csp->pos[0] < 0)
-	csp->pos[0] = 0;
-      if (csp->pos[0] > 255)
-	csp->pos[0] = 255;
-      if (csp->pos[1] < 0)
-	csp->pos[1] = 0;
-      if (csp->pos[1] > 255)
-	csp->pos[1] = 255;
-
-      gdk_pointer_grab (csp->xy_color->window, FALSE,
-			GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-			NULL, NULL, bevent->time);
-      color_select_draw_xy_marker (csp, NULL);
-
-      color_select_update (csp, UPDATE_VALUES);
-      break;
-
-    case GDK_BUTTON_RELEASE:
-      bevent = (GdkEventButton *) event;
-
-      color_select_draw_xy_marker (csp, NULL);
-
-      csp->pos[0] = (bevent->x * 255) / (XY_DEF_WIDTH - 1);
-      csp->pos[1] = 255 - (bevent->y * 255) / (XY_DEF_HEIGHT - 1);
-
-      if (csp->pos[0] < 0)
-	csp->pos[0] = 0;
-      if (csp->pos[0] > 255)
-	csp->pos[0] = 255;
-      if (csp->pos[1] < 0)
-	csp->pos[1] = 0;
-      if (csp->pos[1] > 255)
-	csp->pos[1] = 255;
-
-      gdk_pointer_ungrab (bevent->time);
-      color_select_draw_xy_marker (csp, NULL);
-      color_select_update (csp, UPDATE_VALUES);
-      break;
-
-    case GDK_MOTION_NOTIFY:
-      mevent = (GdkEventMotion *) event;
-      if (mevent->is_hint)
-	{
-	  gdk_window_get_pointer (widget->window, &tx, &ty, NULL);
-	  mevent->x = tx;
-	  mevent->y = ty;
-	}
-
-      color_select_draw_xy_marker (csp, NULL);
-
-      csp->pos[0] = (mevent->x * 255) / (XY_DEF_WIDTH - 1);
-      csp->pos[1] = 255 - (mevent->y * 255) / (XY_DEF_HEIGHT - 1);
-
-      if (csp->pos[0] < 0)
-	csp->pos[0] = 0;
-      if (csp->pos[0] > 255)
-	csp->pos[0] = 255;
-      if (csp->pos[1] < 0)
-	csp->pos[1] = 0;
-      if (csp->pos[1] > 255)
-	csp->pos[1] = 255;
-
-      color_select_draw_xy_marker (csp, NULL);
-      color_select_update (csp, UPDATE_VALUES);
-      break;
-
-    default:
-      break;
+      red = csp->orig_values[0];
+      green = csp->orig_values[1];
+      blue = csp->orig_values[2];
+    }
+  else
+    {
+      red = csp->values[RED];
+      green = csp->values[GREEN];
+      blue = csp->values[BLUE];
     }
 
-  return FALSE;
-}
-
-static gint
-color_select_z_expose (GtkWidget      *widget,
-		       GdkEventExpose *event,
-		       ColorSelectP    csp)
-{
-  if (!csp->gc)
-    csp->gc = gdk_gc_new (widget->window);
-
-  color_select_draw_z_marker (csp, &event->area);
-
-  return FALSE;
-}
-
-static gint
-color_select_z_events (GtkWidget    *widget,
-		       GdkEvent     *event,
-		       ColorSelectP  csp)
-{
-  GdkEventButton *bevent;
-  GdkEventMotion *mevent;
-  int tx, ty;
-
-  switch (event->type)
-    {
-    case GDK_BUTTON_PRESS:
-      bevent = (GdkEventButton *) event;
-
-      color_select_draw_z_marker (csp, NULL);
-
-      csp->pos[2] = 255 - (bevent->y * 255) / (Z_DEF_HEIGHT - 1);
-      if (csp->pos[2] < 0)
-	csp->pos[2] = 0;
-      if (csp->pos[2] > 255)
-	csp->pos[2] = 255;
-
-      gdk_pointer_grab (csp->z_color->window, FALSE,
-			GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-			NULL, NULL, bevent->time);
-      color_select_draw_z_marker (csp, NULL);
-      color_select_update (csp, UPDATE_VALUES);
-      break;
-
-    case GDK_BUTTON_RELEASE:
-      bevent = (GdkEventButton *) event;
-
-      color_select_draw_z_marker (csp, NULL);
-
-      csp->pos[2] = 255 - (bevent->y * 255) / (Z_DEF_HEIGHT - 1);
-      if (csp->pos[2] < 0)
-	csp->pos[2] = 0;
-      if (csp->pos[2] > 255)
-	csp->pos[2] = 255;
-
-      gdk_pointer_ungrab (bevent->time);
-      color_select_draw_z_marker (csp, NULL);
-      color_select_update (csp, UPDATE_VALUES | UPDATE_XY_COLOR);
-      break;
-
-    case GDK_MOTION_NOTIFY:
-      mevent = (GdkEventMotion *) event;
-      if (mevent->is_hint)
-	{
-	  gdk_window_get_pointer (widget->window, &tx, &ty, NULL);
-	  mevent->x = tx;
-	  mevent->y = ty;
-	}
-
-      color_select_draw_z_marker (csp, NULL);
-
-      csp->pos[2] = 255 - (mevent->y * 255) / (Z_DEF_HEIGHT - 1);
-      if (csp->pos[2] < 0)
-	csp->pos[2] = 0;
-      if (csp->pos[2] > 255)
-	csp->pos[2] = 255;
-
-      color_select_draw_z_marker (csp, NULL);
-      color_select_update (csp, UPDATE_VALUES);
-      break;
-
-    default:
-      break;
-    }
-
-  return FALSE;
-}
-
-static gint
-color_select_color_events (GtkWidget *widget,
-			   GdkEvent  *event)
-{
-  ColorSelectP csp;
-
-  csp = (ColorSelectP) gtk_object_get_user_data (GTK_OBJECT (widget));
-  if (!csp)
-    return FALSE;
-
-  switch (event->type)
-    {
-    case GDK_EXPOSE:
-      if (!csp->gc)
-	csp->gc = gdk_gc_new (widget->window);
-
-      if (widget == csp->new_color)
-	color_select_update (csp, UPDATE_NEW_COLOR);
-      else if (widget == csp->orig_color)
-	color_select_update (csp, UPDATE_ORIG_COLOR);
-      break;
-
-    default:
-      break;
-    }
-
-  return FALSE;
+  cairo_set_source_rgb (cr, red / 255.0, green / 255.0, blue / 255.0);
+  cairo_paint (cr);
 }
 
 static void
@@ -1051,7 +995,7 @@ color_select_slider_update (GtkAdjustment *adjustment,
       for (j = 0; j < 6; j++)
 	old_values[j] = csp->values[j];
 
-      csp->values[i] = (int) adjustment->value;
+      csp->values[i] = (int) gtk_adjustment_get_value (adjustment);
 
       if ((i >= HUE) && (i <= VALUE))
 	color_select_update_rgb_values (csp);
@@ -1078,23 +1022,23 @@ color_select_slider_update (GtkAdjustment *adjustment,
 
       if (update_z_marker)
 	{
-	  color_select_draw_z_marker (csp, NULL);
+	  color_select_draw_z_marker (csp);
 	  color_select_update (csp, UPDATE_POS | UPDATE_XY_COLOR);
-	  color_select_draw_z_marker (csp, NULL);
+	  color_select_draw_z_marker (csp);
 	}
       else
 	{
 	  if (update_z_marker)
-	    color_select_draw_z_marker (csp, NULL);
+	    color_select_draw_z_marker (csp);
 	  if (update_xy_marker)
-	    color_select_draw_xy_marker (csp, NULL);
+	    color_select_draw_xy_marker (csp);
 
 	  color_select_update (csp, UPDATE_POS);
 
 	  if (update_z_marker)
-	    color_select_draw_z_marker (csp, NULL);
+	    color_select_draw_z_marker (csp);
 	  if (update_xy_marker)
-	    color_select_draw_xy_marker (csp, NULL);
+	    color_select_draw_xy_marker (csp);
 	}
 
       color_select_update (csp, UPDATE_NEW_COLOR);
@@ -1122,7 +1066,7 @@ color_select_entry_update (GtkWidget *w,
       for (j = 0; j < 6; j++)
 	old_values[j] = csp->values[j];
 
-      csp->values[i] = atoi (gtk_entry_get_text (GTK_ENTRY (csp->entries[i])));
+      csp->values[i] = atoi (gtk_editable_get_text (GTK_EDITABLE (csp->entries[i])));
       if (csp->values[i] == old_values[i])
 	return;
 
@@ -1151,23 +1095,23 @@ color_select_entry_update (GtkWidget *w,
 
       if (update_z_marker)
 	{
-	  color_select_draw_z_marker (csp, NULL);
+	  color_select_draw_z_marker (csp);
 	  color_select_update (csp, UPDATE_POS | UPDATE_XY_COLOR);
-	  color_select_draw_z_marker (csp, NULL);
+	  color_select_draw_z_marker (csp);
 	}
       else
 	{
 	  if (update_z_marker)
-	    color_select_draw_z_marker (csp, NULL);
+	    color_select_draw_z_marker (csp);
 	  if (update_xy_marker)
-	    color_select_draw_xy_marker (csp, NULL);
+	    color_select_draw_xy_marker (csp);
 
 	  color_select_update (csp, UPDATE_POS);
 
 	  if (update_z_marker)
-	    color_select_draw_z_marker (csp, NULL);
+	    color_select_draw_z_marker (csp);
 	  if (update_xy_marker)
-	    color_select_draw_xy_marker (csp, NULL);
+	    color_select_draw_xy_marker (csp);
 	}
 
       color_select_update (csp, UPDATE_NEW_COLOR);
@@ -1182,7 +1126,7 @@ color_select_toggle_update (GtkWidget *w,
   ColorSelectFillType type = HUE;
   int i;
 
-  if (!GTK_TOGGLE_BUTTON (w)->active)
+  if (!gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     return;
 
   csp = (ColorSelectP) data;
@@ -1236,13 +1180,14 @@ color_select_image_fill (GtkWidget           *preview,
   ColorSelectFill csf;
   int height;
 
-  csf.buffer = g_malloc (preview->requisition.width * 3);
+  csf.width = gimp_preview_get_width (GIMP_PREVIEW (preview));
+  csf.height = gimp_preview_get_height (GIMP_PREVIEW (preview));
+
+  csf.buffer = g_malloc (csf.width * 3);
 
   csf.update = update_procs[type];
 
   csf.y = -1;
-  csf.width = preview->requisition.width;
-  csf.height = preview->requisition.height;
   csf.values = values;
 
   height = csf.height;
@@ -1250,87 +1195,99 @@ color_select_image_fill (GtkWidget           *preview,
     while (height--)
       {
 	(* csf.update) (&csf);
-	gtk_preview_draw_row (GTK_PREVIEW (preview), csf.buffer, 0, csf.y, csf.width);
+	gimp_preview_draw_row (GIMP_PREVIEW (preview), csf.buffer, 0, csf.y, csf.width);
       }
 
   g_free (csf.buffer);
 }
 
+/*  Paints the w x h area of preview at (x, y) with its colors inverted,
+ *  except for the pixel at (skip_x, skip_y), which keeps its color.
+ */
 static void
-color_select_draw_z_marker (ColorSelectP csp,
-			    GdkRectangle *clip)
+color_select_paint_inverted (cairo_t   *cr,
+			     GtkWidget *preview,
+			     int        x,
+			     int        y,
+			     int        w,
+			     int        h,
+			     int        skip_x,
+			     int        skip_y)
 {
-  int width;
-  int height;
-  int y;
-  int minx;
-  int miny;
+  cairo_surface_t *surface;
+  const guchar *buffer;
+  const guchar *src;
+  guchar *data;
+  guint32 *dest;
+  int pwidth, pheight;
+  int rowstride;
+  int stride;
+  int i, j;
 
-  if (csp->gc)
+  pwidth = gimp_preview_get_width (GIMP_PREVIEW (preview));
+  pheight = gimp_preview_get_height (GIMP_PREVIEW (preview));
+  buffer = gimp_preview_get_buffer (GIMP_PREVIEW (preview));
+  rowstride = gimp_preview_get_rowstride (GIMP_PREVIEW (preview));
+
+  if (x < 0)
     {
-      y = (Z_DEF_HEIGHT - 1) - ((Z_DEF_HEIGHT - 1) * csp->pos[2]) / 255;
-      width = csp->z_color->requisition.width;
-      height = csp->z_color->requisition.height;
-      minx = 0;
-      miny = 0;
-      if (width <= 0)
-	return;
+      w += x;
+      x = 0;
+    }
+  if (y < 0)
+    {
+      h += y;
+      y = 0;
+    }
+  w = MIN (w, pwidth - x);
+  h = MIN (h, pheight - y);
+  if (!buffer || w <= 0 || h <= 0)
+    return;
 
-      if (clip)
-        {
-	  width  = MIN(width,  clip->x + clip->width);
-	  height = MIN(height, clip->y + clip->height);
-	  minx   = MAX(0, clip->x);
-	  miny   = MAX(0, clip->y);
-	}
+  surface = cairo_image_surface_create (CAIRO_FORMAT_RGB24, w, h);
+  cairo_surface_flush (surface);
+  data = cairo_image_surface_get_data (surface);
+  stride = cairo_image_surface_get_stride (surface);
 
-      if (y >= miny && y < height)
-        {
-	  gdk_gc_set_function (csp->gc, GDK_INVERT);
-	  gdk_draw_line (csp->z_color->window, csp->gc, minx, y, width - 1, y);
-	  gdk_gc_set_function (csp->gc, GDK_COPY);
+  for (i = 0; i < h; i++)
+    {
+      src = buffer + (y + i) * rowstride + x * 3;
+      dest = (guint32 *) (data + i * stride);
+
+      for (j = 0; j < w; j++, src += 3)
+	{
+	  if (x + j == skip_x && y + i == skip_y)
+	    dest[j] = ((guint32) src[0] << 16) | ((guint32) src[1] << 8) | src[2];
+	  else
+	    dest[j] = (((guint32) (255 - src[0]) << 16) |
+		       ((guint32) (255 - src[1]) << 8) |
+		       (guint32) (255 - src[2]));
 	}
     }
+  cairo_surface_mark_dirty (surface);
+
+  cairo_set_source_surface (cr, surface, x, y);
+  cairo_rectangle (cr, x, y, w, h);
+  cairo_fill (cr);
+
+  cairo_surface_destroy (surface);
+}
+
+/*  The markers are drawn by the overlays' draw functions: these only
+ *  ask for that to happen.
+ */
+static void
+color_select_draw_z_marker (ColorSelectP csp)
+{
+  if (csp->z_marker)
+    gtk_widget_queue_draw (csp->z_marker);
 }
 
 static void
-color_select_draw_xy_marker (ColorSelectP csp,
-			     GdkRectangle *clip)
+color_select_draw_xy_marker (ColorSelectP csp)
 {
-  int width;
-  int height;
-  int x, y;
-  int minx, miny;
-
-  if (csp->gc)
-    {
-      x = ((XY_DEF_WIDTH - 1) * csp->pos[0]) / 255;
-      y = (XY_DEF_HEIGHT - 1) - ((XY_DEF_HEIGHT - 1) * csp->pos[1]) / 255;
-      width = csp->xy_color->requisition.width;
-      height = csp->xy_color->requisition.height;
-      minx = 0;
-      miny = 0;
-      if ((width <= 0) || (height <= 0))
-	return;
-
-      gdk_gc_set_function (csp->gc, GDK_INVERT);
-
-      if (clip)
-        {
-	  width  = MIN(width,  clip->x + clip->width);
-	  height = MIN(height, clip->y + clip->height);
-	  minx   = MAX(0, clip->x);
-	  miny   = MAX(0, clip->y);
-	}
-
-      if (y >= miny && y < height)
-	gdk_draw_line (csp->xy_color->window, csp->gc, minx, y, width - 1, y);
-
-      if (x >= minx && x < width)
-	gdk_draw_line (csp->xy_color->window, csp->gc, x, miny, x, height - 1);
-
-      gdk_gc_set_function (csp->gc, GDK_COPY);
-    }
+  if (csp->xy_marker)
+    gtk_widget_queue_draw (csp->xy_marker);
 }
 
 static void

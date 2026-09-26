@@ -23,7 +23,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
 
 /* Declare local functions. */
 static void query(void);
@@ -253,7 +252,7 @@ static void do_layerrot(GDrawable *drawable,
       drawable = gimp_drawable_get(drawable->id);
     }
   else /* not a layer... probably a channel... abort operation */
-    exit;
+    return;
 
 
   /* If 'preserve transparency' was on, we need to temporatily

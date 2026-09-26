@@ -39,58 +39,26 @@ enum {
 };
 
 
-static void gimp_drawable_class_init (GimpDrawableClass *klass);
-static void gimp_drawable_init	     (GimpDrawable      *drawable);
-static void gimp_drawable_destroy    (GtkObject		*object);
+static void gimp_drawable_finalize   (GObject           *object);
 
-static gint drawable_signals[LAST_SIGNAL] = { 0 };
+static guint drawable_signals[LAST_SIGNAL] = { 0 };
 
-static GimpDrawableClass *parent_class = NULL;
-
-
-guint
-gimp_drawable_get_type ()
-{
-  static guint drawable_type = 0;
-
-  if (!drawable_type)
-    {
-      GtkTypeInfo drawable_info =
-      {
-	"GimpDrawable",
-	sizeof (GimpDrawable),
-	sizeof (GimpDrawableClass),
-	(GtkClassInitFunc) gimp_drawable_class_init,
-	(GtkObjectInitFunc) gimp_drawable_init,
-	(GtkArgSetFunc) NULL,
-	(GtkArgGetFunc) NULL,
-      };
-
-      drawable_type = gtk_type_unique (gtk_data_get_type (), &drawable_info);
-    }
-
-  return drawable_type;
-}
+G_DEFINE_TYPE (GimpDrawable, gimp_drawable, G_TYPE_INITIALLY_UNOWNED)
 
 static void
 gimp_drawable_class_init (GimpDrawableClass *class)
 {
-  GtkObjectClass *object_class;
-
-  object_class = (GtkObjectClass*) class;
-  parent_class = gtk_type_class (gtk_data_get_type ());
+  GObjectClass *object_class = G_OBJECT_CLASS (class);
 
   drawable_signals[INVALIDATE_PREVIEW] =
-    gtk_signal_new ("invalidate_preview",
-		    GTK_RUN_LAST,
-		    object_class->type,
-		    GTK_SIGNAL_OFFSET (GimpDrawableClass, invalidate_preview),
-		    gtk_signal_default_marshaller,
-		    GTK_TYPE_NONE, 0);
+    g_signal_new ("invalidate-preview",
+		  G_TYPE_FROM_CLASS (class),
+		  G_SIGNAL_RUN_LAST,
+		  G_STRUCT_OFFSET (GimpDrawableClass, invalidate_preview),
+		  NULL, NULL, NULL,
+		  G_TYPE_NONE, 0);
 
-  gtk_object_class_add_signals (object_class, (guint *)drawable_signals, LAST_SIGNAL);
-
-  object_class->destroy = gimp_drawable_destroy;
+  object_class->finalize = gimp_drawable_finalize;
 }
 
 
@@ -103,26 +71,14 @@ static GHashTable *drawable_table = NULL;
 /**************************/
 /*  Function definitions  */
 
-static guint
-drawable_hash (gpointer v)
-{
-  return (guint) v;
-}
-
-static gint
-drawable_hash_compare (gpointer v1, gpointer v2)
-{
-  return ((guint) v1) == ((guint) v2);
-}
-
 GimpDrawable*
 drawable_get_ID (int drawable_id)
 {
   if (drawable_table == NULL)
     return NULL;
 
-  return (GimpDrawable*) g_hash_table_lookup (drawable_table, 
-					      (gpointer) drawable_id);
+  return (GimpDrawable*) g_hash_table_lookup (drawable_table,
+					      GINT_TO_POINTER (drawable_id));
 }
 
 int
@@ -317,7 +273,7 @@ drawable_invalidate_preview (GimpDrawable *drawable)
 
   drawable->preview_valid = FALSE;
 
-  gtk_signal_emit (GTK_OBJECT(drawable), drawable_signals[INVALIDATE_PREVIEW]);
+  g_signal_emit (drawable, drawable_signals[INVALIDATE_PREVIEW], 0);
 
   gimage = drawable_gimage (drawable);
   if (gimage)
@@ -579,23 +535,20 @@ gimp_drawable_init (GimpDrawable *drawable)
 
   drawable->ID = global_drawable_ID++;
   if (drawable_table == NULL)
-    drawable_table = g_hash_table_new (drawable_hash,
-				       drawable_hash_compare);
-  g_hash_table_insert (drawable_table, (gpointer) drawable->ID,
+    drawable_table = g_hash_table_new (g_direct_hash, g_direct_equal);
+  g_hash_table_insert (drawable_table, GINT_TO_POINTER (drawable->ID),
 		       (gpointer) drawable);
 }
 
 static void
-gimp_drawable_destroy (GtkObject *object)
+gimp_drawable_finalize (GObject *object)
 {
   GimpDrawable *drawable;
-  g_return_if_fail (object != NULL);
-  g_return_if_fail (GIMP_IS_DRAWABLE (object));
 
   drawable = GIMP_DRAWABLE (object);
 
-  g_hash_table_remove (drawable_table, (gpointer) drawable->ID);
-  
+  g_hash_table_remove (drawable_table, GINT_TO_POINTER (drawable->ID));
+
   if (drawable->name)
     g_free (drawable->name);
 
@@ -605,8 +558,7 @@ gimp_drawable_destroy (GtkObject *object)
   if (drawable->preview)
     temp_buf_free (drawable->preview);
 
-  if (GTK_OBJECT_CLASS (parent_class)->destroy)
-    (*GTK_OBJECT_CLASS (parent_class)->destroy) (object);
+  G_OBJECT_CLASS (gimp_drawable_parent_class)->finalize (object);
 }
 
 void

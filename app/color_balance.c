@@ -76,10 +76,10 @@ struct _ColorBalanceDialog
 
 /*  color balance action functions  */
 
-static void   color_balance_button_press   (Tool *, GdkEventButton *, gpointer);
-static void   color_balance_button_release (Tool *, GdkEventButton *, gpointer);
-static void   color_balance_motion         (Tool *, GdkEventMotion *, gpointer);
-static void   color_balance_cursor_update  (Tool *, GdkEventMotion *, gpointer);
+static void   color_balance_button_press   (Tool *, GimpButtonEvent *, gpointer);
+static void   color_balance_button_release (Tool *, GimpButtonEvent *, gpointer);
+static void   color_balance_motion         (Tool *, GimpMotionEvent *, gpointer);
+static void   color_balance_cursor_update  (Tool *, GimpMotionEvent *, gpointer);
 static void   color_balance_control        (Tool *, int, gpointer);
 
 static ColorBalanceDialog *  color_balance_new_dialog          (void);
@@ -87,7 +87,7 @@ static void                  color_balance_update              (ColorBalanceDial
 static void                  color_balance_preview             (ColorBalanceDialog *);
 static void                  color_balance_ok_callback         (GtkWidget *, gpointer);
 static void                  color_balance_cancel_callback     (GtkWidget *, gpointer);
-static gint                  color_balance_delete_callback     (GtkWidget *, GdkEvent *, gpointer);
+static gint                  color_balance_delete_callback     (GtkWidget *, gpointer);
 static void                  color_balance_shadows_callback    (GtkWidget *, gpointer);
 static void                  color_balance_midtones_callback   (GtkWidget *, gpointer);
 static void                  color_balance_highlights_callback (GtkWidget *, gpointer);
@@ -203,7 +203,7 @@ color_balance (PixelRegion *srcPR,
 
 static void
 color_balance_button_press (Tool           *tool,
-			    GdkEventButton *bevent,
+			    GimpButtonEvent *bevent,
 			    gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -214,27 +214,27 @@ color_balance_button_press (Tool           *tool,
 
 static void
 color_balance_button_release (Tool           *tool,
-			      GdkEventButton *bevent,
+			      GimpButtonEvent *bevent,
 			      gpointer        gdisp_ptr)
 {
 }
 
 static void
 color_balance_motion (Tool           *tool,
-		      GdkEventMotion *mevent,
+		      GimpMotionEvent *mevent,
 		      gpointer        gdisp_ptr)
 {
 }
 
 static void
 color_balance_cursor_update (Tool           *tool,
-			     GdkEventMotion *mevent,
+			     GimpMotionEvent *mevent,
 			     gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
 
   gdisp = (GDisplay *) gdisp_ptr;
-  gdisplay_install_tool_cursor (gdisp, GDK_TOP_LEFT_ARROW);
+  gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TOP_LEFT_ARROW);
 }
 
 static void
@@ -328,8 +328,8 @@ color_balance_initialize (void *gdisp_ptr)
   if (!color_balance_dialog)
     color_balance_dialog = color_balance_new_dialog ();
   else
-    if (!GTK_WIDGET_VISIBLE (color_balance_dialog->shell))
-      gtk_widget_show (color_balance_dialog->shell);
+    if (!gtk_widget_get_visible (color_balance_dialog->shell))
+      gtk_window_present (GTK_WINDOW (color_balance_dialog->shell));
 
   /*  Initialize dialog fields  */
   color_balance_dialog->image_map = NULL;
@@ -369,8 +369,8 @@ color_balance_new_dialog ()
   GtkWidget *slider;
   GtkWidget *toggle;
   GtkWidget *radio_button;
-  GtkObject *data;
-  GSList *group = NULL;
+  GtkAdjustment *data;
+  GtkWidget *group = NULL;
   int i;
   char *appl_mode_names[3] =
   {
@@ -391,190 +391,160 @@ color_balance_new_dialog ()
   cbd->application_mode = SHADOWS;
 
   /*  The shell and main vbox  */
-  cbd->shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (cbd->shell), "color_balance", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (cbd->shell), "Color Balance");
+  cbd->shell = gimp_dialog_new ("Color Balance");
   
   /* handle the wm close signal */
-  gtk_signal_connect (GTK_OBJECT (cbd->shell), "delete_event",
-		      GTK_SIGNAL_FUNC (color_balance_delete_callback),
+  g_signal_connect (cbd->shell, "close-request", G_CALLBACK (color_balance_delete_callback),
 		      cbd);
 
-  vbox = gtk_vbox_new (FALSE, 2);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 2);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (cbd->shell)->vbox), vbox, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 2);
+  gimp_container_set_border_width (vbox, 2);
+  gimp_box_pack_start (gimp_dialog_get_vbox (cbd->shell), vbox, TRUE, TRUE, 0);
 
   /*  Horizontal box for application mode  */
-  hbox = gtk_hbox_new (TRUE, 2);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (TRUE, 2);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
 
   label = gtk_label_new ("Color Levels: ");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (hbox), label, TRUE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_box_pack_start (hbox, label, TRUE, FALSE, 0);
 
   /*  cyan-red text  */
   cbd->cyan_red_text = gtk_entry_new ();
-  gtk_widget_set_usize (cbd->cyan_red_text, TEXT_WIDTH, 25);
-  gtk_box_pack_start (GTK_BOX (hbox), cbd->cyan_red_text, TRUE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (cbd->cyan_red_text), "changed",
-		      (GtkSignalFunc) color_balance_cr_text_update,
+  gtk_widget_set_size_request (cbd->cyan_red_text, TEXT_WIDTH, 25);
+  gimp_box_pack_start (hbox, cbd->cyan_red_text, TRUE, FALSE, 0);
+  g_signal_connect (cbd->cyan_red_text, "changed", G_CALLBACK (color_balance_cr_text_update),
 		      cbd);
-  gtk_widget_show (cbd->cyan_red_text);
 
   /*  magenta-green text  */
   cbd->magenta_green_text = gtk_entry_new ();
-  gtk_widget_set_usize (cbd->magenta_green_text, TEXT_WIDTH, 25);
-  gtk_box_pack_start (GTK_BOX (hbox), cbd->magenta_green_text, TRUE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (cbd->magenta_green_text), "changed",
-		      (GtkSignalFunc) color_balance_mg_text_update,
+  gtk_widget_set_size_request (cbd->magenta_green_text, TEXT_WIDTH, 25);
+  gimp_box_pack_start (hbox, cbd->magenta_green_text, TRUE, FALSE, 0);
+  g_signal_connect (cbd->magenta_green_text, "changed", G_CALLBACK (color_balance_mg_text_update),
 		      cbd);
-  gtk_widget_show (cbd->magenta_green_text);
 
   /*  yellow-blue text  */
   cbd->yellow_blue_text = gtk_entry_new ();
-  gtk_widget_set_usize (cbd->yellow_blue_text, TEXT_WIDTH, 25);
-  gtk_box_pack_start (GTK_BOX (hbox), cbd->yellow_blue_text, TRUE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (cbd->yellow_blue_text), "changed",
-		      (GtkSignalFunc) color_balance_yb_text_update,
+  gtk_widget_set_size_request (cbd->yellow_blue_text, TEXT_WIDTH, 25);
+  gimp_box_pack_start (hbox, cbd->yellow_blue_text, TRUE, FALSE, 0);
+  g_signal_connect (cbd->yellow_blue_text, "changed", G_CALLBACK (color_balance_yb_text_update),
 		      cbd);
-  gtk_widget_show (cbd->yellow_blue_text);
-  gtk_widget_show (hbox);
 
 
   /*  The table containing sliders  */
-  table = gtk_table_new (3, 3, FALSE);
-  gtk_box_pack_start (GTK_BOX (vbox), table, FALSE, FALSE, 0);
+  table = gimp_table_new (3, 3, FALSE);
+  gimp_box_pack_start (vbox, table, FALSE, FALSE, 0);
 
   /*  Create the cyan-red scale widget  */
   start_label = gtk_label_new ("Cyan");
-  gtk_misc_set_alignment (GTK_MISC (start_label), 1.0, 1.0);
-  gtk_table_attach (GTK_TABLE (table), start_label, 0, 1, 0, 1,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 2, 2);
+  gimp_misc_set_alignment (start_label, 1.0, 1.0);
+  gimp_table_attach (table, start_label, 0, 1, 0, 1,
+		    GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 2, 2);
   data = gtk_adjustment_new (0, -100.0, 100.0, 1.0, 1.0, 0.0);
   cbd->cyan_red_data = GTK_ADJUSTMENT (data);
-  slider = gtk_hscale_new (GTK_ADJUSTMENT (data));
+  slider = gimp_hscale_new (GTK_ADJUSTMENT (data), 0);
   gtk_scale_set_digits (GTK_SCALE (slider), 0);
-  gtk_table_attach (GTK_TABLE (table), slider, 1, 2, 0, 1,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL,
+  gimp_table_attach (table, slider, 1, 2, 0, 1,
+		    GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL,
 		    2, 2);
-  gtk_scale_set_value_pos (GTK_SCALE (slider), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (slider), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (data), "value_changed",
-		      (GtkSignalFunc) color_balance_cr_scale_update,
+  g_signal_connect (data, "value-changed", G_CALLBACK (color_balance_cr_scale_update),
 		      cbd);
   end_label = gtk_label_new ("Red");
-  gtk_misc_set_alignment (GTK_MISC (end_label), 0.0, 1.0);
-  gtk_table_attach (GTK_TABLE (table), end_label, 2, 3, 0, 1,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 2, 2);
+  gimp_misc_set_alignment (end_label, 0.0, 1.0);
+  gimp_table_attach (table, end_label, 2, 3, 0, 1,
+		    GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 2, 2);
 
-  gtk_widget_show (start_label);
-  gtk_widget_show (end_label);
-  gtk_widget_show (slider);
 
   /*  Create the magenta-green scale widget  */
   start_label = gtk_label_new ("Magenta");
-  gtk_misc_set_alignment (GTK_MISC (start_label), 1.0, 1.0);
-  gtk_table_attach (GTK_TABLE (table), start_label, 0, 1, 1, 2,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 2, 2);
+  gimp_misc_set_alignment (start_label, 1.0, 1.0);
+  gimp_table_attach (table, start_label, 0, 1, 1, 2,
+		    GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 2, 2);
   data = gtk_adjustment_new (0, -100.0, 100.0, 1.0, 1.0, 0.0);
   cbd->magenta_green_data = GTK_ADJUSTMENT (data);
-  slider = gtk_hscale_new (GTK_ADJUSTMENT (data));
+  slider = gimp_hscale_new (GTK_ADJUSTMENT (data), 0);
   gtk_scale_set_digits (GTK_SCALE (slider), 0);
-  gtk_table_attach (GTK_TABLE (table), slider, 1, 2, 1, 2,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL,
+  gimp_table_attach (table, slider, 1, 2, 1, 2,
+		    GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL,
 		    2, 2);
-  gtk_scale_set_value_pos (GTK_SCALE (slider), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (slider), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (data), "value_changed",
-		      (GtkSignalFunc) color_balance_mg_scale_update,
+  g_signal_connect (data, "value-changed", G_CALLBACK (color_balance_mg_scale_update),
 		      cbd);
   end_label = gtk_label_new ("Green");
-  gtk_misc_set_alignment (GTK_MISC (end_label), 0.0, 1.0);
-  gtk_table_attach (GTK_TABLE (table), end_label, 2, 3, 1, 2,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 2, 2);
+  gimp_misc_set_alignment (end_label, 0.0, 1.0);
+  gimp_table_attach (table, end_label, 2, 3, 1, 2,
+		    GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 2, 2);
 
-  gtk_widget_show (start_label);
-  gtk_widget_show (end_label);
-  gtk_widget_show (slider);
 
   /*  Create the yellow-blue scale widget  */
   start_label = gtk_label_new ("Yellow");
-  gtk_misc_set_alignment (GTK_MISC (start_label), 1.0, 1.0);
-  gtk_table_attach (GTK_TABLE (table), start_label, 0, 1, 2, 3,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 2, 2);
+  gimp_misc_set_alignment (start_label, 1.0, 1.0);
+  gimp_table_attach (table, start_label, 0, 1, 2, 3,
+		    GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 2, 2);
   data = gtk_adjustment_new (0, -100.0, 100.0, 1.0, 1.0, 0.0);
   cbd->yellow_blue_data = GTK_ADJUSTMENT (data);
-  slider = gtk_hscale_new (GTK_ADJUSTMENT (data));
+  slider = gimp_hscale_new (GTK_ADJUSTMENT (data), 0);
   gtk_scale_set_digits (GTK_SCALE (slider), 0);
-  gtk_table_attach (GTK_TABLE (table), slider, 1, 2, 2, 3,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL,
+  gimp_table_attach (table, slider, 1, 2, 2, 3,
+		    GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL,
 		    2, 2);
-  gtk_scale_set_value_pos (GTK_SCALE (slider), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (slider), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (data), "value_changed",
-		      (GtkSignalFunc) color_balance_yb_scale_update,
+  g_signal_connect (data, "value-changed", G_CALLBACK (color_balance_yb_scale_update),
 		      cbd);
   end_label = gtk_label_new ("Blue");
-  gtk_misc_set_alignment (GTK_MISC (end_label), 0.0, 1.0);
-  gtk_table_attach (GTK_TABLE (table), end_label, 2, 3, 2, 3,
-		    GTK_SHRINK | GTK_FILL, GTK_SHRINK | GTK_FILL, 2, 2);
+  gimp_misc_set_alignment (end_label, 0.0, 1.0);
+  gimp_table_attach (table, end_label, 2, 3, 2, 3,
+		    GIMP_SHRINK | GIMP_FILL, GIMP_SHRINK | GIMP_FILL, 2, 2);
 
-  gtk_widget_show (start_label);
-  gtk_widget_show (end_label);
-  gtk_widget_show (slider);
 
   /*  Horizontal box for preview and preserve luminosity toggle buttons  */
-  hbox = gtk_hbox_new (TRUE, 2);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (TRUE, 2);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
 
   /*  The preview toggle  */
   toggle = gtk_check_button_new_with_label ("Preview");
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), cbd->preview);
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) color_balance_preview_update,
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), cbd->preview);
+  gimp_box_pack_start (hbox, toggle, TRUE, FALSE, 0);
+  g_signal_connect (toggle, "toggled", G_CALLBACK (color_balance_preview_update),
 		      cbd);
-  gtk_widget_show (toggle);
 
   /*  The preserve luminosity toggle  */
   toggle = gtk_check_button_new_with_label ("Preserve Luminosity");
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), cbd->preserve_luminosity);
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) color_balance_preserve_update,
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), cbd->preserve_luminosity);
+  gimp_box_pack_start (hbox, toggle, TRUE, FALSE, 0);
+  g_signal_connect (toggle, "toggled", G_CALLBACK (color_balance_preserve_update),
 		      cbd);
-  gtk_widget_show (toggle);
-  gtk_widget_show (hbox);
 
   /*  Horizontal box for application mode  */
-  hbox = gtk_hbox_new (TRUE, 2);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (TRUE, 2);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
 
   /*  the radio buttons for application mode  */
   for (i = 0; i < 3; i++)
     {
-      radio_button = gtk_radio_button_new_with_label (group, appl_mode_names[i]);
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (radio_button));
-      gtk_box_pack_start (GTK_BOX (hbox), radio_button, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (radio_button), "toggled",
-			  (GtkSignalFunc) appl_mode_callbacks[i],
+      radio_button = gimp_radio_button_new (group, appl_mode_names[i]);
+      if (group == NULL)
+        gtk_check_button_set_active (GTK_CHECK_BUTTON (radio_button), TRUE);
+      group = radio_button;
+      gimp_box_pack_start (hbox, radio_button, FALSE, FALSE, 0);
+      g_signal_connect (radio_button, "toggled", G_CALLBACK (appl_mode_callbacks[i]),
 			  cbd);
-      gtk_widget_show (radio_button);
     }
-  gtk_widget_show (hbox);
 
   /*  The action area  */
   action_items[0].user_data = cbd;
   action_items[1].user_data = cbd;
-  build_action_area (GTK_DIALOG (cbd->shell), action_items, 2, 0);
+  {
+    int n;
 
-  gtk_widget_show (table);
-  gtk_widget_show (vbox);
-  gtk_widget_show (cbd->shell);
+    for (n = 0; n < 2; n++)
+      gimp_dialog_add_button (cbd->shell, action_items[n].label,
+			      G_CALLBACK (action_items[n].callback),
+			      action_items[n].user_data, n == 0);
+  }
+
+  gtk_window_present (GTK_WINDOW (cbd->shell));
 
   return cbd;
 }
@@ -587,33 +557,30 @@ color_balance_update (ColorBalanceDialog *cbd,
 
   if (update & CR_SLIDER)
     {
-      cbd->cyan_red_data->value = cbd->cyan_red[cbd->application_mode];
-      gtk_signal_emit_by_name (GTK_OBJECT (cbd->cyan_red_data), "value_changed");
+      gtk_adjustment_set_value (cbd->cyan_red_data, cbd->cyan_red[cbd->application_mode]);
     }
   if (update & MG_SLIDER)
     {
-      cbd->magenta_green_data->value = cbd->magenta_green[cbd->application_mode];
-      gtk_signal_emit_by_name (GTK_OBJECT (cbd->magenta_green_data), "value_changed");
+      gtk_adjustment_set_value (cbd->magenta_green_data, cbd->magenta_green[cbd->application_mode]);
     }
   if (update & YB_SLIDER)
     {
-      cbd->yellow_blue_data->value = cbd->yellow_blue[cbd->application_mode];
-      gtk_signal_emit_by_name (GTK_OBJECT (cbd->yellow_blue_data), "value_changed");
+      gtk_adjustment_set_value (cbd->yellow_blue_data, cbd->yellow_blue[cbd->application_mode]);
     }
   if (update & CR_TEXT)
     {
       sprintf (text, "%0.0f", cbd->cyan_red[cbd->application_mode]);
-      gtk_entry_set_text (GTK_ENTRY (cbd->cyan_red_text), text);
+      gtk_editable_set_text (GTK_EDITABLE (cbd->cyan_red_text), text);
     }
   if (update & MG_TEXT)
     {
       sprintf (text, "%0.0f", cbd->magenta_green[cbd->application_mode]);
-      gtk_entry_set_text (GTK_ENTRY (cbd->magenta_green_text), text);
+      gtk_editable_set_text (GTK_EDITABLE (cbd->magenta_green_text), text);
     }
   if (update & YB_TEXT)
     {
       sprintf (text, "%0.0f", cbd->yellow_blue[cbd->application_mode]);
-      gtk_entry_set_text (GTK_ENTRY (cbd->yellow_blue_text), text);
+      gtk_editable_set_text (GTK_EDITABLE (cbd->yellow_blue_text), text);
     }
 }
 
@@ -635,8 +602,8 @@ color_balance_ok_callback (GtkWidget *widget,
 
   cbd = (ColorBalanceDialog *) client_data;
 
-  if (GTK_WIDGET_VISIBLE (cbd->shell))
-    gtk_widget_hide (cbd->shell);
+  if (gtk_widget_get_visible (cbd->shell))
+    gtk_widget_set_visible (cbd->shell, FALSE);
   
   active_tool->preserve = TRUE;
 
@@ -653,7 +620,6 @@ color_balance_ok_callback (GtkWidget *widget,
 
 static gint
 color_balance_delete_callback (GtkWidget *w,
-			       GdkEvent *e,
 			       gpointer client_data)
 {
   color_balance_cancel_callback (w, client_data);
@@ -668,8 +634,8 @@ color_balance_cancel_callback (GtkWidget *widget,
   ColorBalanceDialog *cbd;
 
   cbd = (ColorBalanceDialog *) client_data;
-  if (GTK_WIDGET_VISIBLE (cbd->shell))
-    gtk_widget_hide (cbd->shell);
+  if (gtk_widget_get_visible (cbd->shell))
+    gtk_widget_set_visible (cbd->shell, FALSE);
 
   if (cbd->image_map)
     {
@@ -688,6 +654,9 @@ color_balance_shadows_callback (GtkWidget *widget,
 {
   ColorBalanceDialog *cbd;
 
+  if (!gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
+    return;
+
   cbd = (ColorBalanceDialog *) client_data;
   cbd->application_mode = SHADOWS;
   color_balance_update (cbd, ALL);
@@ -699,6 +668,9 @@ color_balance_midtones_callback (GtkWidget *widget,
 {
   ColorBalanceDialog *cbd;
 
+  if (!gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
+    return;
+
   cbd = (ColorBalanceDialog *) client_data;
   cbd->application_mode = MIDTONES;
   color_balance_update (cbd, ALL);
@@ -709,6 +681,9 @@ color_balance_highlights_callback (GtkWidget *widget,
 				   gpointer   client_data)
 {
   ColorBalanceDialog *cbd;
+
+  if (!gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
+    return;
 
   cbd = (ColorBalanceDialog *) client_data;
   cbd->application_mode = HIGHLIGHTS;
@@ -723,7 +698,7 @@ color_balance_preserve_update (GtkWidget *w,
 
   cbd = (ColorBalanceDialog *) data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     {
       cbd->preserve_luminosity = TRUE;
       if (cbd->preview)
@@ -745,7 +720,7 @@ color_balance_preview_update (GtkWidget *w,
 
   cbd = (ColorBalanceDialog *) data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     {
       cbd->preview = TRUE;
       color_balance_preview (cbd);
@@ -762,9 +737,9 @@ color_balance_cr_scale_update (GtkAdjustment *adjustment,
 
   cbd = (ColorBalanceDialog *) data;
 
-  if (cbd->cyan_red[cbd->application_mode] != adjustment->value)
+  if (cbd->cyan_red[cbd->application_mode] != gtk_adjustment_get_value (adjustment))
     {
-      cbd->cyan_red[cbd->application_mode] = adjustment->value;
+      cbd->cyan_red[cbd->application_mode] = gtk_adjustment_get_value (adjustment);
       color_balance_update (cbd, CR_TEXT);
 
       if (cbd->preview)
@@ -780,9 +755,9 @@ color_balance_mg_scale_update (GtkAdjustment *adjustment,
 
   cbd = (ColorBalanceDialog *) data;
 
-  if (cbd->magenta_green[cbd->application_mode] != adjustment->value)
+  if (cbd->magenta_green[cbd->application_mode] != gtk_adjustment_get_value (adjustment))
     {
-      cbd->magenta_green[cbd->application_mode] = adjustment->value;
+      cbd->magenta_green[cbd->application_mode] = gtk_adjustment_get_value (adjustment);
       color_balance_update (cbd, MG_TEXT);
 
       if (cbd->preview)
@@ -798,9 +773,9 @@ color_balance_yb_scale_update (GtkAdjustment *adjustment,
 
   cbd = (ColorBalanceDialog *) data;
 
-  if (cbd->yellow_blue[cbd->application_mode] != adjustment->value)
+  if (cbd->yellow_blue[cbd->application_mode] != gtk_adjustment_get_value (adjustment))
     {
-      cbd->yellow_blue[cbd->application_mode] = adjustment->value;
+      cbd->yellow_blue[cbd->application_mode] = gtk_adjustment_get_value (adjustment);
       color_balance_update (cbd, YB_TEXT);
 
       if (cbd->preview)
@@ -813,10 +788,10 @@ color_balance_cr_text_update (GtkWidget *w,
 			      gpointer   data)
 {
   ColorBalanceDialog *cbd;
-  char *str;
+  const char *str;
   int value;
 
-  str = gtk_entry_get_text (GTK_ENTRY (w));
+  str = gtk_editable_get_text (GTK_EDITABLE (w));
   cbd = (ColorBalanceDialog *) data;
   value = BOUNDS (((int) atof (str)), -100, 100);
 
@@ -835,10 +810,10 @@ color_balance_mg_text_update (GtkWidget *w,
 			      gpointer   data)
 {
   ColorBalanceDialog *cbd;
-  char *str;
+  const char *str;
   int value;
 
-  str = gtk_entry_get_text (GTK_ENTRY (w));
+  str = gtk_editable_get_text (GTK_EDITABLE (w));
   cbd = (ColorBalanceDialog *) data;
   value = BOUNDS (((int) atof (str)), -100, 100);
 
@@ -857,10 +832,10 @@ color_balance_yb_text_update (GtkWidget *w,
 			      gpointer   data)
 {
   ColorBalanceDialog *cbd;
-  char *str;
+  const char *str;
   int value;
 
-  str = gtk_entry_get_text (GTK_ENTRY (w));
+  str = gtk_editable_get_text (GTK_EDITABLE (w));
   cbd = (ColorBalanceDialog *) data;
   value = BOUNDS (((int) atof (str)), -100, 100);
 

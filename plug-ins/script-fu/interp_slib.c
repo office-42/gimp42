@@ -78,8 +78,8 @@
 #include <time.h>
 #include <errno.h>
 #include <sys/types.h>
-#include <sys/times.h>
 #include <glib.h>
+#include <glib/gstdio.h>
 
 #include "siod.h"
 #include "siodp.h"
@@ -254,7 +254,7 @@ print_hs_1 (void)
     {
       fprintf (siod_output, "%ld heaps. size = %ld cells, %ld bytes. %ld inums. GC is %s\n",
 	       nheaps,
-	       heap_size, heap_size * sizeof (struct obj),
+	       heap_size, (long) (heap_size * sizeof (struct obj)),
 	       inums_dim,
 	       (gc_kind_copying == 1) ? "stop and copy" : "mark and sweep");
       fflush (siod_output);
@@ -418,12 +418,10 @@ repl_c_string (char *str,
 double
 myruntime (void)
 {
-  double total;
-  struct tms b;
-  times (&b);
-  total = b.tms_utime;
-  total += b.tms_stime;
-  return (total / 60.0);
+  /*  Processor time used, in seconds: times () is not portable,
+   *  clock () is ANSI C.
+   */
+  return ((double) clock () / (double) CLOCKS_PER_SEC);
 }
 
 #if defined(__osf__)
@@ -542,7 +540,7 @@ repl (struct repl_hooks *h)
 	    {
 	      sprintf (tkbuffer,
 		       "GC took %g seconds, %ld compressed to %d, %d free\n",
-		       myruntime () - rt, old_heap_used, heap - heap_org, heap_end - heap);
+		       myruntime () - rt, old_heap_used, (int) (heap - heap_org), (int) (heap_end - heap));
 	      grepl_puts (tkbuffer, h->repl_puts);
 	    }
 	}
@@ -572,7 +570,7 @@ repl (struct repl_hooks *h)
 	sprintf (tkbuffer,
 		 "Evaluation took %g seconds %d cons work, %g real.\n",
 		 myruntime () - rt,
-		 heap - cw,
+		 (int) (heap - cw),
 		 myrealtime () - ct);
       else
 	sprintf (tkbuffer,
@@ -1938,7 +1936,7 @@ gc_status (LISP args)
       else
 	put_st ("garbage collection is off\n");
       sprintf (tkbuffer, "%d allocated %d free\n",
-	       heap - heap_org, heap_end - heap);
+	       (int) (heap - heap_org), (int) (heap_end - heap));
       put_st (tkbuffer);
     }
   else
@@ -3045,7 +3043,7 @@ fopen_cg (FILE * (*fcn) (const char *, const char *), char *name, char *how)
 LISP
 fopen_c (char *name, char *how)
 {
-  return (fopen_cg (fopen, name, how));
+  return (fopen_cg (g_fopen, name, how));
 }
 
 LISP
@@ -3089,7 +3087,7 @@ vload (char *fname, long cflag, long rflag)
     {
       int iflag;
       iflag = no_interrupt (1);
-      if ((f = fopen (fname, "r")))
+      if ((f = g_fopen (fname, "r")))
 	fclose (f);
       else if ((fname[0] != '/') &&
 	       ((strlen (siod_lib) + strlen (fname) + 1)
@@ -3098,7 +3096,7 @@ vload (char *fname, long cflag, long rflag)
 	  strcpy (buffer, siod_lib);
 	  strcat (buffer, "/");
 	  strcat (buffer, fname);
-	  if ((f = fopen (buffer, "r")))
+	  if ((f = g_fopen (buffer, "r")))
 	    {
 	      fname = buffer;
 	      fclose (f);
@@ -3138,7 +3136,7 @@ vload (char *fname, long cflag, long rflag)
 	   *end && isalnum (*end);
 	   ++end);
       j = end - start;
-      g_memmove (buffer, start, j);
+      memmove (buffer, start, j);
       buffer[strlen (key) - 1] = '_';
       buffer[j] = 0;
       strcat (buffer, ftype);
@@ -3510,7 +3508,7 @@ last_c_errmsg (int num)
   int xerrno = (num < 0) ? errno : num;
   static char serrmsg[100];
   char *errmsg;
-  errmsg = g_strerror (xerrno);
+  errmsg = (char *) g_strerror (xerrno);
   if (!errmsg)
     {
       sprintf (serrmsg, "errno %d", xerrno);
@@ -3523,7 +3521,7 @@ LISP
 llast_c_errmsg (int num)
 {
   int xerrno = (num < 0) ? errno : num;
-  char *errmsg = g_strerror (xerrno);
+  char *errmsg = (char *) g_strerror (xerrno);
   if (!errmsg)
     return (flocons (xerrno));
   return (cintern (errmsg));

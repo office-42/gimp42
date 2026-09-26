@@ -50,8 +50,10 @@ static char ident[] = "@(#) GIMP PostScript/PDF file-plugin v1.06  22-Dec-98";
 #include <string.h>
 #include <math.h>
 #include <time.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
+#include <glib/gstdio.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -534,7 +536,7 @@ load_image (char *filename)
 #endif
 
  /* Try to see if PostScript file is available */
- ifp = fopen (filename, "r");
+ ifp = g_fopen (filename, "rb");
  if (ifp == NULL)
  {
    g_message ("can't open file for reading");
@@ -658,7 +660,7 @@ save_image (char *filename,
   }
 
   /* Open the output file. */
-  ofp = fopen (filename, "wb");
+  ofp = g_fopen (filename, "wb");
   if (!ofp)
   {
     g_message ("cant open file for writing");
@@ -865,7 +867,7 @@ get_bbox (char *filename,
  FILE *ifp;
  int retval = -1;
 
- ifp = fopen (filename, "rb");
+ ifp = g_fopen (filename, "rb");
  if (ifp == NULL) return (-1);
 
  for (;;)
@@ -887,6 +889,42 @@ get_bbox (char *filename,
 }
 
 
+/* Name of the PNM-file Ghostscript renders into; removed by ps_close () */
+static gchar *ps_pnmfile = NULL;
+
+
+/* Find the Ghostscript interpreter. GS_PROG overrides the search. */
+static gchar *
+ps_find_ghostscript (void)
+
+{static const char *names[] =
+ {
+#ifdef G_OS_WIN32
+   "gswin64c", "gswin32c", "gs"
+#else
+   "gs", "gswin64c", "gswin32c"
+#endif
+ };
+ const char *gs_prog;
+ gchar *path;
+ guint k;
+
+ gs_prog = g_getenv ("GS_PROG");
+ if (gs_prog != NULL)
+ {
+   path = g_find_program_in_path (gs_prog);
+   return (path ? path : g_strdup (gs_prog));
+ }
+
+ for (k = 0; k < G_N_ELEMENTS (names); k++)
+ {
+   path = g_find_program_in_path (names[k]);
+   if (path != NULL) return (path);
+ }
+ return (NULL);
+}
+
+
 /* Open the PostScript file. On failure, NULL is returned. */
 /* The filepointer returned will give a PNM-file generated */
 /* by the PostScript-interpreter. */
@@ -898,11 +936,15 @@ ps_open (char *filename,
          int *urx,
          int *ury)
 
-{char *cmd, *gs, *gs_opts, *driver, *pnmfile;
- FILE *fd_popen;
+{gchar *gs, *driver, *output, *resopt;
+ const char *gs_opts;
+ GPtrArray *argv;
+ GSubprocess *proc;
+ GError *error = NULL;
+ FILE *ifp;
  int width, height, resolution;
  int x0, y0, x1, y1;
- int is_pdf;
+ int is_pdf, fd;
  char TextAlphaBits[64], GraphicsAlphaBits[64], geometry[32];
 
  resolution = loadopt->resolution;
@@ -914,13 +956,13 @@ ps_open (char *filename,
 
  /* Check if the file is a PDF. For PDF, we cant set geometry */
  is_pdf = 0;
- fd_popen = fopen (filename, "r");
- if (fd_popen != NULL)
+ ifp = g_fopen (filename, "rb");
+ if (ifp != NULL)
  {char hdr[4];
 
-   fread (hdr, 1, 4, fd_popen);
-   is_pdf = (strncmp (hdr, "%PDF", 4) == 0);
-   fclose (fd_popen);
+   is_pdf = (   (fread (hdr, 1, 4, ifp) == 4)
+             && (strncmp (hdr, "%PDF", 4) == 0));
+   fclose (ifp);
  }
 
  if ((!is_pdf) && (loadopt->use_bbox))    /* Try the BoundingBox ? */
@@ -940,49 +982,110 @@ ps_open (char *filename,
  else if (loadopt->pnm_type == 5) driver = "pgmraw";
  else if (loadopt->pnm_type == 7) driver = "pnmraw";
  else driver = "ppmraw";
- pnmfile = "-";
 
- gs = getenv ("GS_PROG");
- if (gs == NULL) gs = "gs";
+ gs = ps_find_ghostscript ();
+ if (gs == NULL)
+ {
+   g_message ("PostScript: can't find Ghostscript (gs, gswin64c or gswin32c)\n"
+              "on the PATH. Install Ghostscript or set GS_PROG.");
+   return (NULL);
+ }
 
- gs_opts = getenv ("GS_OPTIONS");
+ gs_opts = g_getenv ("GS_OPTIONS");
  if (gs_opts == NULL)
    gs_opts = "-dSAFER";
  else
-   gs_opts = "";  /* Ghostscript will add these options */
+   gs_opts = NULL;  /* Ghostscript will add these options */
 
- cmd = g_malloc (strlen (filename) + strlen (gs) + strlen (gs_opts)
-                 + strlen (pnmfile) + 256 );
- if (cmd == NULL) return (NULL);
+ /* Ghostscript renders into a temporary PNM-file that is read back */
+ /* when it has finished. ps_close() removes it again.              */
+ fd = g_file_open_tmp ("gimp-ps-XXXXXX.pnm", &ps_pnmfile, &error);
+ if (fd == -1)
+ {
+   g_message ("PostScript: can't create temporary file: %s", error->message);
+   g_error_free (error);
+   g_free (gs);
+   return (NULL);
+ }
+ g_close (fd, NULL);
 
  TextAlphaBits[0] = GraphicsAlphaBits[0] = geometry[0] = '\0';
 
  /* Antialiasing not available for PBM-device */
  if ((loadopt->pnm_type != 4) && (loadopt->textalpha != 1))
-   sprintf (TextAlphaBits, "-dTextAlphaBits=%d ", (int)loadopt->textalpha);
+   g_snprintf (TextAlphaBits, sizeof (TextAlphaBits),
+               "-dTextAlphaBits=%d", (int)loadopt->textalpha);
 
  if ((loadopt->pnm_type != 4) && (loadopt->graphicsalpha != 1))
-   sprintf (GraphicsAlphaBits, "-dGraphicsAlphaBits=%d ",
-            (int)loadopt->graphicsalpha);
+   g_snprintf (GraphicsAlphaBits, sizeof (GraphicsAlphaBits),
+               "-dGraphicsAlphaBits=%d", (int)loadopt->graphicsalpha);
 
  if (!is_pdf)    /* For PDF, we cant set geometry */
-   sprintf (geometry,"-g%dx%d ", width, height);
+   g_snprintf (geometry, sizeof (geometry), "-g%dx%d", width, height);
 
- sprintf (cmd, "%s -sDEVICE=%s -r%d %s%s%s-q -dNOPAUSE %s \
--sOutputFile=%s %s -c quit", gs, driver, resolution, geometry,
-          TextAlphaBits, GraphicsAlphaBits, gs_opts, pnmfile, filename);
+ driver = g_strdup_printf ("-sDEVICE=%s", driver);
+ resopt = g_strdup_printf ("-r%d", resolution);
+ output = g_strdup_printf ("-sOutputFile=%s", ps_pnmfile);
+
+ argv = g_ptr_array_new ();
+ g_ptr_array_add (argv, gs);
+ g_ptr_array_add (argv, driver);
+ g_ptr_array_add (argv, resopt);
+ if (geometry[0]) g_ptr_array_add (argv, geometry);
+ if (TextAlphaBits[0]) g_ptr_array_add (argv, TextAlphaBits);
+ if (GraphicsAlphaBits[0]) g_ptr_array_add (argv, GraphicsAlphaBits);
+ g_ptr_array_add (argv, "-q");
+ g_ptr_array_add (argv, "-dNOPAUSE");
+ g_ptr_array_add (argv, "-dBATCH");
+ if (gs_opts) g_ptr_array_add (argv, (gpointer) gs_opts);
+ g_ptr_array_add (argv, output);
+ g_ptr_array_add (argv, filename);
+ g_ptr_array_add (argv, "-c");
+ g_ptr_array_add (argv, "quit");
+ g_ptr_array_add (argv, NULL);
+
 #ifdef PS_DEBUG
- printf ("Going to start ghostscript with:\n%s\n", cmd);
+ {gchar *cmd = g_strjoinv (" ", (gchar **) argv->pdata);
+   printf ("Going to start ghostscript with:\n%s\n", cmd);
+   g_free (cmd);
+ }
 #endif
- /* Start the command and use a pipe for reading the PNM-file. */
- /* If someone does not like the pipe (or it does not work), just start */
- /* ghostscript with a real outputfile. When ghostscript has finished,  */
- /* open the outputfile and return its filepointer. But be sure         */
- /* to close and remove the file within ps_close().                     */
- fd_popen = popen (cmd, "r");
- g_free (cmd);
 
- return (fd_popen);
+ proc = g_subprocess_newv ((const gchar * const *) argv->pdata,
+                           G_SUBPROCESS_FLAGS_STDIN_INHERIT
+                           | G_SUBPROCESS_FLAGS_STDOUT_SILENCE
+                           | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+                           &error);
+ g_ptr_array_free (argv, TRUE);
+ g_free (gs);
+ g_free (driver);
+ g_free (resopt);
+ g_free (output);
+
+ ifp = NULL;
+ if (proc == NULL)
+ {
+   g_message ("PostScript: can't start Ghostscript: %s", error->message);
+   g_clear_error (&error);
+ }
+ else
+ {
+   /* Ghostscript may fail on some pages but still produce the */
+   /* others, so read whatever it wrote regardless of its exit */
+   if (!g_subprocess_wait (proc, NULL, &error))
+     g_clear_error (&error);
+   g_object_unref (proc);
+
+   ifp = g_fopen (ps_pnmfile, "rb");
+ }
+
+ if (ifp == NULL)
+ {
+   g_unlink (ps_pnmfile);
+   g_free (ps_pnmfile);
+   ps_pnmfile = NULL;
+ }
+ return (ifp);
 }
 
 
@@ -991,9 +1094,14 @@ static void
 ps_close (FILE *ifp)
 
 {
- /* Finish reading from pipe. */
- /* If a real outputfile was used, close the file and remove it. */
- pclose (ifp);
+ /* Close the output file of ghostscript and remove it. */
+ fclose (ifp);
+ if (ps_pnmfile != NULL)
+ {
+   g_unlink (ps_pnmfile);
+   g_free (ps_pnmfile);
+   ps_pnmfile = NULL;
+ }
 }
 
 
@@ -1940,6 +2048,91 @@ save_rgb (FILE *ofp,
 }
 
 
+/*  Dialog helpers  */
+
+/* A frame holding a vbox, packed into box */
+static GtkWidget *
+ps_frame_vbox (GtkWidget *box,
+               const char *title,
+               int border,
+               gboolean expand)
+
+{
+  GtkWidget *frame;
+  GtkWidget *vbox;
+
+  frame = gtk_frame_new (title);
+  gimp_container_set_border_width (frame, border);
+  gimp_box_pack_start (box, frame, expand, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 5);
+  gtk_frame_set_child (GTK_FRAME (frame), vbox);
+
+  return vbox;
+}
+
+
+/* A left aligned label in the first column of table */
+static void
+ps_table_label (GtkWidget *table,
+                const char *text,
+                int row)
+
+{
+  GtkWidget *label;
+
+  label = gtk_label_new (text);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, row, row+1,
+                     GIMP_FILL, GIMP_FILL, 0, 0);
+}
+
+
+/* An entry in the second column of table */
+static GtkWidget *
+ps_table_entry (GtkWidget *table,
+                const char *text,
+                int width,
+                int row)
+
+{
+  GtkWidget *entry;
+
+  entry = gtk_entry_new ();
+  gtk_widget_set_size_request (entry, width, -1);
+  gtk_editable_set_text (GTK_EDITABLE (entry), text);
+  gimp_table_attach (table, entry, 1, 2, row, row+1,
+                     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
+  return entry;
+}
+
+
+/* A check or radio button bound to an int flag */
+static GtkWidget *
+ps_toggle (GtkWidget *box,
+           gboolean radio,
+           GtkWidget *group,
+           const char *text,
+           gboolean expand,
+           int *value,
+           GCallback callback,
+           gpointer data)
+
+{
+  GtkWidget *toggle;
+
+  if (radio)
+    toggle = gimp_radio_button_new (group, text);
+  else
+    toggle = gtk_check_button_new_with_label (text);
+  gimp_box_pack_start (box, toggle, expand, expand, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), *value);
+  g_signal_connect (toggle, "toggled", callback, data);
+
+  return toggle;
+}
+
+
 /*  Load interface functions  */
 
 static gint
@@ -1949,183 +2142,105 @@ load_dialog (void)
   LoadDialogVals *vals;
   GtkWidget *button;
   GtkWidget *toggle;
-  GtkWidget *frame;
   GtkWidget *vbox;
   GtkWidget *hbox;
-  GtkWidget *label;
   GtkWidget *table;
-  GSList *group;
-  gchar **argv;
-  gint argc;
+  GtkWidget *group;
   char buffer[STR_LENGTH];
   static char *label_text[] = { "Resolution:", "Width:", "Height:", "Pages:" };
   static char *radio_text[] = { "b/w", "gray", "colour", "automatic" };
   static char *alias_text[] = { "none", "weak", "strong" };
   int j, n_prop, alias, *alpha_bits;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("load");
-
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
   vals = g_malloc (sizeof (*vals));
 
-  vals->dialog = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (vals->dialog), "Load PostScript");
-  gtk_window_position (GTK_WINDOW (vals->dialog), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (vals->dialog), "destroy",
-                      (GtkSignalFunc) load_close_callback,
-                      NULL);
+  vals->dialog = gimp_dialog_new ("Load PostScript");
+  g_signal_connect (vals->dialog, "destroy",
+                    G_CALLBACK (load_close_callback),
+                    NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) load_ok_callback,
-                      vals);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dialog)->action_area), button,
-                      TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (vals->dialog, "OK",
+                          G_CALLBACK (load_ok_callback), vals, TRUE);
+  button = gimp_dialog_add_button (vals->dialog, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+                            G_CALLBACK (gtk_window_destroy), vals->dialog);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-                             (GtkSignalFunc) gtk_widget_destroy,
-                             GTK_OBJECT (vals->dialog));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dialog)->action_area), button,
-                      TRUE, TRUE, 0);
-  gtk_widget_show (button);
-
-  hbox = gtk_hbox_new (FALSE, 0);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 0);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dialog)->vbox), hbox,
-                      TRUE, TRUE, 0);
-  gtk_widget_show (hbox);
+  hbox = gimp_hbox_new (FALSE, 0);
+  gimp_box_pack_start (gimp_dialog_get_vbox (vals->dialog), hbox,
+                       TRUE, TRUE, 0);
 
   /* Rendering */
-  frame = gtk_frame_new ("Rendering");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (hbox), frame, TRUE, TRUE, 0);
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  vbox = ps_frame_vbox (hbox, "Rendering", 10, TRUE);
 
   /* Resolution/Width/Height/Pages labels */
   n_prop = sizeof (label_text)/sizeof (label_text[0]);
-  table = gtk_table_new (n_prop, 2, FALSE);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 5);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 5);
-  gtk_box_pack_start (GTK_BOX (vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show (table);
+  table = gimp_table_new (n_prop, 2, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 5);
+  gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
   for (j = 0; j < n_prop; j++)
-  {
-    label = gtk_label_new (label_text[j]);
-    gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-    gtk_table_attach (GTK_TABLE (table), label, 0, 1, j, j+1,
-                      GTK_FILL, GTK_FILL, 0, 0);
-    gtk_widget_show (label);
-  }
+    ps_table_label (table, label_text[j], j);
 
   /* Resolution/Width/Height/Pages Entries */
   for (j = 0; j < n_prop; j++)
   {
-    vals->entry[j] = gtk_entry_new ();
-    gtk_widget_set_usize (vals->entry[j], 80, 0);
-    if      (j == 0) sprintf (buffer, "%d", (int)plvals.resolution);
-    else if (j == 1) sprintf (buffer, "%d", (int)plvals.width);
-    else if (j == 2) sprintf (buffer, "%d", (int)plvals.height);
-    else if (j == 3) strcpy (buffer, plvals.pages);
-    gtk_entry_set_text (GTK_ENTRY (vals->entry[j]), buffer);
-    gtk_table_attach (GTK_TABLE (table), vals->entry[j], 1, 2, j, j+1,
-                      GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-    gtk_widget_show (vals->entry[j]);
+    if      (j == 0) g_snprintf (buffer, sizeof (buffer), "%d", (int)plvals.resolution);
+    else if (j == 1) g_snprintf (buffer, sizeof (buffer), "%d", (int)plvals.width);
+    else if (j == 2) g_snprintf (buffer, sizeof (buffer), "%d", (int)plvals.height);
+    else             g_strlcpy (buffer, plvals.pages, sizeof (buffer));
+    vals->entry[j] = ps_table_entry (table, buffer, 80, j);
   }
 
-  toggle = gtk_check_button_new_with_label ("try BoundingBox");
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
   vals->use_bbox = (plvals.use_bbox != 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                      (GtkSignalFunc) load_toggle_update,
-                      &(vals->use_bbox));
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), vals->use_bbox);
-  gtk_widget_show (toggle);
-
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
+  ps_toggle (vbox, FALSE, NULL, "try BoundingBox", TRUE,
+             &(vals->use_bbox), G_CALLBACK (load_toggle_update),
+             &(vals->use_bbox));
 
   /* Colouring */
-  frame = gtk_frame_new ("Colouring");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (hbox), frame, TRUE, TRUE, 0);
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  vbox = ps_frame_vbox (hbox, "Colouring", 10, TRUE);
 
   group = NULL;
   for (j = 0; j < 4; j++)
   {
-    toggle = gtk_radio_button_new_with_label (group, radio_text[j]);
-    group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-    gtk_box_pack_start (GTK_BOX (vbox), toggle, FALSE, FALSE, 0);
     vals->dataformat[j] = (plvals.pnm_type == j+4);
-    gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                        (GtkSignalFunc) load_toggle_update,
+    toggle = ps_toggle (vbox, TRUE, group, radio_text[j], FALSE,
+                        &(vals->dataformat[j]),
+                        G_CALLBACK (load_toggle_update),
                         &(vals->dataformat[j]));
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle),
-                                 vals->dataformat[j]);
-    gtk_widget_show (toggle);
+    if (group == NULL) group = toggle;
   }
 
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
-
-  hbox = gtk_hbox_new (FALSE, 0);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 0);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dialog)->vbox), hbox,
-                      TRUE, TRUE, 0);
-  gtk_widget_show (hbox);
+  hbox = gimp_hbox_new (FALSE, 0);
+  gimp_box_pack_start (gimp_dialog_get_vbox (vals->dialog), hbox,
+                       TRUE, TRUE, 0);
 
   for (alias = 0; alias < 2; alias++)
   {
     alpha_bits = alias ? &(vals->graphicsalphabits[0])
                        : &(vals->textalphabits[0]);
-    frame = gtk_frame_new (alias ? "Graphic antialiasing":"Text antialiasing");
-    gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-    gtk_container_border_width (GTK_CONTAINER (frame), 10);
-    gtk_box_pack_start (GTK_BOX (hbox), frame, TRUE, TRUE, 0);
-
-    vbox = gtk_vbox_new (FALSE, 5);
-    gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-    gtk_container_add (GTK_CONTAINER (frame), vbox);
+    vbox = ps_frame_vbox (hbox,
+                          alias ? "Graphic antialiasing":"Text antialiasing",
+                          10, TRUE);
 
     group = NULL;
     for (j = 0; j < 3; j++)
     {
-      toggle = gtk_radio_button_new_with_label (group, alias_text[j]);
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-      gtk_box_pack_start (GTK_BOX (vbox), toggle, FALSE, FALSE, 0);
       alpha_bits[j] = alias ? (plvals.graphicsalpha == (1 << j))
                             : (plvals.textalpha == (1 << j));
-      gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                          (GtkSignalFunc) load_toggle_update, alpha_bits+j);
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), alpha_bits[j]);
-      gtk_widget_show (toggle);
+      toggle = ps_toggle (vbox, TRUE, group, alias_text[j], FALSE,
+                          alpha_bits+j, G_CALLBACK (load_toggle_update),
+                          alpha_bits+j);
+      if (group == NULL) group = toggle;
     }
-
-    gtk_widget_show (vbox);
-    gtk_widget_show (frame);
   }
 
-  gtk_widget_show (vals->dialog);
+  gtk_window_present (GTK_WINDOW (vals->dialog));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   g_free (vals);
 
@@ -2138,7 +2253,15 @@ load_close_callback (GtkWidget *widget,
                      gpointer   data)
 
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
+}
+
+
+static const char *
+ps_entry_text (GtkWidget *entry)
+
+{
+  return gtk_editable_get_text (GTK_EDITABLE (entry));
 }
 
 
@@ -2147,21 +2270,19 @@ load_ok_callback (GtkWidget *widget,
                   gpointer   data)
 
 {LoadDialogVals *vals = (LoadDialogVals *)data;
- int nelem;
 
   /* Read resolution */
-  plvals.resolution = atoi (gtk_entry_get_text (GTK_ENTRY (vals->entry[0])));
+  plvals.resolution = atoi (ps_entry_text (vals->entry[0]));
 
   /* Read width */
-  plvals.width = atoi (gtk_entry_get_text (GTK_ENTRY (vals->entry[1])));
+  plvals.width = atoi (ps_entry_text (vals->entry[1]));
 
   /* Read height */
-  plvals.height = atoi (gtk_entry_get_text (GTK_ENTRY (vals->entry[2])));
+  plvals.height = atoi (ps_entry_text (vals->entry[2]));
 
   /* Read Pages */
-  nelem = sizeof (plvals.pages);
-  strncpy (plvals.pages, gtk_entry_get_text(GTK_ENTRY (vals->entry[3])),nelem);
-  plvals.pages[nelem-1] = '\0';
+  g_strlcpy (plvals.pages, ps_entry_text (vals->entry[3]),
+             sizeof (plvals.pages));
 
   /* Read try BoundingBox */
   plvals.use_bbox = (vals->use_bbox != 0);
@@ -2185,7 +2306,7 @@ load_ok_callback (GtkWidget *widget,
   else  plvals.graphicsalpha = 1;
 
   plint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (vals->dialog));
+  gtk_window_destroy (GTK_WINDOW (vals->dialog));
 }
 
 
@@ -2198,7 +2319,7 @@ load_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  *toggle_val = ((GTK_TOGGLE_BUTTON (widget)->active) != 0);
+  *toggle_val = (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)) != 0);
 }
 
 
@@ -2211,14 +2332,10 @@ save_dialog (void)
   SaveDialogVals *vals;
   GtkWidget *button;
   GtkWidget *toggle;
-  GtkWidget *frame, *uframe;
   GtkWidget *hbox, *vbox, *uvbox;
   GtkWidget *main_vbox[2];
-  GtkWidget *label;
   GtkWidget *table;
-  GSList *group;
-  gchar **argv;
-  gint argc;
+  GtkWidget *group;
   static char *label_text[] = { "Width:", "Height:", "X-offset:", "Y-offset:" };
   static char *radio_text[] = { "0", "90", "180", "270" };
   static char *unit_text[] = { "Inch", "Millimeter" };
@@ -2226,226 +2343,115 @@ save_dialog (void)
   int j, idata;
   double rdata;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("save");
-
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
   vals = g_malloc (sizeof (*vals));
 
-  vals->dialog = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (vals->dialog), "Save PostScript");
-  gtk_window_position (GTK_WINDOW (vals->dialog), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (vals->dialog), "destroy",
-                      (GtkSignalFunc) save_close_callback,
-                      NULL);
+  vals->dialog = gimp_dialog_new ("Save PostScript");
+  g_signal_connect (vals->dialog, "destroy",
+                    G_CALLBACK (save_close_callback),
+                    NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) save_ok_callback,
-                      vals);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dialog)->action_area), button,
-                      TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-                             (GtkSignalFunc) gtk_widget_destroy,
-                             GTK_OBJECT (vals->dialog));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dialog)->action_area), button,
-                      TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (vals->dialog, "OK",
+                          G_CALLBACK (save_ok_callback), vals, TRUE);
+  button = gimp_dialog_add_button (vals->dialog, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+                            G_CALLBACK (gtk_window_destroy), vals->dialog);
 
   /* Main hbox */
-  hbox = gtk_hbox_new (FALSE, 0);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 0);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dialog)->vbox), hbox,
-                      FALSE, TRUE, 0);
-  main_vbox[0] = main_vbox[1] = NULL;
+  hbox = gimp_hbox_new (FALSE, 0);
+  gimp_box_pack_start (gimp_dialog_get_vbox (vals->dialog), hbox,
+                       FALSE, TRUE, 0);
 
   for (j = 0; j < sizeof (main_vbox) / sizeof (main_vbox[0]); j++)
   {
-    main_vbox[j] = gtk_vbox_new (FALSE, 0);
-    gtk_container_border_width (GTK_CONTAINER (main_vbox[j]), 0);
-    gtk_box_pack_start (GTK_BOX (hbox), main_vbox[j], TRUE, TRUE, 0);
+    main_vbox[j] = gimp_vbox_new (FALSE, 0);
+    gimp_box_pack_start (hbox, main_vbox[j], TRUE, TRUE, 0);
   }
 
   /* Image Size */
-  frame = gtk_frame_new ("Image Size");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 5);
-  gtk_box_pack_start (GTK_BOX (main_vbox[0]), frame, FALSE, TRUE, 0);
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  vbox = ps_frame_vbox (main_vbox[0], "Image Size", 5, FALSE);
 
   /* Width/Height/X-/Y-offset labels */
-  table = gtk_table_new (4, 2, FALSE);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 5);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 5);
-  gtk_box_pack_start (GTK_BOX (vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show (table);
+  table = gimp_table_new (4, 2, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 5);
+  gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
   for (j = 0; j < 4; j++)
-  {
-    label = gtk_label_new (label_text[j]);
-    gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-    gtk_table_attach (GTK_TABLE (table), label, 0, 1, j, j+1,
-                      GTK_FILL, GTK_FILL, 0, 0);
-    gtk_widget_show (label);
-  }
+    ps_table_label (table, label_text[j], j);
 
   /* Width/Height/X-off/Y-off Entries */
   for (j = 0; j < 4; j++)
   {
-    vals->entry[j] = gtk_entry_new ();
-    gtk_widget_set_usize (vals->entry[j], 50, 0);
     if      (j == 0) rdata = psvals.width;
     else if (j == 1) rdata = psvals.height;
     else if (j == 2) rdata = psvals.x_offset;
     else             rdata = psvals.y_offset;
-    gtk_entry_set_text (GTK_ENTRY (vals->entry[j]), ftoa ("%-8.2f", rdata));
-    gtk_table_attach (GTK_TABLE (table), vals->entry[j], 1, 2, j, j+1,
-                      GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-    gtk_widget_show (vals->entry[j]);
+    vals->entry[j] = ps_table_entry (table, ftoa ("%-8.2f", rdata), 50, j);
   }
 
-  toggle = gtk_check_button_new_with_label ("keep aspect ratio");
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
   vals->keep_ratio = (psvals.keep_ratio != 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                      (GtkSignalFunc) save_toggle_update,
-                      &(vals->keep_ratio));
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), vals->keep_ratio);
-  gtk_widget_show (toggle);
+  ps_toggle (vbox, FALSE, NULL, "keep aspect ratio", TRUE,
+             &(vals->keep_ratio), G_CALLBACK (save_toggle_update),
+             &(vals->keep_ratio));
 
   /* Unit */
-  uframe = gtk_frame_new ("Unit");
-  gtk_frame_set_shadow_type (GTK_FRAME (uframe), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (uframe), 5);
-  gtk_box_pack_start (GTK_BOX (vbox), uframe, FALSE, FALSE, 0);
-  uvbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (uvbox), 5);
-  gtk_container_add (GTK_CONTAINER (uframe), uvbox);
+  uvbox = ps_frame_vbox (vbox, "Unit", 5, FALSE);
 
   group = NULL;
   for (j = 0; j < 2; j++)
   {
-    toggle = gtk_radio_button_new_with_label (group, unit_text[j]);
-    group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-    gtk_box_pack_start (GTK_BOX (uvbox), toggle, FALSE, FALSE, 0);
     vals->unit[j] = (psvals.unit_mm == j);
-    gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                        (j == 0) ? (GtkSignalFunc) save_toggle_update :
-                        (GtkSignalFunc) save_mm_toggle_update,
-                        (j == 0) ? (gpointer)(&(vals->unit[j])) :
-                        (gpointer)vals);
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle),
-                                 vals->unit[j]);
-    gtk_widget_show (toggle);
+    toggle = ps_toggle (uvbox, TRUE, group, unit_text[j], FALSE, &(vals->unit[j]),
+                        (j == 0) ? G_CALLBACK (save_toggle_update)
+                                 : G_CALLBACK (save_mm_toggle_update),
+                        (j == 0) ? (gpointer)(&(vals->unit[j]))
+                                 : (gpointer)vals);
+    if (group == NULL) group = toggle;
   }
-  gtk_widget_show (uvbox);
-  gtk_widget_show (uframe);
-
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
 
   /* Rotation */
-  frame = gtk_frame_new ("Rotation");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 5);
-  gtk_box_pack_start (GTK_BOX (main_vbox[1]), frame, TRUE, TRUE, 0);
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  vbox = ps_frame_vbox (main_vbox[1], "Rotation", 5, TRUE);
 
   group = NULL;
   for (j = 0; j < 4; j++)
   {
-    toggle = gtk_radio_button_new_with_label (group, radio_text[j]);
-    group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-    gtk_box_pack_start (GTK_BOX (vbox), toggle, FALSE, FALSE, 0);
     vals->rot[j] = (psvals.rotate == j*90);
-    gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                        (GtkSignalFunc) save_toggle_update,
-                        &(vals->rot[j]));
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle),
-                                 vals->rot[j]);
-    gtk_widget_show (toggle);
+    toggle = ps_toggle (vbox, TRUE, group, radio_text[j], FALSE, &(vals->rot[j]),
+                        G_CALLBACK (save_toggle_update), &(vals->rot[j]));
+    if (group == NULL) group = toggle;
   }
 
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
-
   /* Format */
-  frame = gtk_frame_new ("Output");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 5);
-  gtk_box_pack_start (GTK_BOX (main_vbox[1]), frame, TRUE, TRUE, 0);
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  vbox = ps_frame_vbox (main_vbox[1], "Output", 5, TRUE);
 
-  toggle = gtk_check_button_new_with_label ("Encapsulated PostScript");
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
   vals->eps = (psvals.eps != 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                      (GtkSignalFunc) save_toggle_update,
-                      &(vals->eps));
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), vals->eps);
-  gtk_widget_show (toggle);
+  ps_toggle (vbox, FALSE, NULL, "Encapsulated PostScript", TRUE,
+             &(vals->eps), G_CALLBACK (save_toggle_update), &(vals->eps));
 
-  toggle = gtk_check_button_new_with_label ("Preview");
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
   vals->preview = psvals.preview;
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                      (GtkSignalFunc) save_toggle_update,
-                      &(vals->preview));
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), vals->preview);
-  gtk_widget_show (toggle);
+  ps_toggle (vbox, FALSE, NULL, "Preview", TRUE,
+             &(vals->preview), G_CALLBACK (save_toggle_update),
+             &(vals->preview));
 
   /* Preview size label/entry */
-  table = gtk_table_new (1, 2, FALSE);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 5);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 5);
-  gtk_box_pack_start (GTK_BOX (vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show (table);
+  table = gimp_table_new (1, 2, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 5);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 5);
+  gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
-  j = 0;
-  label = gtk_label_new ("Preview size");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, j, j+1,
-                    GTK_FILL, GTK_FILL, 0, 0);
-  gtk_widget_show (label);
+  ps_table_label (table, "Preview size", 0);
 
-  /* Entry */
-  j= 0;
-  vals->psize_entry = gtk_entry_new ();
-  gtk_widget_set_usize (vals->psize_entry, 50, 0);
   idata = psvals.preview_size;
   if (idata < 0) idata = 0;
-  sprintf (tmp, "%d", idata);
-  gtk_entry_set_text (GTK_ENTRY (vals->psize_entry), tmp);
-  gtk_table_attach (GTK_TABLE (table), vals->psize_entry, 1, 2, j, j+1,
-                    GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_show (vals->psize_entry);
+  g_snprintf (tmp, sizeof (tmp), "%d", idata);
+  vals->psize_entry = ps_table_entry (table, tmp, 50, 0);
 
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
+  gtk_window_present (GTK_WINDOW (vals->dialog));
 
-  for (j = 0; j < sizeof (main_vbox) / sizeof (main_vbox[0]); j++)
-    gtk_widget_show (main_vbox[j]);
-  gtk_widget_show (hbox);
-  gtk_widget_show (vals->dialog);
-
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   g_free (vals);
 
@@ -2458,7 +2464,7 @@ save_close_callback (GtkWidget *widget,
                      gpointer   data)
 
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 
@@ -2471,19 +2477,19 @@ save_ok_callback (GtkWidget *widget,
  int k, ival;
 
   /* Read width */
-  k = sscanf (gtk_entry_get_text (GTK_ENTRY (vals->entry[0])), "%lf", &r);
+  k = sscanf (ps_entry_text (vals->entry[0]), "%lf", &r);
   if (k == 1) psvals.width = r;
 
   /* Read height */
-  k = sscanf (gtk_entry_get_text (GTK_ENTRY (vals->entry[1])), "%lf", &r);
+  k = sscanf (ps_entry_text (vals->entry[1]), "%lf", &r);
   if (k == 1) psvals.height = r;
 
   /* Read x-offset */
-  k = sscanf (gtk_entry_get_text (GTK_ENTRY (vals->entry[2])), "%lf", &r);
+  k = sscanf (ps_entry_text (vals->entry[2]), "%lf", &r);
   if (k == 1) psvals.x_offset = r;
 
   /* Read y-offset */
-  k = sscanf (gtk_entry_get_text (GTK_ENTRY (vals->entry[3])), "%lf", &r);
+  k = sscanf (ps_entry_text (vals->entry[3]), "%lf", &r);
   if (k == 1) psvals.y_offset = r;
 
   /* Read keep aspect ratio */
@@ -2506,11 +2512,11 @@ save_ok_callback (GtkWidget *widget,
   psvals.preview = (vals->preview != 0);
 
   /* Read preview size */
-  k = sscanf (gtk_entry_get_text (GTK_ENTRY (vals->psize_entry)), "%d", &ival);
+  k = sscanf (ps_entry_text (vals->psize_entry), "%d", &ival);
   if (k == 1) psvals.preview_size = ival;
 
   psint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (vals->dialog));
+  gtk_window_destroy (GTK_WINDOW (vals->dialog));
 }
 
 
@@ -2523,7 +2529,7 @@ save_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  *toggle_val = ((GTK_TOGGLE_BUTTON (widget)->active) != 0);
+  *toggle_val = (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)) != 0);
 }
 
 
@@ -2536,7 +2542,8 @@ save_mm_toggle_update (GtkWidget *widget,
   int newval, oldval = vals->unit[1];
   int mm_to_inch, inch_to_mm, j, k;
 
-  newval = vals->unit[1] = ((GTK_TOGGLE_BUTTON (widget)->active) != 0);
+  newval = vals->unit[1] =
+    (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)) != 0);
   mm_to_inch = (oldval == 1) && (newval == 0);
   inch_to_mm = (oldval == 0) && (newval == 1);
   if (mm_to_inch) factor = 1.0 / 25.4;
@@ -2545,12 +2552,10 @@ save_mm_toggle_update (GtkWidget *widget,
   {
     for (j = 0; j < 4; j++)
     {
-      k = sscanf (gtk_entry_get_text (GTK_ENTRY (vals->entry[j])), "%lf", &r);
+      k = sscanf (ps_entry_text (vals->entry[j]), "%lf", &r);
       if (k == 1)
-      {
-        gtk_entry_set_text (GTK_ENTRY(vals->entry[j]),ftoa("%-8.2f",r*factor));
-        gtk_widget_show (vals->entry[j]);
-      }
+        gtk_editable_set_text (GTK_EDITABLE (vals->entry[j]),
+                               ftoa ("%-8.2f", r*factor));
     }
   }
 }

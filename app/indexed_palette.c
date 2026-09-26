@@ -18,9 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "gdk/gdkkeysyms.h"
 #include "appenv.h"
-#include "actionarea.h"
 #include "buildmenu.h"
 #include "colormaps.h"
 #include "color_select.h"
@@ -35,8 +33,6 @@
 #include "indexed_palette.h"
 #include "palette.h"
 #include "undo.h"
-
-#define EVENT_MASK     GDK_BUTTON_PRESS_MASK | GDK_ENTER_NOTIFY_MASK
 
 #define CELL_WIDTH     20
 #define CELL_HEIGHT    20
@@ -57,7 +53,6 @@ struct _IndexedPalette {
   GtkWidget *shell;
   GtkWidget *vbox;
   GtkWidget *palette;
-  GtkWidget *image_menu;
   GtkWidget *image_option_menu;
 
   /*  state information  */
@@ -75,11 +70,11 @@ static void indexed_palette_close_callback (GtkWidget *, gpointer);
 static void indexed_palette_select_callback (int, int, int, ColorSelectState, void *);
 
 /*  event callback  */
-static gint indexed_palette_area_events (GtkWidget *, GdkEvent *);
+static void indexed_palette_area_pressed (GtkGestureClick *, int, double, double, gpointer);
 
 /*  create image menu  */
 static void image_menu_callback (GtkWidget *, gpointer);
-static GtkWidget * create_image_menu (int *, int *, MenuItemCallback);
+static GtkWidget * create_image_menu (GtkWidget *, int *, int *, MenuItemCallback);
 
 /*  Only one indexed palette  */
 static IndexedPalette *indexedP = NULL;
@@ -87,12 +82,6 @@ static IndexedPalette *indexedP = NULL;
 /*  Color select dialog  */
 static ColorSelectP color_select = NULL;
 static int color_select_active = 0;
-
-/*  the action area structure  */
-static ActionAreaItem action_items[] =
-{
-  { "Close", indexed_palette_close_callback, NULL, NULL },
-};
 
 static MenuItem indexed_color_ops[] =
 {
@@ -106,6 +95,43 @@ static MenuItem indexed_color_ops[] =
 /*  Public indexed palette functions  */
 /**************************************/
 
+static void
+indexed_palette_ops_clicked (GtkWidget *button,
+			     gpointer   data)
+{
+  MenuItem  *item = data;
+  GtkWidget *popover;
+
+  popover = gtk_widget_get_ancestor (button, GTK_TYPE_POPOVER);
+  if (popover)
+    gtk_popover_popdown (GTK_POPOVER (popover));
+
+  if (item->callback)
+    (* item->callback) (button, item->user_data);
+}
+
+static gboolean
+indexed_palette_ops_shortcut (GtkWidget *widget,
+			      GVariant  *args,
+			      gpointer   data)
+{
+  MenuItem *item = data;
+
+  if (item->callback)
+    (* item->callback) (item->widget, item->user_data);
+
+  return TRUE;
+}
+
+static gboolean
+indexed_palette_close_request (GtkWindow *window,
+			       gpointer   data)
+{
+  gtk_widget_set_visible (GTK_WIDGET (window), FALSE);
+
+  return TRUE;
+}
+
 void
 indexed_palette_create (int gimage_id)
 {
@@ -113,114 +139,124 @@ indexed_palette_create (int gimage_id)
   GtkWidget *frame;
   GtkWidget *util_box;
   GtkWidget *label;
-  GtkWidget *arrow_hbox;
-  GtkWidget *arrow;
-  GtkWidget *ops_menu;
-  GtkWidget *menu_bar;
-  GtkWidget *menu_bar_item;
+  GtkWidget *ops_button;
+  GtkWidget *ops_popover;
+  GtkWidget *ops_box;
+  GtkWidget *button;
   GtkWidget *hbox;
-  GtkAccelGroup *accel_group;
+  GtkEventController *controller;
+  GtkGesture *gesture;
   int default_index;
+  int i;
 
   if (!indexedP)
     {
       indexedP = g_malloc (sizeof (IndexedPalette));
       indexedP->gimage_id = -1;
 
-      accel_group = gtk_accel_group_new ();
-
       /*  The shell and main vbox  */
-      indexedP->shell = gtk_dialog_new ();
-      gtk_window_set_wmclass (GTK_WINDOW (indexedP->shell), "indexed_color_palette", "Gimp");
-      gtk_window_set_policy (GTK_WINDOW (indexedP->shell), FALSE, FALSE, FALSE);
-      gtk_window_set_title (GTK_WINDOW (indexedP->shell), "Indexed Color Palette");
-      gtk_window_add_accel_group (GTK_WINDOW (indexedP->shell), accel_group);
-      gtk_signal_connect (GTK_OBJECT (indexedP->shell), "delete_event",
-			  GTK_SIGNAL_FUNC (gtk_widget_hide_on_delete),
-			  NULL);
-      gtk_quit_add_destroy (1, GTK_OBJECT (indexedP->shell));
+      indexedP->shell = gimp_dialog_new ("Indexed Color Palette");
+      gtk_window_set_resizable (GTK_WINDOW (indexedP->shell), FALSE);
+      g_signal_connect (indexedP->shell, "close-request",
+			G_CALLBACK (indexed_palette_close_request),
+			NULL);
 
-      indexedP->vbox = vbox = gtk_vbox_new (FALSE, 1);
-      gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-      gtk_box_pack_start (GTK_BOX (GTK_DIALOG (indexedP->shell)->vbox), vbox, TRUE, TRUE, 0);
+      indexedP->vbox = vbox = gimp_vbox_new (FALSE, 1);
+      gimp_container_set_border_width (vbox, 1);
+      gimp_box_pack_start (gimp_dialog_get_vbox (indexedP->shell), vbox, TRUE, TRUE, 0);
 
       /*  The hbox to hold the command menu and image option menu box  */
-      util_box = gtk_hbox_new (FALSE, 1);
-      gtk_box_pack_start (GTK_BOX (vbox), util_box, FALSE, FALSE, 0);
+      util_box = gimp_hbox_new (FALSE, 1);
+      gimp_box_pack_start (vbox, util_box, FALSE, FALSE, 0);
 
       /*  The GIMP image option menu  */
       label = gtk_label_new ("Image:");
-      gtk_box_pack_start (GTK_BOX (util_box), label, FALSE, FALSE, 2);
-      indexedP->image_option_menu = gtk_option_menu_new ();
-      gtk_box_pack_start (GTK_BOX (util_box), indexedP->image_option_menu, TRUE, TRUE, 2);
-      gtk_widget_show (indexedP->image_option_menu);
-      indexedP->image_menu = create_image_menu (&gimage_id, &default_index, image_menu_callback);
-      gtk_option_menu_set_menu (GTK_OPTION_MENU (indexedP->image_option_menu), indexedP->image_menu);
+      gimp_box_pack_start (util_box, label, FALSE, FALSE, 2);
+      indexedP->image_option_menu = create_image_menu (NULL, &gimage_id, &default_index,
+						       image_menu_callback);
+      gimp_box_pack_start (util_box, indexedP->image_option_menu, TRUE, TRUE, 2);
       if (default_index != -1)
-	gtk_option_menu_set_history (GTK_OPTION_MENU (indexedP->image_option_menu), default_index);
-      gtk_widget_show (label);
+	gimp_option_menu_set_history (indexedP->image_option_menu, default_index);
 
-      /*  The indexed palette commands pulldown menu  */
-      ops_menu = build_menu (indexed_color_ops, accel_group);
+      /*  The indexed palette commands pulldown menu, and its
+       *  accelerators, which work in the whole window
+       */
+      ops_popover = gtk_popover_new ();
+      gtk_widget_add_css_class (ops_popover, "menu");
+      ops_box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+      gtk_popover_set_child (GTK_POPOVER (ops_popover), ops_box);
 
-      menu_bar = gtk_menu_bar_new ();
-      gtk_box_pack_start (GTK_BOX (util_box), menu_bar, FALSE, FALSE, 2);
-      menu_bar_item = gtk_menu_item_new ();
-      gtk_container_add (GTK_CONTAINER (menu_bar), menu_bar_item);
-      gtk_menu_item_set_submenu (GTK_MENU_ITEM (menu_bar_item), ops_menu);
-      arrow_hbox = gtk_hbox_new (FALSE, 1);
-      gtk_container_add (GTK_CONTAINER (menu_bar_item), arrow_hbox);
-      label = gtk_label_new ("Ops");
-      arrow = gtk_arrow_new (GTK_ARROW_DOWN, GTK_SHADOW_OUT);
-      gtk_box_pack_start (GTK_BOX (arrow_hbox), arrow, FALSE, FALSE, 0);
-      gtk_box_pack_start (GTK_BOX (arrow_hbox), label, FALSE, FALSE, 4);
-      gtk_misc_set_alignment (GTK_MISC (label), 0.5, 0.5);
-      gtk_misc_set_alignment (GTK_MISC (arrow), 0.5, 0.5);
+      controller = gtk_shortcut_controller_new ();
+      gtk_shortcut_controller_set_scope (GTK_SHORTCUT_CONTROLLER (controller),
+					 GTK_SHORTCUT_SCOPE_GLOBAL);
 
-      gtk_widget_show (arrow);
-      gtk_widget_show (label);
-      gtk_widget_show (arrow_hbox);
-      gtk_widget_show (menu_bar_item);
-      gtk_widget_show (menu_bar);
-      gtk_widget_show (util_box);
+      for (i = 0; indexed_color_ops[i].label; i++)
+	{
+	  button = gtk_button_new ();
+	  gtk_button_set_has_frame (GTK_BUTTON (button), FALSE);
+	  label = gtk_label_new (indexed_color_ops[i].label);
+	  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+	  gtk_button_set_child (GTK_BUTTON (button), label);
+	  gtk_box_append (GTK_BOX (ops_box), button);
+	  g_signal_connect (button, "clicked",
+			    G_CALLBACK (indexed_palette_ops_clicked),
+			    &indexed_color_ops[i]);
+	  indexed_color_ops[i].widget = button;
+	  indexed_color_ops[i].index = i;
+
+	  if (indexed_color_ops[i].accelerator_key)
+	    gtk_shortcut_controller_add_shortcut
+	      (GTK_SHORTCUT_CONTROLLER (controller),
+	       gtk_shortcut_new (gtk_keyval_trigger_new
+				 (gdk_unicode_to_keyval (g_ascii_tolower (indexed_color_ops[i].accelerator_key)),
+				  (GdkModifierType) indexed_color_ops[i].accelerator_mods),
+				 gtk_callback_action_new (indexed_palette_ops_shortcut,
+							  &indexed_color_ops[i], NULL)));
+	}
+
+      gtk_widget_add_controller (indexedP->shell, controller);
+
+      ops_button = gtk_menu_button_new ();
+      gtk_menu_button_set_label (GTK_MENU_BUTTON (ops_button), "Ops");
+      gtk_menu_button_set_always_show_arrow (GTK_MENU_BUTTON (ops_button), TRUE);
+      gtk_menu_button_set_popover (GTK_MENU_BUTTON (ops_button), ops_popover);
+      gimp_box_pack_start (util_box, ops_button, FALSE, FALSE, 2);
 
       /*  The palette frame  */
       frame = gtk_frame_new (NULL);
-      gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_IN);
-      gtk_box_pack_start (GTK_BOX (vbox), frame, TRUE, TRUE, 2);
-      indexedP->palette = gtk_preview_new (GTK_PREVIEW_COLOR);
-      gtk_preview_size (GTK_PREVIEW (indexedP->palette), P_AREA_WIDTH, P_AREA_HEIGHT);
-      gtk_widget_set_events (indexedP->palette, EVENT_MASK);
-      gtk_signal_connect (GTK_OBJECT (indexedP->palette), "event",
-			  (GtkSignalFunc) indexed_palette_area_events,
-			  NULL);
-      gtk_container_add (GTK_CONTAINER (frame), indexedP->palette);
-
-      gtk_widget_show (indexedP->palette);
-      gtk_widget_show (frame);
+      gimp_box_pack_start (vbox, frame, TRUE, TRUE, 2);
+      indexedP->palette = gimp_preview_new (GIMP_PREVIEW_COLOR);
+      gimp_preview_size (GIMP_PREVIEW (indexedP->palette), P_AREA_WIDTH, P_AREA_HEIGHT);
+      gtk_widget_set_halign (indexedP->palette, GTK_ALIGN_CENTER);
+      gtk_widget_set_valign (indexedP->palette, GTK_ALIGN_CENTER);
+      gesture = gtk_gesture_click_new ();
+      gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (gesture), 0);
+      g_signal_connect (gesture, "pressed",
+			G_CALLBACK (indexed_palette_area_pressed),
+			NULL);
+      gtk_widget_add_controller (indexedP->palette, GTK_EVENT_CONTROLLER (gesture));
+      gtk_frame_set_child (GTK_FRAME (frame), indexedP->palette);
 
       /* some helpful hints */
-      hbox = gtk_hbox_new(FALSE, 1);
-      gtk_box_pack_start (GTK_BOX (vbox), hbox, TRUE, TRUE, 1);
+      hbox = gimp_hbox_new (FALSE, 1);
+      gimp_box_pack_start (vbox, hbox, TRUE, TRUE, 1);
       label = gtk_label_new (" Click to select color.  Right-click to edit color");
-      gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 1);
+      gimp_box_pack_start (hbox, label, FALSE, FALSE, 1);
 
-      gtk_widget_show (hbox);
-      gtk_widget_show (label);
       /*  The action area  */
-      action_items[0].user_data = indexedP;
-      build_action_area (GTK_DIALOG (indexedP->shell), action_items, 1, 0);
+      gimp_dialog_add_button (indexedP->shell, "Close",
+			      G_CALLBACK (indexed_palette_close_callback),
+			      indexedP, TRUE);
 
-      gtk_widget_show (vbox);
-      gtk_widget_show (indexedP->shell);
+      gtk_window_present (GTK_WINDOW (indexedP->shell));
 
       indexed_palette_update (gimage_id);
       indexed_palette_update_image_list ();
     }
   else
     {
-      if (!GTK_WIDGET_VISIBLE (indexedP->shell))
-	gtk_widget_show (indexedP->shell);
+      if (!gtk_widget_get_visible (indexedP->shell))
+	gtk_window_present (GTK_WINDOW (indexedP->shell));
 
       indexed_palette_update (gimage_id);
       indexed_palette_update_image_list ();
@@ -237,20 +273,20 @@ indexed_palette_update_image_list ()
     return;
 
   default_id = indexedP->gimage_id;
-  indexedP->image_menu = create_image_menu (&default_id, &default_index, image_menu_callback);
-  gtk_option_menu_set_menu (GTK_OPTION_MENU (indexedP->image_option_menu), indexedP->image_menu);
+  create_image_menu (indexedP->image_option_menu, &default_id, &default_index,
+		     image_menu_callback);
 
   if (default_index != -1)
     {
-      if (! GTK_WIDGET_IS_SENSITIVE (indexedP->vbox))
+      if (! gtk_widget_is_sensitive (indexedP->vbox))
 	gtk_widget_set_sensitive (indexedP->vbox, TRUE);
-      gtk_option_menu_set_history (GTK_OPTION_MENU (indexedP->image_option_menu), default_index);
+      gimp_option_menu_set_history (indexedP->image_option_menu, default_index);
 
       indexed_palette_update (default_id);
     }
   else
     {
-      if (GTK_WIDGET_IS_SENSITIVE (indexedP->vbox))
+      if (gtk_widget_is_sensitive (indexedP->vbox))
 	{
 	  gtk_widget_set_sensitive (indexedP->vbox, FALSE);
 	  indexed_palette_clear ();
@@ -288,12 +324,10 @@ indexed_palette_draw ()
 	      row[l * 3 + b] = ((((i * CELL_HEIGHT + k) & 0x4) ? (l) : (l + 0x4)) & 0x4) ?
 		blend_light_check[0] : blend_dark_check[0];
 
-	  gtk_preview_draw_row (GTK_PREVIEW (indexedP->palette), row, 0,
-				i * CELL_HEIGHT + k, P_AREA_WIDTH);
+	  gimp_preview_draw_row (GIMP_PREVIEW (indexedP->palette), row, 0,
+				 i * CELL_HEIGHT + k, P_AREA_WIDTH);
 	}
     }
-
-  gtk_widget_draw (indexedP->palette, NULL);
 }
 
 static void
@@ -317,10 +351,8 @@ indexed_palette_clear ()
 	}
 
       for (j = 0; j < 4; j++)
-	gtk_preview_draw_row (GTK_PREVIEW (indexedP->palette), row, 0, i + j, P_AREA_WIDTH);
+	gimp_preview_draw_row (GIMP_PREVIEW (indexedP->palette), row, 0, i + j, P_AREA_WIDTH);
     }
-
-  gtk_widget_draw (indexedP->palette, NULL);
 }
 
 static void
@@ -347,7 +379,7 @@ indexed_palette_close_callback (GtkWidget *w,
   if (!indexedP)
     return;
 
-  gtk_widget_hide (indexedP->shell);
+  gtk_widget_set_visible (indexedP->shell, FALSE);
 }
 
 static void
@@ -385,63 +417,59 @@ indexed_palette_select_callback (int   r,
     }
 }
 
-static gint
-indexed_palette_area_events (GtkWidget *widget,
-			     GdkEvent * event)
+static void
+indexed_palette_area_pressed (GtkGestureClick *gesture,
+			      int              n_press,
+			      double           x,
+			      double           y,
+			      gpointer         data)
 {
   GImage *gimage;
-  GdkEventButton *bevent;
+  guint button;
   guchar r, g, b;
 
   if (!indexedP)
-    return FALSE;
+    return;
 
   if ((gimage = gimage_get_ID (indexedP->gimage_id)) == NULL)
-    return FALSE;
+    return;
 
-  switch (event->type)
+  if (x < 0 || y < 0 || x >= P_AREA_WIDTH || y >= P_AREA_HEIGHT)
+    return;
+
+  button = gtk_gesture_single_get_current_button (GTK_GESTURE_SINGLE (gesture));
+
+  if (button == 1)
     {
-    case GDK_BUTTON_PRESS:
-      bevent = (GdkEventButton *) event;
-
-      if (bevent->button == 1)
-	{
-	  indexedP->col_index = 16 * ((int)bevent->y / CELL_HEIGHT) + ((int)bevent->x / CELL_WIDTH);
-	  r = gimage->cmap[indexedP->col_index * 3 + 0];
-	  g = gimage->cmap[indexedP->col_index * 3 + 1];
-	  b = gimage->cmap[indexedP->col_index * 3 + 2];
-	  if (active_color == FOREGROUND)
-	    palette_set_foreground (r, g, b);
-	  else if (active_color == BACKGROUND)
-	    palette_set_background (r, g, b);
-	}
-
-        if (bevent->button == 3)
-	{
-	  indexedP->col_index = 16 * ((int)bevent->y / CELL_HEIGHT) + ((int)bevent->x / CELL_WIDTH);
-	  r = gimage->cmap[indexedP->col_index * 3 + 0];
-	  g = gimage->cmap[indexedP->col_index * 3 + 1];
-	  b = gimage->cmap[indexedP->col_index * 3 + 2];
-
-	  if (! color_select)
-	    {
-	      color_select = color_select_new (r, g, b, indexed_palette_select_callback, NULL, FALSE);
-	      color_select_active = 1;
-	    }
-	  else
-	    {
-	      if (! color_select_active)
-		color_select_show (color_select);
-	      color_select_set_color (color_select, r, g, b, 1);
-	    }
-	}
-      break;
-
-    default:
-      break;
+      indexedP->col_index = 16 * ((int) y / CELL_HEIGHT) + ((int) x / CELL_WIDTH);
+      r = gimage->cmap[indexedP->col_index * 3 + 0];
+      g = gimage->cmap[indexedP->col_index * 3 + 1];
+      b = gimage->cmap[indexedP->col_index * 3 + 2];
+      if (active_color == FOREGROUND)
+	palette_set_foreground (r, g, b);
+      else if (active_color == BACKGROUND)
+	palette_set_background (r, g, b);
     }
 
-  return FALSE;
+  if (button == 3)
+    {
+      indexedP->col_index = 16 * ((int) y / CELL_HEIGHT) + ((int) x / CELL_WIDTH);
+      r = gimage->cmap[indexedP->col_index * 3 + 0];
+      g = gimage->cmap[indexedP->col_index * 3 + 1];
+      b = gimage->cmap[indexedP->col_index * 3 + 2];
+
+      if (! color_select)
+	{
+	  color_select = color_select_new (r, g, b, indexed_palette_select_callback, NULL, FALSE);
+	  color_select_active = 1;
+	}
+      else
+	{
+	  if (! color_select_active)
+	    color_select_show (color_select);
+	  color_select_set_color (color_select, r, g, b, 1);
+	}
+    }
 }
 
 static void
@@ -450,22 +478,21 @@ image_menu_callback (GtkWidget *w,
 {
   if (!indexedP)
     return;
-  if (gimage_get_ID ((long) client_data) != NULL)
+  if (gimage_get_ID (GPOINTER_TO_INT (client_data)) != NULL)
     {
-      indexed_palette_update ((long) client_data);
+      indexed_palette_update (GPOINTER_TO_INT (client_data));
     }
 }
 
 static GtkWidget *
-create_image_menu (int              *default_id,
+create_image_menu (GtkWidget        *option_menu,
+		   int              *default_id,
 		   int              *default_index,
 		   MenuItemCallback  callback)
 {
   extern GSList *image_list;
 
   GImage *gimage;
-  GtkWidget *menu_item;
-  GtkWidget *menu;
   char *menu_item_label;
   char *image_name;
   GSList *tmp;
@@ -475,7 +502,11 @@ create_image_menu (int              *default_id,
   id = -1;
 
   *default_index = -1;
-  menu = gtk_menu_new ();
+
+  if (option_menu)
+    gimp_option_menu_clear (option_menu);
+  else
+    option_menu = gimp_option_menu_new ();
 
   tmp = image_list;
   while (tmp)
@@ -501,28 +532,19 @@ create_image_menu (int              *default_id,
 	    }
 
 	  image_name = prune_filename (gimage_filename (gimage));
-	  menu_item_label = (char *) g_malloc (strlen (image_name) + 15);
-	  sprintf (menu_item_label, "%s-%d", image_name, gimage->ID);
-	  menu_item = gtk_menu_item_new_with_label (menu_item_label);
-	  gtk_signal_connect (GTK_OBJECT (menu_item), "activate",
-			      (GtkSignalFunc) callback,
-			      (gpointer) ((long) gimage->ID));
-	  gtk_container_add (GTK_CONTAINER (menu), menu_item);
-	  gtk_widget_show (menu_item);
-
+	  menu_item_label = g_strdup_printf ("%s-%d", image_name, gimage->ID);
+	  gimp_option_menu_append (option_menu, menu_item_label,
+				   G_CALLBACK (callback),
+				   GINT_TO_POINTER (gimage->ID));
 	  g_free (menu_item_label);
 	  num_items ++;
 	}
     }
 
   if (!num_items)
-    {
-      menu_item = gtk_menu_item_new_with_label ("none");
-      gtk_container_add (GTK_CONTAINER (menu), menu_item);
-      gtk_widget_show (menu_item);
-    }
+    gimp_option_menu_append (option_menu, "none", NULL, NULL);
 
   *default_id = id;
 
-  return menu;
+  return option_menu;
 }

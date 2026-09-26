@@ -28,7 +28,8 @@
 */
 
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include "libgimp/gimpui.h"
+#include <gtk/gtk.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,28 +83,28 @@ gtkW_toggle_update (GtkWidget *widget,
 		    gpointer   data);
 static GtkWidget *
 gtkW_dialog_new (char *name,
-		 GtkSignalFunc ok_callback,
-		 GtkSignalFunc close_callback);
+		 GCallback ok_callback,
+		 GCallback close_callback);
 static GtkWidget *
 gtkW_table_add_toggle (GtkWidget	*table,
 		       gchar	*name,
 		       gint	x1,
 		       gint	x2,
 		       gint	y,
-		       GtkSignalFunc update,
+		       GCallback update,
 		       gint	*value);
-static GSList *
+static GtkWidget *
 gtkW_vbox_add_radio_button (GtkWidget *vbox,
 			    gchar	*name,
-			    GSList	*group,
-			    GtkSignalFunc	update,
+			    GtkWidget	*group,
+			    GCallback	update,
 			    gint	*value);
 static void
 gtkW_table_add_gint (GtkWidget	*table,
 		     gchar	*name,
 		     gint	x,
 		     gint	y, 
-		     GtkSignalFunc	update,
+		     GCallback	update,
 		     gint	*value,
 		     gchar	*buffer);
 static void
@@ -111,7 +112,7 @@ gtkW_table_add_scale (GtkWidget	*table,
 		      gchar	*name,
 		      gint	x1,
 		      gint	y,
-		      GtkSignalFunc update,
+		      GCallback update,
 		      gdouble *value,
 		      gdouble min,
 		      gdouble max,
@@ -945,27 +946,21 @@ vpropagate_dialog (GImageType image_type)
   GtkWidget	*frame;
   GtkWidget	*table;
   GtkWidget *sep;
-  gchar	**argv;
-  gint	argc;
   static gchar	buffer[3][10];
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup (SHORT_NAME);
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
   
   dlg = gtkW_dialog_new (PLUG_IN_NAME,
-			 (GtkSignalFunc) vpropagate_ok_callback,
-			 (GtkSignalFunc) gtkW_close_callback);
+			 G_CALLBACK (vpropagate_ok_callback),
+			 G_CALLBACK (gtkW_close_callback));
   
-  hbox = gtkW_hbox_new((GTK_DIALOG (dlg)->vbox));
+  hbox = gtkW_hbox_new((gimp_dialog_get_vbox (dlg)));
 
   /* Propagate Mode */
   {
     GtkWidget *frame;
     GtkWidget *toggle_vbox;
-    GSList *group = NULL;
+    GtkWidget *group = NULL;
     gint	index = 0;
 
     frame = gtkW_frame_new ("Propagate Mode", hbox);
@@ -973,77 +968,69 @@ vpropagate_dialog (GImageType image_type)
     
     for (index = 0; index < num_mode ; index++ )
       group = gtkW_vbox_add_radio_button (toggle_vbox, modes[index].name, group,
-					  (GtkSignalFunc) gtkW_toggle_update,
+					  G_CALLBACK (gtkW_toggle_update),
 					  &modes[index].selected);
-    gtk_widget_show (toggle_vbox);
-    gtk_widget_show (frame);
   }
 
   /* Parameter settings */
   frame = gtkW_frame_new ("Parameter Settings", hbox);
-  table = gtk_table_new (9,2, FALSE); /* 4 raw, 2 columns(name and value) */
+  table = gimp_table_new (9,2, FALSE); /* 4 raw, 2 columns(name and value) */
   
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (frame, table);
 
   gtkW_table_add_gint (table, "Lower threshold", 0, 0,
-		       (GtkSignalFunc) gtkW_gint_update,
+		       G_CALLBACK (gtkW_gint_update),
 		       &vpvals.lower_limit, buffer[0]);
   gtkW_table_add_gint (table, "Upper threshold", 0, 1,
-		       (GtkSignalFunc) gtkW_gint_update,
+		       G_CALLBACK (gtkW_gint_update),
 		       &vpvals.upper_limit, buffer[1]);
   gtkW_table_add_scale (table, "Propagating Rate", 0, 2, 
-			(GtkSignalFunc) gtkW_scale_update,
+			G_CALLBACK (gtkW_scale_update),
 			&vpvals.propagating_rate, 0.0, 1.0, 0.01);
 
-  sep = gtk_hseparator_new ();
-  gtk_table_attach (GTK_TABLE (table), sep, 0, 2, 3, 4, GTK_FILL, 0, 0, 0);
-  gtk_widget_show (sep);
+  sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+  gimp_table_attach (table, sep, 0, 2, 3, 4, GIMP_FILL, 0, 0, 0);
 
   gtkW_table_add_toggle (table, "to Left", 0, 1, 4,
-			 (GtkSignalFunc) gtkW_toggle_update,
+			 G_CALLBACK (gtkW_toggle_update),
 			 &direction_mask_vec[Right2Left]);
   gtkW_table_add_toggle (table, "to Right", 1, 2, 4,
-			 (GtkSignalFunc) gtkW_toggle_update,
+			 G_CALLBACK (gtkW_toggle_update),
 			 &direction_mask_vec[Left2Right]);
   gtkW_table_add_toggle (table, "to Top", 0, 1, 5,
-			 (GtkSignalFunc) gtkW_toggle_update,
+			 G_CALLBACK (gtkW_toggle_update),
 			 &direction_mask_vec[Bottom2Top]);
   gtkW_table_add_toggle (table, "to Bottom", 1, 2, 5,
-			 (GtkSignalFunc) gtkW_toggle_update,
+			 G_CALLBACK (gtkW_toggle_update),
 			 &direction_mask_vec[Top2Bottom]);
   if ((image_type == RGBA_IMAGE) | (image_type == GRAYA_IMAGE))
     {
       GtkWidget *sep;
 
-      sep = gtk_hseparator_new ();
-      gtk_table_attach (GTK_TABLE (table), sep, 0, 2, 6, 7, GTK_FILL, 0, 0, 0);
-      gtk_widget_show (sep);
+      sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+      gimp_table_attach (table, sep, 0, 2, 6, 7, GIMP_FILL, 0, 0, 0);
 
       {
 	GtkWidget *toggle;
 	
 	toggle = gtkW_table_add_toggle (table, "Propagating Alpha Channel",
 					0, 2, 7,
-					(GtkSignalFunc) gtkW_toggle_update,
+					G_CALLBACK (gtkW_toggle_update),
 					&propagate_alpha);
 	if (gimp_layer_get_preserve_transparency (drawable_id))
 	  {
-	    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), 0);
+	    gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), 0);
 	    gtk_widget_set_sensitive (toggle, FALSE);
 	  }
       }
       gtkW_table_add_toggle (table, "Propagating Value Channel", 0, 2, 8,
-			     (GtkSignalFunc) gtkW_toggle_update,
+			     G_CALLBACK (gtkW_toggle_update),
 			     &propagate_value);
     }
-  gtk_widget_show (table);
-  gtk_widget_show (frame);
-  gtk_widget_show (hbox);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
   
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return vpropagate_interface.run;
 }
@@ -1053,21 +1040,21 @@ static void
 gtkW_gint_update (GtkWidget *widget,
 		      gpointer   data)
 {
-  *(gint *)data = (gint)atof (gtk_entry_get_text (GTK_ENTRY (widget)));
+  *(gint *)data = (gint)atof (gtk_editable_get_text (GTK_EDITABLE (widget)));
 }
 
 static void
 gtkW_scale_update (GtkAdjustment *adjustment,
 		   gdouble	 *scale_val)
 {
-  *scale_val = (gdouble) adjustment->value;
+  *scale_val = (gdouble) gtk_adjustment_get_value (adjustment);
 }
 
 static void
 gtkW_close_callback (GtkWidget *widget,
 		     gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -1091,7 +1078,7 @@ vpropagate_ok_callback (GtkWidget *widget,
   vpvals.propagating_channel = (propagate_alpha ? PROPAGATING_ALPHA : 0) |
     (propagate_value ? PROPAGATING_VALUE : 0);
   vpropagate_interface.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -1102,7 +1089,7 @@ gtkW_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -1111,35 +1098,20 @@ gtkW_toggle_update (GtkWidget *widget,
 /* gtkW is the abbreviation of gtk Wrapper */
 static GtkWidget *
 gtkW_dialog_new (char * name,
-		 GtkSignalFunc ok_callback,
-		 GtkSignalFunc close_callback)
+		 GCallback ok_callback,
+		 GCallback close_callback)
 {
   GtkWidget *dlg, *button;
   
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), name);
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) gtkW_close_callback, NULL);
+  dlg = gimp_dialog_new (name);
+  g_signal_connect (dlg, "destroy",
+		    close_callback, NULL);
 
   /* Action Area */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-		      (GtkSignalFunc) ok_callback, dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
-		      TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT(dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button,
-		      TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", ok_callback, dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   return dlg;
 }
@@ -1149,9 +1121,9 @@ gtkW_hbox_new (GtkWidget *parent)
 {
   GtkWidget	*hbox;
   
-  hbox = gtk_hbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (hbox), 5);
-  gtk_box_pack_start (GTK_BOX (parent), hbox, FALSE, TRUE, 0);
+  hbox = gimp_hbox_new (FALSE, 5);
+  gimp_container_set_border_width (hbox, 5);
+  gimp_box_pack_start (parent, hbox, FALSE, TRUE, 0);
   return hbox;
 }
 
@@ -1160,10 +1132,10 @@ gtkW_vbox_new (GtkWidget *parent)
 {
   GtkWidget *vbox;
   
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 10);
-  /* gtk_box_pack_start (GTK_BOX (parent), vbox, TRUE, TRUE, 0); */
-  gtk_container_add (GTK_CONTAINER (parent), vbox);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 10);
+  /* gimp_box_pack_start (parent, vbox, TRUE, TRUE, 0); */
+  gimp_container_add (parent, vbox);
   return vbox;
 }
 
@@ -1174,10 +1146,8 @@ gtkW_frame_new (gchar *name,
   GtkWidget *frame;
   
   frame = gtk_frame_new (name);
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 5);
-  gtk_box_pack_start (GTK_BOX(parent), frame, FALSE, FALSE, 0);
-  gtk_widget_show (frame);
+  gimp_container_set_border_width (frame, 5);
+  gimp_box_pack_start (parent, frame, FALSE, FALSE, 0);
   return frame;
 }
 
@@ -1187,38 +1157,36 @@ gtkW_table_add_toggle (GtkWidget	*table,
 		       gint	x1,
 		       gint	x2,
 		       gint	y,
-		       GtkSignalFunc update,
+		       GCallback update,
 		       gint	*value)
 {
   GtkWidget *toggle;
   
   toggle = gtk_check_button_new_with_label(name);
-  gtk_table_attach (GTK_TABLE (table), toggle, x1, x2, y, y+1,
-		    GTK_FILL|GTK_EXPAND, 0, 0, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) update,
+  gimp_table_attach (table, toggle, x1, x2, y, y+1,
+		    GIMP_FILL|GIMP_EXPAND, 0, 0, 0);
+  g_signal_connect (toggle, "toggled",
+		      update,
 		      value);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), *value);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), *value);
   return toggle;
 }
 
-static GSList *
+static GtkWidget *
 gtkW_vbox_add_radio_button (GtkWidget *vbox,
 			    gchar	*name,
-			    GSList	*group,
-			    GtkSignalFunc	update,
+			    GtkWidget	*group,
+			    GCallback	update,
 			    gint	*value)
 {
   GtkWidget *toggle;
   
-  toggle = gtk_radio_button_new_with_label(group, name);
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) update, value);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), *value);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (group, name);
+  group = toggle;
+  gimp_box_pack_start (vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		      update, value);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), *value);
   return group;
 }
 
@@ -1227,27 +1195,25 @@ gtkW_table_add_gint (GtkWidget	*table,
 		     gchar	*name,
 		     gint	x,
 		     gint	y, 
-		     GtkSignalFunc	update,
+		     GCallback	update,
 		     gint	*value,
 		     gchar	*buffer)
 {
   GtkWidget *label, *entry;
   
   label = gtk_label_new (name);
-  gtk_misc_set_alignment (GTK_MISC(label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE(table), label, x, x+1, y, y+1,
-		    GTK_FILL|GTK_EXPAND, GTK_FILL, 5, 0);
-  gtk_widget_show(label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, x, x+1, y, y+1,
+		    GIMP_FILL|GIMP_EXPAND, GIMP_FILL, 5, 0);
 
   entry = gtk_entry_new();
-  gtk_table_attach (GTK_TABLE(table), entry, x+1, x+2, y, y+1,
-		    GTK_FILL|GTK_EXPAND, GTK_FILL, 10, 0);
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
+  gimp_table_attach (table, entry, x+1, x+2, y, y+1,
+		    GIMP_FILL|GIMP_EXPAND, GIMP_FILL, 10, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
   sprintf (buffer, "%d", *(gint *)value);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) update, value);
-  gtk_widget_show(entry);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_connect (entry, "changed",
+		      update, value);
 }
 
 static void
@@ -1255,34 +1221,30 @@ gtkW_table_add_scale (GtkWidget	*table,
 		      gchar	*name,
 		      gint	x,
 		      gint	y,
-		      GtkSignalFunc update,
+		      GCallback update,
 		      gdouble *value,
 		      gdouble min,
 		      gdouble max,
 		      gdouble step)
 {
-  GtkObject *scale_data;
+  GtkAdjustment *scale_data;
   GtkWidget *label, *scale;
   
   label = gtk_label_new (name);
-  gtk_misc_set_alignment (GTK_MISC(label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE(table), label, x, x+1, y, y+1,
-		    GTK_FILL|GTK_EXPAND, GTK_FILL, 5, 0);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, x, x+1, y, y+1,
+		    GIMP_FILL|GIMP_EXPAND, GIMP_FILL, 5, 0);
 
   scale_data = gtk_adjustment_new (*value, min, max, step, step, 0.0);
 
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, x+1, x+2, y, y+1, 
-		    GTK_FILL|GTK_EXPAND, GTK_FILL, 10, 5);
+  scale = gimp_hscale_new (scale_data, 1);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+  gimp_table_attach (table, scale, x+1, x+2, y, y+1, 
+		    GIMP_FILL|GIMP_EXPAND, GIMP_FILL, 10, 5);
   gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
   gtk_scale_set_digits (GTK_SCALE (scale), 2);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) update, value);
-  gtk_widget_show (label);
-  gtk_widget_show (scale);
+  g_signal_connect (scale_data, "value-changed",
+		      update, value);
 }
 
 /* end of vpropagate.c */

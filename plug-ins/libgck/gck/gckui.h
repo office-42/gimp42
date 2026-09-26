@@ -27,9 +27,17 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+/* gimp42: ported to GTK 4.  Widgets are visible when created, so    */
+/* gck_auto_show () no longer does anything; hide a widget with      */
+/* gtk_widget_set_visible () instead.  Pixmaps are XPM data, drawing */
+/* areas take a cairo draw function (add event controllers to them   */
+/* for input), and the callbacks are GCallbacks connected swapped,   */
+/* as before: they get the widget (the scale, entry, button or       */
+/* option menu) as their first argument.  The GtkMenu based          */
+/* gck_menu_bar_new () and gck_menu_new () are gone with GtkMenu.    */
 
-void                  gck_cursor_set                 (GdkWindow *window,
-                                                      GdkCursorType cursortype);
+void                  gck_cursor_set                 (GtkWidget *widget,
+                                                      const char *cursor_name);
 
 void                  gck_auto_show                  (gint flag);
 
@@ -38,17 +46,16 @@ void                  gck_application_window_destroy (GckApplicationWindow *appw
 
 GckDialogWindow      *gck_dialog_window_new          (char *name,
                                                       GckPosition ActionPos,
-                                                      GtkSignalFunc ok_pressed_func,
-                                                      GtkSignalFunc cancel_pressed_func,
-                                                      GtkSignalFunc help_pressed_func);
-
+                                                      GCallback ok_pressed_func,
+                                                      GCallback cancel_pressed_func,
+                                                      GCallback help_pressed_func);
 void                  gck_dialog_window_destroy      (GckDialogWindow *dialog);
 
 GtkWidget            *gck_vseparator_new             (GtkWidget *container);
 GtkWidget            *gck_hseparator_new             (GtkWidget *container);
 
 GtkWidget            *gck_frame_new                  (char *name,GtkWidget *container,
-                                                      GtkShadowType shadowtype,
+                                                      GckShadowType shadowtype,
                                                       gint expand,gint fill,gint padding,
                                                       gint borderwidth);
 
@@ -58,91 +65,78 @@ GtkWidget            *gck_label_aligned_new          (char *name,GtkWidget *cont
 
 GtkWidget            *gck_drawing_area_new           (GtkWidget *container,
                                                       gint width,gint height,
-                                                      gint event_mask,
-                                                      GtkSignalFunc event_handler);
+                                                      GtkDrawingAreaDrawFunc draw_func,
+                                                      gpointer data);
 
 GtkWidget            *gck_hscale_new                 (char *name,GtkWidget *container,
                                                       GckScaleValues *svals,
-                                                      GtkSignalFunc value_changed_func);
-
+                                                      GCallback value_changed_func);
 GtkWidget            *gck_vscale_new                 (char *name,GtkWidget *container,
                                                       GckScaleValues *svals,
-                                                      GtkSignalFunc value_changed_func);
+                                                      GCallback value_changed_func);
 
 GtkWidget            *gck_entryfield_new             (char *name,GtkWidget *container,
                                                       double initial_value,
-                                                      GtkSignalFunc valuechangedfunc);
-
+                                                      GCallback valuechangedfunc);
 GtkWidget            *gck_entryfield_text_new        (char *name,GtkWidget *container,
                                                       char *initial_text,
-                                                      GtkSignalFunc textchangedfunc);
+                                                      GCallback textchangedfunc);
 
 GtkWidget            *gck_pushbutton_new             (char *name,GtkWidget *container,
                                                       gint expand,gint fill,gint padding,
-                                                      GtkSignalFunc button_clicked_func);
-
+                                                      GCallback button_clicked_func);
 GtkWidget            *gck_pushbutton_pixmap_new      (char *name,
-                                                      GdkPixmap *pixm,
-                                                      GdkBitmap *mask,
+                                                      char **xpm_data,
                                                       GtkWidget *container,
                                                       gint expand,gint fill,gint padding,
-                                                      GtkSignalFunc button_clicked_func);
-
+                                                      GCallback button_clicked_func);
 GtkWidget            *gck_togglebutton_pixmap_new    (char *name,
-                                                      GdkPixmap *pixm,
-                                                      GdkBitmap *mask,
+                                                      char **xpm_data,
                                                       GtkWidget *container,
                                                       gint expand,gint fill,gint padding,
-                                                      GtkSignalFunc button_toggled_func);
+                                                      GCallback button_toggled_func);
 
 GtkWidget            *gck_checkbutton_new            (char *name,GtkWidget *container,
                                                       gint value,
-                                                      GtkSignalFunc status_changed_func);
-
+                                                      GCallback status_changed_func);
 GtkWidget            *gck_radiobutton_new            (char *name,GtkWidget *container,
                                                       GtkWidget *previous,
-                                                      GtkSignalFunc status_changed_func);
-
+                                                      GCallback status_changed_func);
 GtkWidget            *gck_radiobutton_pixmap_new     (char *name,
-                                                      GdkPixmap *pixm,
-                                                      GdkBitmap *mask,
+                                                      char **xpm_data,
                                                       GtkWidget *container,
                                                       GtkWidget *previous,
-                                                      GtkSignalFunc status_changed_func);
+                                                      GCallback status_changed_func);
 
-GtkWidget            *gck_pixmap_new                 (GdkPixmap *pixm,
-                                                      GdkBitmap *mask,
+GtkWidget            *gck_pixmap_new                 (char **xpm_data,
                                                       GtkWidget *container);
 
 GtkWidget            *gck_vbox_new                   (GtkWidget *Container,
                                                       gint homogenous,gint expand,gint fill,
                                                       gint spacing,gint padding,
                                                       gint borderwidth);
-
 GtkWidget            *gck_hbox_new                   (GtkWidget *container,
                                                       gint homogenous,gint expand,gint fill,
                                                       gint spacing,gint padding,
                                                       gint borderwidth);
 
-GtkWidget            *gck_menu_bar_new               (GtkWidget *container,
-                                                      GckMenuItem menu_items[],
-                                                      GtkAccelGroup *acc_group);
-
-GtkWidget            *gck_menu_new                   (GckMenuItem *menu_items,
-                                                      GtkAccelGroup *acc_group);
+/* The callback gets the option menu; the index of the chosen item is */
+/* g_object_get_data (option_menu, "_GckOptionMenuItemID").           */
 
 GtkWidget            *gck_option_menu_new            (char *name,GtkWidget *container,
                                                       gint expand,gint fill,
                                                       gint padding,
                                                       char *item_labels[],
-                                                      GtkSignalFunc item_selected_func,
+                                                      GCallback item_selected_func,
                                                       gpointer data);
+void                  gck_option_menu_set_history    (GtkWidget *option_menu,
+                                                      gint index);
 
 GtkWidget            *gck_image_menu_new             (char *name,GtkWidget *container,
                                                       gint expand,gint fill,
                                                       gint padding,
                                                       gint constrain,
-                                                      GtkSignalFunc item_selected_func);
+                                                      GCallback item_selected_func);
 
 #ifdef __cplusplus
 }

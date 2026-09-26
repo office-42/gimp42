@@ -20,10 +20,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/param.h>
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <unistd.h>
 #include "gimpwire.h"
 
 
@@ -93,13 +89,13 @@ wire_set_flusher (WireFlushFunc flush_func)
 }
 
 int
-wire_read (int     fd,
+wire_read (GIOChannel *channel,
 	   guint8 *buf,
 	   gulong  count)
 {
   if (wire_read_func)
     {
-      if (!(* wire_read_func) (fd, buf, count))
+      if (!(* wire_read_func) (channel, buf, count))
 	{
 	  g_print ("wire_read: error\n");
 	  wire_error_val = TRUE;
@@ -108,22 +104,28 @@ wire_read (int     fd,
     }
   else
     {
-      int bytes;
+      GIOStatus status;
+      GError   *error = NULL;
+      gsize     bytes;
 
       while (count > 0)
 	{
 	  do {
-	    bytes = read (fd, (char*) buf, count);
-	  } while ((bytes == -1) && ((errno == EAGAIN) || (errno == EINTR)));
+	    bytes = 0;
+	    status = g_io_channel_read_chars (channel, (gchar *) buf, count,
+					      &bytes, &error);
+	  } while (status == G_IO_STATUS_AGAIN);
 
-	  if (bytes == -1)
+	  if (status == G_IO_STATUS_ERROR)
 	    {
-	      g_print ("wire_read: error\n");
+	      g_print ("wire_read: error: %s\n",
+		       error ? error->message : "unknown");
+	      g_clear_error (&error);
 	      wire_error_val = TRUE;
 	      return FALSE;
 	    }
 
-	  if (bytes == 0) 
+	  if (bytes == 0)
 	    {
 	      g_print ("wire_read: unexpected EOF (plug-in crashed?)\n");
 	      wire_error_val = TRUE;
@@ -139,13 +141,13 @@ wire_read (int     fd,
 }
 
 int
-wire_write (int     fd,
+wire_write (GIOChannel *channel,
 	    guint8 *buf,
 	    gulong  count)
 {
   if (wire_write_func)
     {
-      if (!(* wire_write_func) (fd, buf, count))
+      if (!(* wire_write_func) (channel, buf, count))
 	{
 	  g_print ("wire_write: error\n");
 	  wire_error_val = TRUE;
@@ -154,17 +156,23 @@ wire_write (int     fd,
     }
   else
     {
-      int bytes;
+      GIOStatus status;
+      GError   *error = NULL;
+      gsize     bytes;
 
       while (count > 0)
 	{
 	  do {
-	    bytes = write (fd, (char*) buf, count);
-	  } while ((bytes == -1) && ((errno == EAGAIN) || (errno == EINTR)));
+	    bytes = 0;
+	    status = g_io_channel_write_chars (channel, (const gchar *) buf,
+					       count, &bytes, &error);
+	  } while (status == G_IO_STATUS_AGAIN);
 
-	  if (bytes == -1)
+	  if (status == G_IO_STATUS_ERROR)
 	    {
-	      g_print ("wire_write: error\n");
+	      g_print ("wire_write: error: %s\n",
+		       error ? error->message : "unknown");
+	      g_clear_error (&error);
 	      wire_error_val = TRUE;
 	      return FALSE;
 	    }
@@ -178,10 +186,10 @@ wire_write (int     fd,
 }
 
 int
-wire_flush (int fd)
+wire_flush (GIOChannel *channel)
 {
   if (wire_flush_func)
-    return (* wire_flush_func) (fd);
+    return (* wire_flush_func) (channel);
   return FALSE;
 }
 
@@ -198,7 +206,7 @@ wire_clear_error ()
 }
 
 int
-wire_read_msg (int          fd,
+wire_read_msg (GIOChannel *channel,
 	       WireMessage *msg)
 {
   WireHandler *handler;
@@ -206,20 +214,20 @@ wire_read_msg (int          fd,
   if (wire_error_val)
     return !wire_error_val;
 
-  if (!wire_read_int32 (fd, &msg->type, 1))
+  if (!wire_read_int32 (channel, &msg->type, 1))
     return FALSE;
 
   handler = g_hash_table_lookup (wire_ht, &msg->type);
   if (!handler)
     g_error ("could not find handler for message: %d\n", msg->type);
 
-  (* handler->read_func) (fd, msg);
+  (* handler->read_func) (channel, msg);
 
   return !wire_error_val;
 }
 
 int
-wire_write_msg (int          fd,
+wire_write_msg (GIOChannel *channel,
 		WireMessage *msg)
 {
   WireHandler *handler;
@@ -231,10 +239,10 @@ wire_write_msg (int          fd,
   if (!handler)
     g_error ("could not find handler for message: %d\n", msg->type);
 
-  if (!wire_write_int32 (fd, &msg->type, 1))
+  if (!wire_write_int32 (channel, &msg->type, 1))
     return FALSE;
 
-  (* handler->write_func) (fd, msg);
+  (* handler->write_func) (channel, msg);
 
   return !wire_error_val;
 }
@@ -252,18 +260,18 @@ wire_destroy (WireMessage *msg)
 }
 
 int
-wire_read_int32 (int      fd,
+wire_read_int32 (GIOChannel *channel,
 		 guint32 *data,
 		 gint     count)
 {
   if (count > 0)
     {
-      if (!wire_read_int8 (fd, (guint8*) data, count * 4))
+      if (!wire_read_int8 (channel, (guint8*) data, count * 4))
 	return FALSE;
 
       while (count--)
 	{
-	  *data = ntohl (*data);
+	  *data = g_ntohl (*data);
 	  data++;
 	}
     }
@@ -272,18 +280,18 @@ wire_read_int32 (int      fd,
 }
 
 int
-wire_read_int16 (int      fd,
+wire_read_int16 (GIOChannel *channel,
 		 guint16 *data,
 		 gint     count)
 {
   if (count > 0)
     {
-      if (!wire_read_int8 (fd, (guint8*) data, count * 2))
+      if (!wire_read_int8 (channel, (guint8*) data, count * 2))
 	return FALSE;
 
       while (count--)
 	{
-	  *data = ntohs (*data);
+	  *data = g_ntohs (*data);
 	  data++;
 	}
     }
@@ -292,15 +300,15 @@ wire_read_int16 (int      fd,
 }
 
 int
-wire_read_int8 (int     fd,
+wire_read_int8 (GIOChannel *channel,
 		guint8 *data,
 		gint    count)
 {
-  return wire_read (fd, data, count);
+  return wire_read (channel, data, count);
 }
 
 int
-wire_read_double (int      fd,
+wire_read_double (GIOChannel *channel,
 		  gdouble *data,
 		  gint     count)
 {
@@ -309,7 +317,7 @@ wire_read_double (int      fd,
 
   for (i = 0; i < count; i++)
     {
-      if (!wire_read_string (fd, &str, 1))
+      if (!wire_read_string (channel, &str, 1))
 	return FALSE;
       sscanf (str, "%le", &data[i]);
       g_free (str);
@@ -319,7 +327,7 @@ wire_read_double (int      fd,
 }
 
 int
-wire_read_string (int     fd,
+wire_read_string (GIOChannel *channel,
 		  gchar **data,
 		  gint    count)
 {
@@ -328,13 +336,13 @@ wire_read_string (int     fd,
 
   for (i = 0; i < count; i++)
     {
-      if (!wire_read_int32 (fd, &tmp, 1))
+      if (!wire_read_int32 (channel, &tmp, 1))
 	return FALSE;
 
       if (tmp > 0)
 	{
 	  data[i] = g_new (gchar, tmp);
-	  if (!wire_read_int8 (fd, (guint8*) data[i], tmp))
+	  if (!wire_read_int8 (channel, (guint8*) data[i], tmp))
 	    {
 	      g_free (data[i]);
 	      return FALSE;
@@ -350,7 +358,7 @@ wire_read_string (int     fd,
 }
 
 int
-wire_write_int32 (int      fd,
+wire_write_int32 (GIOChannel *channel,
 		  guint32 *data,
 		  gint     count)
 {
@@ -361,8 +369,8 @@ wire_write_int32 (int      fd,
     {
       for (i = 0; i < count; i++)
 	{
-	  tmp = htonl (data[i]);
-	  if (!wire_write_int8 (fd, (guint8*) &tmp, 4))
+	  tmp = g_htonl (data[i]);
+	  if (!wire_write_int8 (channel, (guint8*) &tmp, 4))
 	    return FALSE;
 	}
     }
@@ -371,7 +379,7 @@ wire_write_int32 (int      fd,
 }
 
 int
-wire_write_int16 (int      fd,
+wire_write_int16 (GIOChannel *channel,
 		  guint16 *data,
 		  gint     count)
 {
@@ -382,8 +390,8 @@ wire_write_int16 (int      fd,
     {
       for (i = 0; i < count; i++)
 	{
-	  tmp = htons (data[i]);
-	  if (!wire_write_int8 (fd, (guint8*) &tmp, 2))
+	  tmp = g_htons (data[i]);
+	  if (!wire_write_int8 (channel, (guint8*) &tmp, 2))
 	    return FALSE;
 	}
     }
@@ -392,15 +400,15 @@ wire_write_int16 (int      fd,
 }
 
 int
-wire_write_int8 (int     fd,
+wire_write_int8 (GIOChannel *channel,
 		 guint8 *data,
 		 gint    count)
 {
-  return wire_write (fd, data, count);
+  return wire_write (channel, data, count);
 }
 
 int
-wire_write_double (int      fd,
+wire_write_double (GIOChannel *channel,
 		   gdouble *data,
 		   gint     count)
 {
@@ -411,7 +419,7 @@ wire_write_double (int      fd,
   for (i = 0; i < count; i++)
     {
       sprintf (buf, "%0.50e", data[i]);
-      if (!wire_write_string (fd, &t, 1))
+      if (!wire_write_string (channel, &t, 1))
 	return FALSE;
     }
 
@@ -419,7 +427,7 @@ wire_write_double (int      fd,
 }
 
 int
-wire_write_string (int     fd,
+wire_write_string (GIOChannel *channel,
 		   gchar **data,
 		   gint    count)
 {
@@ -433,10 +441,10 @@ wire_write_string (int     fd,
       else
 	tmp = 0;
 
-      if (!wire_write_int32 (fd, &tmp, 1))
+      if (!wire_write_int32 (channel, &tmp, 1))
 	return FALSE;
       if (tmp > 0)
-	if (!wire_write_int8 (fd, (guint8*) data[i], tmp))
+	if (!wire_write_int8 (channel, (guint8*) data[i], tmp))
 	  return FALSE;
     }
 

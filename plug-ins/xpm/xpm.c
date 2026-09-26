@@ -33,10 +33,340 @@ Previous...Inherited code from Ray Lehtiniemi, who inherited it from S & P.
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <X11/Xlib.h>
-#include <X11/xpm.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
+
+/* A small, self-contained reader and writer for XPM (version 3) files,
+ * taking the place of libXpm, which does not exist everywhere.  The
+ * structures keep libXpm's names and meaning so the rest of the plug-in
+ * reads as before.
+ */
+
+typedef struct
+{
+  char *string;			/* the cpp characters of this color */
+  char *symbolic;		/* s key */
+  char *m_color;		/* m key */
+  char *g4_color;		/* g4 key */
+  char *g_color;		/* g key */
+  char *c_color;		/* c key */
+} XpmColor;
+
+typedef struct
+{
+  unsigned int  width;
+  unsigned int  height;
+  unsigned int  cpp;
+  unsigned int  ncolors;
+  XpmColor     *colorTable;
+  unsigned int *data;
+} XpmImage;
+
+/* Returns the quoted strings of an XPM file, in order, skipping C
+ * comments.  Escapes are kept as they are; XPM does not use them.
+ */
+static GPtrArray *
+xpm_read_strings (const gchar *contents,
+		  gsize        length)
+{
+  GPtrArray   *strings = g_ptr_array_new_with_free_func (g_free);
+  const gchar *p = contents;
+  const gchar *end = contents + length;
+
+  while (p < end)
+    {
+      if (p + 1 < end && p[0] == '/' && p[1] == '*')
+	{
+	  p += 2;
+	  while (p + 1 < end && ! (p[0] == '*' && p[1] == '/'))
+	    p++;
+	  p += 2;
+	}
+      else if (*p == '"')
+	{
+	  const gchar *start = ++p;
+
+	  while (p < end && *p != '"')
+	    p++;
+	  g_ptr_array_add (strings, g_strndup (start, p - start));
+	  p++;
+	}
+      else
+	p++;
+    }
+
+  return strings;
+}
+
+static gboolean
+xpm_is_key (const gchar *token)
+{
+  return (strcmp (token, "c") == 0 || strcmp (token, "m") == 0 ||
+	  strcmp (token, "g") == 0 || strcmp (token, "g4") == 0 ||
+	  strcmp (token, "s") == 0);
+}
+
+/* Parses the part of a color line after the characters:
+ * "key value [key value ...]", where a value may contain spaces.
+ */
+static void
+xpm_parse_color_keys (XpmColor    *color,
+		      const gchar *spec)
+{
+  gchar  **tokens;
+  gchar   *key = NULL;
+  GString *value = NULL;
+  gint     i;
+
+  tokens = g_strsplit_set (spec, " \t", -1);
+
+  for (i = 0; ; i++)
+    {
+      gchar *token = tokens[i];
+
+      if (token && *token == '\0')
+	continue;
+
+      if (token == NULL || (xpm_is_key (token) && value && value->len > 0) ||
+	  (xpm_is_key (token) && key == NULL))
+	{
+	  if (key && value)
+	    {
+	      gchar *v = g_string_free (value, FALSE);
+
+	      if (strcmp (key, "c") == 0)
+		{ g_free (color->c_color); color->c_color = v; }
+	      else if (strcmp (key, "m") == 0)
+		{ g_free (color->m_color); color->m_color = v; }
+	      else if (strcmp (key, "g") == 0)
+		{ g_free (color->g_color); color->g_color = v; }
+	      else if (strcmp (key, "g4") == 0)
+		{ g_free (color->g4_color); color->g4_color = v; }
+	      else
+		{ g_free (color->symbolic); color->symbolic = v; }
+	      value = NULL;
+	    }
+	  if (token == NULL)
+	    break;
+	  key = token;
+	  value = g_string_new (NULL);
+	}
+      else if (value)
+	{
+	  if (value->len > 0)
+	    g_string_append_c (value, ' ');
+	  g_string_append (value, token);
+	}
+    }
+
+  if (value)
+    g_string_free (value, TRUE);
+  g_strfreev (tokens);
+}
+
+static gboolean
+xpm_read_file (const char *filename,
+	       XpmImage   *image)
+{
+  gchar       *contents;
+  gsize        length;
+  GPtrArray   *strings;
+  GHashTable  *lookup = NULL;
+  gint         index1[256];
+  guint        w, h, ncolors, cpp;
+  guint        i, x, y;
+  gboolean     ok = FALSE;
+
+  memset (image, 0, sizeof (XpmImage));
+
+  if (! g_file_get_contents (filename, &contents, &length, NULL))
+    return FALSE;
+
+  strings = xpm_read_strings (contents, length);
+  g_free (contents);
+
+  if (strings->len < 1 ||
+      sscanf (g_ptr_array_index (strings, 0), "%u %u %u %u",
+	      &w, &h, &ncolors, &cpp) != 4 ||
+      w == 0 || h == 0 || ncolors == 0 || cpp == 0 || cpp > 8 ||
+      w > 65536 || h > 65536 ||
+      strings->len < 1 + ncolors + h)
+    goto out;
+
+  image->width      = w;
+  image->height     = h;
+  image->ncolors    = ncolors;
+  image->cpp        = cpp;
+  image->colorTable = g_new0 (XpmColor, ncolors);
+  image->data       = g_new0 (unsigned int, (gsize) w * h);
+
+  if (cpp == 1)
+    for (i = 0; i < 256; i++)
+      index1[i] = 0;
+  else
+    lookup = g_hash_table_new (g_str_hash, g_str_equal);
+
+  for (i = 0; i < ncolors; i++)
+    {
+      const gchar *line = g_ptr_array_index (strings, 1 + i);
+      XpmColor    *color = &image->colorTable[i];
+
+      if (strlen (line) < cpp)
+	goto out;
+
+      color->string = g_strndup (line, cpp);
+      xpm_parse_color_keys (color, line + cpp);
+
+      if (cpp == 1)
+	index1[(guchar) color->string[0]] = i;
+      else
+	g_hash_table_insert (lookup, color->string, GUINT_TO_POINTER (i));
+    }
+
+  for (y = 0; y < h; y++)
+    {
+      const gchar  *line = g_ptr_array_index (strings, 1 + ncolors + y);
+      unsigned int *dest = image->data + (gsize) y * w;
+      gsize         len  = strlen (line);
+      gchar         key[9];
+
+      for (x = 0; x < w && (x + 1) * cpp <= len; x++)
+	{
+	  if (cpp == 1)
+	    dest[x] = index1[(guchar) line[x]];
+	  else
+	    {
+	      memcpy (key, line + x * cpp, cpp);
+	      key[cpp] = '\0';
+	      dest[x] = GPOINTER_TO_UINT (g_hash_table_lookup (lookup, key));
+	    }
+	}
+    }
+
+  ok = TRUE;
+
+ out:
+  if (lookup)
+    g_hash_table_destroy (lookup);
+  g_ptr_array_free (strings, TRUE);
+
+  return ok;
+}
+
+static gboolean
+xpm_write_file (const char *filename,
+		XpmImage   *image)
+{
+  FILE        *fp;
+  gchar       *base;
+  gchar       *p;
+  guint        i, x, y;
+
+  fp = fopen (filename, "wb");
+  if (! fp)
+    return FALSE;
+
+  /* the array is named after the file, as libXpm does */
+  base = g_path_get_basename (filename);
+  if ((p = strchr (base, '.')) != NULL)
+    *p = '\0';
+  for (p = base; *p; p++)
+    if (! g_ascii_isalnum (*p))
+      *p = '_';
+  if (! g_ascii_isalpha (base[0]) && base[0] != '_')
+    {
+      p = g_strconcat ("_", base, NULL);
+      g_free (base);
+      base = p;
+    }
+
+  fprintf (fp, "/* XPM */\nstatic char * %s[] = {\n", base);
+  g_free (base);
+
+  fprintf (fp, "\"%u %u %u %u\",\n",
+	   image->width, image->height, image->ncolors, image->cpp);
+
+  for (i = 0; i < image->ncolors; i++)
+    {
+      XpmColor *color = &image->colorTable[i];
+
+      fprintf (fp, "\"%s", color->string);
+      if (color->symbolic)
+	fprintf (fp, "\ts %s", color->symbolic);
+      if (color->m_color)
+	fprintf (fp, "\tm %s", color->m_color);
+      if (color->g4_color)
+	fprintf (fp, "\tg4 %s", color->g4_color);
+      if (color->g_color)
+	fprintf (fp, "\tg %s", color->g_color);
+      if (color->c_color)
+	fprintf (fp, "\tc %s", color->c_color);
+      fprintf (fp, "\",\n");
+    }
+
+  for (y = 0; y < image->height; y++)
+    {
+      unsigned int *src = image->data + (gsize) y * image->width;
+
+      fputc ('"', fp);
+      for (x = 0; x < image->width; x++)
+	fputs (image->colorTable[src[x]].string, fp);
+      fprintf (fp, "\"%s\n", (y + 1 < image->height) ? "," : "");
+    }
+
+  fprintf (fp, "};\n");
+
+  return (fclose (fp) == 0);
+}
+
+static void
+xpm_free_image (XpmImage *image)
+{
+  guint i;
+
+  for (i = 0; image->colorTable && i < image->ncolors; i++)
+    {
+      g_free (image->colorTable[i].string);
+      g_free (image->colorTable[i].symbolic);
+      g_free (image->colorTable[i].m_color);
+      g_free (image->colorTable[i].g4_color);
+      g_free (image->colorTable[i].g_color);
+      g_free (image->colorTable[i].c_color);
+    }
+  g_free (image->colorTable);
+  g_free (image->data);
+  memset (image, 0, sizeof (XpmImage));
+}
+
+/* Parses an X color specification: a name from the X color database,
+ * #rgb, #rrggbb, #rrrgggbbb or #rrrrggggbbbb.
+ */
+static gboolean
+xpm_parse_color (const char *spec,
+		 guchar     *r,
+		 guchar     *g,
+		 guchar     *b)
+{
+  PangoColor color;
+  GdkRGBA    rgba;
+
+  if (pango_color_parse (&color, spec))
+    {
+      *r = color.red >> 8;
+      *g = color.green >> 8;
+      *b = color.blue >> 8;
+      return TRUE;
+    }
+  if (gdk_rgba_parse (&rgba, spec))
+    {
+      *r = (guchar) (rgba.red * 255.0 + 0.5);
+      *g = (guchar) (rgba.green * 255.0 + 0.5);
+      *b = (guchar) (rgba.blue * 255.0 + 0.5);
+      return TRUE;
+    }
+  return FALSE;
+}
 
 static const char linenoise [] =
 " .+@#$%&*=-;>,')!~{]^/(_:<[}|1234567890abcdefghijklmnopqrstuvwxyz\
@@ -97,7 +427,7 @@ save_image   (char   *filename,
 
 
 static gint
-save_dialog ();
+save_dialog (void);
 
 static void
 save_close_callback  (GtkWidget *widget,
@@ -288,15 +618,16 @@ load_image (char *filename)
   char     *name;
 
   /* put up a progress bar */
-  name = malloc (strlen (filename) + 12);
-  if (!name)
-    gimp_quit();
-  sprintf (name, "Loading %s:", filename);
+  name = g_strdup_printf ("Loading %s:", filename);
   gimp_progress_init (name);
-  free (name);
+  g_free (name);
 
   /* read the raw file */
-  XpmReadFileToXpmImage (filename, &xpm_image, NULL);
+  if (! xpm_read_file (filename, &xpm_image))
+    {
+      xpm_free_image (&xpm_image);
+      return -1;
+    }
 
   /* parse out the colors into a cmap */
   parse_colors (&xpm_image, &cmap);
@@ -316,7 +647,8 @@ load_image (char *filename)
   
   /* clean up and exit */
   g_free(cmap);
-  
+  xpm_free_image (&xpm_image);
+
   return image_ID;
 }
 
@@ -326,15 +658,8 @@ load_image (char *filename)
 static void
 parse_colors (XpmImage *xpm_image, guchar **cmap)
 {
-  Display  *display;
-  Colormap  colormap;
   int       i, j;
 
-  
-  /* open the display and get the default color map */
-  display  = XOpenDisplay (NULL);
-  colormap = DefaultColormap (display, DefaultScreen (display));
-    
   /* alloc a buffer to hold the parsed colors */
   *cmap = g_new(guchar, sizeof (guchar) * 4 * xpm_image->ncolors);
 
@@ -348,8 +673,8 @@ parse_colors (XpmImage *xpm_image, guchar **cmap)
         {
           char     *colorspec = "None";
           XpmColor *xpm_color;
-          XColor    xcolor;
-        
+          guchar    r, g, b;
+
           xpm_color = &(xpm_image->colorTable[i]);
         
           /* pick the best spec available */
@@ -364,19 +689,18 @@ parse_colors (XpmImage *xpm_image, guchar **cmap)
         
           /* parse if it's not transparent.  the assumption is that
              g_new will memset the buffer to zeros */
-          if (strcmp(colorspec, "None") != 0) {
-            XParseColor (display, colormap, colorspec, &xcolor);
-            (*cmap)[j++] = xcolor.red >> 8;
-            (*cmap)[j++] = xcolor.green >> 8;
-            (*cmap)[j++] = xcolor.blue >> 8;
-            (*cmap)[j++] = ~0;
+          if (g_ascii_strcasecmp (colorspec, "None") != 0) {
+            if (! xpm_parse_color (colorspec, &r, &g, &b))
+              r = g = b = 0;
+            (*cmap)[j++] = r;
+            (*cmap)[j++] = g;
+            (*cmap)[j++] = b;
+            (*cmap)[j++] = 255;
           } else {
             j += 4;
           }
         }
     }
-    
-  XCloseDisplay (display);
 }
 
 
@@ -594,17 +918,14 @@ save_image (char   *filename,
   /*if ((mbuff = g_new(guint, width*height)) == NULL)
     goto cleanup;*/
   
-  if ((hash = g_hash_table_new((GHashFunc)rgbhash, (GCompareFunc) compare)) == NULL)
+  if ((hash = g_hash_table_new_full ((GHashFunc) rgbhash, (GEqualFunc) compare, g_free, g_free)) == NULL)
     goto cleanup;
   
   /* put up a progress bar */
   {
-    char *name = g_new (char, strlen (filename) + 12);
-    if (!name)
-      gimp_quit();
-    sprintf (name, "Saving %s:", filename);
+    char *name = g_strdup_printf ("Saving %s:", filename);
     gimp_progress_init (name);
-    free (name);
+    g_free (name);
   }
 
   
@@ -636,16 +957,17 @@ save_image (char   *filename,
           /* do each pixel in the row */
           for (k=0; k<width; k++)
             {
-	      rgbkey *key = g_new(rgbkey, 1);
+	      rgbkey pixel;
+	      rgbkey *key = &pixel;
 	      guchar a;
-  
+
               /* get pixel data */
               key->r = *(data++);
 	      key->g = color && !indexed ? *(data++) : key->r;
 	      key->b = color && !indexed ? *(data++) : key->r;
 	      a = alpha ? *(data++) : 255;
-	      
-	      if (a < threshold) 
+
+	      if (a < threshold)
 		      *(idata++) = 0;
 	      else
 		      if (indexed)
@@ -655,8 +977,7 @@ save_image (char   *filename,
 			      if (!indexno) {
 				      indexno = g_new(int, 1);
 				      *indexno = ncolors++;
-				      g_hash_table_insert(hash, key, indexno);
-			      	key = g_new(rgbkey, 1);
+				      g_hash_table_insert(hash, g_memdup2 (key, sizeof (rgbkey)), indexno);
 		      		}
 		      *(idata++) = *indexno;
 		  }
@@ -698,7 +1019,7 @@ save_image (char   *filename,
 	  g_hash_table_foreach (hash, create_colormap_from_hash, colormap);
   }
     
-  image = g_new(XpmImage, 1);
+  image = g_new0(XpmImage, 1);
   
   image->width=width;
   image->height=height;
@@ -708,8 +1029,8 @@ save_image (char   *filename,
   image->data = ibuff;
   
       /* do the save */
-      XpmWriteFileFromXpmImage(filename, image, NULL);
-      rc = TRUE;
+      rc = xpm_write_file (filename, image);
+      g_free (image);
 
   
  cleanup:
@@ -727,7 +1048,7 @@ save_image (char   *filename,
 
 
 static gint
-save_dialog ()
+save_dialog (void)
 {
   GtkWidget *dlg;
   GtkWidget *label;
@@ -735,74 +1056,45 @@ save_dialog ()
   GtkWidget *scale;
   GtkWidget *frame;
   GtkWidget *table;
-  GtkObject *scale_data;
-  gchar **argv;
-  gint argc;
+  GtkAdjustment *scale_data;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("save");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Save as Xpm");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) save_close_callback,
-		      NULL);
+  dlg = gimp_dialog_new ("Save as Xpm");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (save_close_callback),
+		    NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) save_ok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (save_ok_callback),
+			  dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Parameter Settings");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
 
-  table = gtk_table_new (1, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  table = gimp_table_new (1, 2, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gtk_frame_set_child (GTK_FRAME (frame), table);
 
   label = gtk_label_new ("Alpha Threshold");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1, GTK_FILL | GTK_EXPAND, GTK_FILL, 5, 0);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 5, 0);
   scale_data = gtk_adjustment_new (xpmvals.threshold, 0.0, 1.0, 0.01, 0.01, 0.0);
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 0, 1, GTK_FILL | GTK_EXPAND, GTK_FILL, 0, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_scale_set_digits (GTK_SCALE (scale), 2);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) save_scale_update,
-		      &xpmvals.threshold);
-  gtk_widget_show (label);
-  gtk_widget_show (scale);
+  scale = gimp_hscale_new (scale_data, 2);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+  gimp_table_attach (table, scale, 1, 2, 0, 1, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 0, 0);
+  g_signal_connect (scale_data, "value-changed",
+		    G_CALLBACK (save_scale_update),
+		    &xpmvals.threshold);
 
-  gtk_widget_show (frame);
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return xpmint.run;
 }
@@ -814,7 +1106,7 @@ static void
 save_close_callback (GtkWidget *widget,
 		     gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -822,12 +1114,12 @@ save_ok_callback (GtkWidget *widget,
 		  gpointer   data)
 {
   xpmint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
 save_scale_update (GtkAdjustment *adjustment,
 		   double        *scale_val)
 {
-  *scale_val = adjustment->value;
+  *scale_val = gtk_adjustment_get_value (adjustment);
 }

@@ -31,8 +31,9 @@ static char ident[] = "@(#) GIMP Decompose plug-in v1.00 29-Jul-97";
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 /* Declare local functions
  */
@@ -863,75 +864,54 @@ decompose_dialog (void)
   GtkWidget *toggle;
   GtkWidget *frame;
   GtkWidget *vbox;
-  GSList *group;
-  gchar **argv;
-  gint argc;
+  GtkWidget *group;
   int j;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("Decompose");
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Decompose");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) decompose_close_callback,
+  dlg = gimp_dialog_new ("Decompose");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (decompose_close_callback),
 		      NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) decompose_ok_callback,
+  button = gimp_dialog_add_button (dlg, "OK", NULL, NULL, TRUE);
+  g_signal_connect (button, "clicked",
+                      G_CALLBACK (decompose_ok_callback),
                       dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			     G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Extract channels:");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
 
-  vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 10);
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
+  vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (vbox, 10);
+  gimp_container_add (frame, vbox);
 
   group = NULL;
   for (j = 0; j < NUM_EXTRACT_TYPES; j++)
   {
     if (!extract[j].dialog) continue;
-    toggle = gtk_radio_button_new_with_label (group, extract[j].type);
-    group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-    gtk_box_pack_start (GTK_BOX (vbox), toggle, TRUE, TRUE, 0);
+    toggle = gimp_radio_button_new (group, extract[j].type);
+    group = toggle;
+    gimp_box_pack_start (vbox, toggle, TRUE, TRUE, 0);
     decoint.extract_flag[j] =
        (cmp_icase (decovals.extract_type, extract[j].type) == 0);
-    gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                        (GtkSignalFunc) decompose_toggle_update,
+    g_signal_connect (toggle, "toggled",
+                        G_CALLBACK (decompose_toggle_update),
                         &(decoint.extract_flag[j]));
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle),
+    gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle),
                                  decoint.extract_flag[j]);
-    gtk_widget_show (toggle);
   }
-  gtk_widget_show (vbox);
-  gtk_widget_show (frame);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return decoint.run;
 }
@@ -943,7 +923,7 @@ static void
 decompose_close_callback (GtkWidget *widget,
 			  gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -952,7 +932,7 @@ decompose_ok_callback (GtkWidget *widget,
 {int j;
 
   decoint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 
   for (j = 0; j < NUM_EXTRACT_TYPES; j++)
   {
@@ -972,7 +952,7 @@ decompose_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;

@@ -49,6 +49,13 @@ extern int       allow_resize_windows;
 extern int       no_cursor_updating;
 extern int       preview_size;
 extern int       show_rulers;
+/*  ruler_units  */
+enum
+{
+  GIMP_PIXELS,
+  GIMP_INCHES,
+  GIMP_CENTIMETERS
+};
 extern int       ruler_units;
 extern int       auto_save;
 extern int       cubic_interpolation;
@@ -69,6 +76,11 @@ extern int       using_xserver_resolution;
 
 /*  function prototypes  */
 char *  gimp_directory (void);
+/*  Where the installation keeps its data (brushes, gimprc, ...) and its
+ *  plug-ins; resolved at run time so an installation can move.
+ */
+char *  gimp_data_directory (void);
+char *  gimp_plugin_directory (void);
 void    parse_gimprc (void);
 void    parse_gimprc_file (char *filename);
 void    save_gimprc (GList **updated_options, GList **conflicting_options);

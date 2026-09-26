@@ -18,10 +18,11 @@
 #ifndef __APPENV_H__
 #define __APPENV_H__
 
-#include "gdk/gdkx.h"
-#include "gtk/gtk.h"
+#include "config.h"
 
-#define DISPLAY              ((Display *) GDK_DISPLAY())
+#include <gtk/gtk.h>
+
+#include "libgimp/gimpwidgets.h"
 
 /*   important macros  */
 #define BOUNDS(a,x,y)  ((a < x) ? x : ((a > y) ? y : a))

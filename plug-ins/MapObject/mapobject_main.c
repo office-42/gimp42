@@ -253,17 +253,7 @@ GPlugInInfo PLUG_IN_INFO =
 
 void mapobject_interactive(GDrawable *drawable)
 {
-  gchar **argv;
-  gint argc;
-
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("map_object");
-
-  gdk_set_use_xshm(gimp_use_xshm());
-
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
   /* Set up ArcBall stuff */
   /* ==================== */
@@ -279,11 +269,15 @@ void mapobject_interactive(GDrawable *drawable)
   /* ============== */
 
   image_setup(drawable,TRUE);
-  
+
+  /* Compute the first preview (was done on the first expose) */
+  /* ======================================================== */
+
+  draw_preview_image(TRUE);
+
   /* Gtk main event loop */
   /* =================== */
-  
-  gtk_main();
-  gdk_flush();
+
+  gimp_main_loop_run();
 }
 

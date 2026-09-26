@@ -46,7 +46,6 @@ static char ident[] = "@(#) GIMP Alias|Wavefront pix image file-plugin v1.0  24-
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <gtk/gtk.h>
 #include <libgimp/gimp.h>
 
 /* #define PIX_DEBUG */
@@ -294,7 +293,7 @@ static gint32 load_image (char *filename)
 	PIX_DEBUG_PRINT("Opening file: %s\n",filename);
 
 	/* Open the file */
-	file = fopen( filename, "r" );
+	file = fopen( filename, "rb" );
 	if ( NULL == file ) {
 		return -1;
 	}

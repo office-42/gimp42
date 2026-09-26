@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <gtk/gtk.h>
 #include <libgimp/gimp.h>
+#include <libgimp/gimpui.h>
 
 #define PLUG_IN_NAME    "plug_in_paper_tile"
 #define PLUG_IN_VERSION "v0.7 (Dec. 25 1997)"
@@ -289,7 +290,7 @@ static GtkWidget *button_white;
 static void dialog_destroy_handler( GtkWidget *widget, 
 				    gpointer  *data )
 {
-  gtk_main_quit();
+  gimp_main_loop_quit ();
 }
 
 static void dialog_ok_handler( GtkWidget *widget,
@@ -297,29 +298,29 @@ static void dialog_ok_handler( GtkWidget *widget,
 {
   dialog_status = TRUE;
 
-  if( GTK_TOGGLE_BUTTON( button_white )->active ) parameters.bg_type = BG_TYPE_WHITE;
-  if( GTK_TOGGLE_BUTTON( button_black )->active ) parameters.bg_type = BG_TYPE_BLACK;
+  if( gtk_check_button_get_active (GTK_CHECK_BUTTON (button_white)) ) parameters.bg_type = BG_TYPE_WHITE;
+  if( gtk_check_button_get_active (GTK_CHECK_BUTTON (button_black)) ) parameters.bg_type = BG_TYPE_BLACK;
   if( image_has_alpha ){
-    if( GTK_TOGGLE_BUTTON( button_transparent )->active ){
+    if( gtk_check_button_get_active (GTK_CHECK_BUTTON (button_transparent)) ){
       parameters.bg_type = BG_TYPE_TRANSPARENT;
     }
   }
 
   parameters.tile_width =
-    (gint32)atof(gtk_entry_get_text( GTK_ENTRY( entry_width ) ) );
+    (gint32)atof(gtk_editable_get_text (GTK_EDITABLE( entry_width ) ) );
   parameters.tile_height =
-    (gint32)atof(gtk_entry_get_text( GTK_ENTRY( entry_height ) ) );
+    (gint32)atof(gtk_editable_get_text (GTK_EDITABLE( entry_height ) ) );
   parameters.slide_length =
-    (gint32)atof(gtk_entry_get_text( GTK_ENTRY( entry_slide ) ) );
+    (gint32)atof(gtk_editable_get_text (GTK_EDITABLE( entry_slide ) ) );
 
-  gtk_widget_destroy( GTK_WIDGET( data ) );
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void dialog_cancel_handler( GtkWidget *widget,
 				   gpointer  *data )
 {
   dialog_status = FALSE;
-  gtk_widget_destroy( GTK_WIDGET( data ) );
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 /******************************************************************************/
@@ -328,44 +329,20 @@ static int dialog( void )
 {
   GtkWidget *window;
   dialog_status = FALSE;
-  {
-    gint    argc = 1;
-    gchar **argv = g_new( gchar *, 1 );
-    argv[0] = g_strdup( DIALOG_CAPTION );
-    gtk_init( &argc, &argv );
-    gtk_rc_parse(gimp_gtkrc());
-  }
+  gtk_init ();
 
   /* dialog window */
-  window = gtk_dialog_new();
-  gtk_signal_connect( GTK_OBJECT( window ), "destroy",
-		      GTK_SIGNAL_FUNC( dialog_destroy_handler ), NULL );
-  gtk_container_border_width( GTK_CONTAINER( window ), 0 );
-  gtk_container_border_width( GTK_CONTAINER( GTK_DIALOG( window )->vbox ), 5 );
+  window = gimp_dialog_new( DIALOG_CAPTION );
+  g_signal_connect (window, "destroy",
+		    G_CALLBACK (dialog_destroy_handler), NULL );
+  gimp_container_set_border_width (gimp_dialog_get_vbox (window), 5 );
 
   {
     /* buttons */
-    GtkWidget *button;
-
-    /* ok button */
-    button = gtk_button_new_with_label( "OK" );
-    gtk_signal_connect_object( GTK_OBJECT( button ), "clicked",
-			       GTK_SIGNAL_FUNC( dialog_ok_handler ),
-			       GTK_OBJECT( window ) );
-    GTK_WIDGET_SET_FLAGS( button, GTK_CAN_DEFAULT );
-    gtk_box_pack_start( GTK_BOX( GTK_DIALOG( window )->action_area ),
-			button, TRUE, TRUE, 0 );
-    gtk_widget_grab_default( button );
-    gtk_widget_show( button );
-    
-    /* cancel button */
-    button = gtk_button_new_with_label( "Cancel" );
-    gtk_signal_connect_object( GTK_OBJECT( button ), "clicked",
-			       GTK_SIGNAL_FUNC( dialog_cancel_handler ),
-			       GTK_OBJECT( window ));
-    gtk_box_pack_start( GTK_BOX( GTK_DIALOG( window )->action_area ),
-			button, TRUE, TRUE, 0 );
-    gtk_widget_show( button );
+    gimp_dialog_add_button (window, "OK",
+			    G_CALLBACK (dialog_ok_handler), window, TRUE);
+    gimp_dialog_add_button (window, "Cancel",
+			    G_CALLBACK (dialog_cancel_handler), window, FALSE);
   }
   
   {
@@ -375,95 +352,82 @@ static int dialog( void )
     char       buffer[32];
     
     /* table */
-    table = gtk_table_new( 3, 2, FALSE );
-    gtk_table_set_row_spacings( GTK_TABLE( table ), 5 );
-    gtk_table_set_col_spacings( GTK_TABLE( table ), 5 );
-    gtk_box_pack_start( GTK_BOX( GTK_DIALOG( window )->vbox ),
+    table = gimp_table_new( 3, 2, FALSE );
+    gtk_grid_set_row_spacing (GTK_GRID (table), 5 );
+    gtk_grid_set_column_spacing (GTK_GRID (table), 5 );
+    gimp_box_pack_start (gimp_dialog_get_vbox (window),
 			table, TRUE, TRUE, 0 );
-    gtk_widget_show( table );
     
     /* tile width */
     label = gtk_label_new( "width: " );
     entry_width = gtk_entry_new();
     sprintf( buffer, "%d", parameters.tile_width );
-    gtk_entry_set_text( GTK_ENTRY( entry_width ), buffer );
-    gtk_table_attach_defaults( GTK_TABLE( table ), label, 0, 1, 0, 1 );
-    gtk_table_attach_defaults( GTK_TABLE( table ), entry_width, 1, 2, 0, 1 );
-    gtk_widget_show( label );
-    gtk_widget_show( entry_width );
+    gtk_editable_set_text (GTK_EDITABLE( entry_width ), buffer );
+    gimp_table_attach_defaults (table, label, 0, 1, 0, 1 );
+    gimp_table_attach_defaults (table, entry_width, 1, 2, 0, 1 );
 
     /* tile height */
     label = gtk_label_new( "height: " );
     entry_height = gtk_entry_new();
     sprintf( buffer, "%d", parameters.tile_height );
-    gtk_entry_set_text( GTK_ENTRY( entry_height ), buffer );
-    gtk_table_attach_defaults( GTK_TABLE( table ), label, 0, 1, 1, 2 );
-    gtk_table_attach_defaults( GTK_TABLE( table ), entry_height, 1, 2, 1, 2 );
-    gtk_widget_show( label );
-    gtk_widget_show( entry_height );
+    gtk_editable_set_text (GTK_EDITABLE( entry_height ), buffer );
+    gimp_table_attach_defaults (table, label, 0, 1, 1, 2 );
+    gimp_table_attach_defaults (table, entry_height, 1, 2, 1, 2 );
 
     /* slide length */
     label = gtk_label_new( "slide: " );
     entry_slide = gtk_entry_new();
     sprintf( buffer, "%d", parameters.slide_length );
-    gtk_entry_set_text( GTK_ENTRY( entry_slide ), buffer );
-    gtk_table_attach_defaults( GTK_TABLE( table ), label, 0, 1, 2, 3 );
-    gtk_table_attach_defaults( GTK_TABLE( table ), entry_slide, 1, 2, 2, 3 );
-    gtk_widget_show( label );
-    gtk_widget_show( entry_slide );
+    gtk_editable_set_text (GTK_EDITABLE( entry_slide ), buffer );
+    gimp_table_attach_defaults (table, label, 0, 1, 2, 3 );
+    gimp_table_attach_defaults (table, entry_slide, 1, 2, 2, 3 );
   }
 
   {
     /* radio buttons */
     GtkWidget *frame;
     GtkWidget *vbox;
-    GSList    *group;
+    GtkWidget    *group;
     
     frame = gtk_frame_new( "Background" );
-    gtk_container_border_width( GTK_CONTAINER( frame ), 0 );
-    gtk_frame_set_shadow_type( GTK_FRAME( frame ), GTK_SHADOW_ETCHED_IN );
-    gtk_box_pack_start( GTK_BOX( GTK_DIALOG( window )->vbox ),
+    gimp_container_set_border_width (frame, 0 );
+    gimp_box_pack_start (gimp_dialog_get_vbox (window),
 			frame, TRUE, TRUE, 0 );
-    gtk_widget_show( frame );
 
-    vbox = gtk_vbox_new( FALSE, 0 );
-    gtk_container_border_width( GTK_CONTAINER( vbox ), 0 );
-    gtk_container_add( GTK_CONTAINER( frame ), vbox );
-    gtk_widget_show( vbox );
+    vbox = gimp_vbox_new( FALSE, 0 );
+    gimp_container_set_border_width (vbox, 0 );
+    gimp_container_add (frame, vbox );
   
     group = NULL;
     
     if( image_has_alpha ){
       /* transparent */
       button_transparent =
-	gtk_radio_button_new_with_label( NULL, "Transparent" );
-      gtk_box_pack_start( GTK_BOX( vbox ),
+	gimp_radio_button_new (NULL, "Transparent" );
+      gimp_box_pack_start (vbox,
 			  button_transparent, TRUE, TRUE, 0 );
       if( parameters.bg_type == BG_TYPE_TRANSPARENT )
-	gtk_toggle_button_set_state( GTK_TOGGLE_BUTTON( button_transparent ),
+	gtk_check_button_set_active (GTK_CHECK_BUTTON ( button_transparent ),
 				     TRUE );
-      gtk_widget_show( button_transparent );
-      group = gtk_radio_button_group( GTK_RADIO_BUTTON( button_transparent ) );
+      group = button_transparent;
     }
     
     /* black */
-    button_black = gtk_radio_button_new_with_label( group, "Black" );
-    gtk_box_pack_start( GTK_BOX( vbox ), button_black, TRUE, TRUE, 0 );
+    button_black = gimp_radio_button_new (group, "Black" );
+    gimp_box_pack_start (vbox, button_black, TRUE, TRUE, 0 );
     if( parameters.bg_type == BG_TYPE_BLACK )
-      gtk_toggle_button_set_state( GTK_TOGGLE_BUTTON( button_black ), TRUE );
-    gtk_widget_show( button_black );
-    group = gtk_radio_button_group( GTK_RADIO_BUTTON( button_black ) );
+      gtk_check_button_set_active (GTK_CHECK_BUTTON ( button_black ), TRUE );
+    group = button_black;
 
     /* white */
-    button_white = gtk_radio_button_new_with_label( group, "White" );
-    gtk_box_pack_start( GTK_BOX( vbox ), button_white, TRUE, TRUE, 0 );
+    button_white = gimp_radio_button_new (group, "White" );
+    gimp_box_pack_start (vbox, button_white, TRUE, TRUE, 0 );
     if( parameters.bg_type == BG_TYPE_WHITE )
-      gtk_toggle_button_set_state( GTK_TOGGLE_BUTTON( button_white ), TRUE );
-    gtk_widget_show( button_white );
+      gtk_check_button_set_active (GTK_CHECK_BUTTON ( button_white ), TRUE );
   }
 
-  gtk_widget_show( window );
-  gtk_main();
+  gtk_window_present (GTK_WINDOW (window));
+  gimp_main_loop_run ();
 
   return dialog_status;
 }

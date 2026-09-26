@@ -23,21 +23,19 @@
 #include "color_select.h"
 #include "colormaps.h"
 
-#define EVENT_MASK  GDK_EXPOSURE_MASK | GDK_BUTTON_PRESS_MASK
-
 typedef struct _ColorPanelPrivate ColorPanelPrivate;
 
 struct _ColorPanelPrivate
 {
   GtkWidget *drawing_area;
-  GdkGC *gc;
 
   ColorSelectP color_select;
   int color_select_active;
 };
 
 static void color_panel_draw (ColorPanel *);
-static gint color_panel_events (GtkWidget *area, GdkEvent *event);
+static void color_panel_draw_func (GtkDrawingArea *, cairo_t *, int, int, gpointer);
+static void color_panel_pressed (GtkGestureClick *, gint, gdouble, gdouble, gpointer);
 static void color_panel_select_callback (int, int, int, ColorSelectState, void *);
 
 
@@ -48,13 +46,13 @@ color_panel_new (unsigned char *initial,
 {
   ColorPanel *color_panel;
   ColorPanelPrivate *private;
+  GtkGesture *click;
   int i;
 
   color_panel = g_new (ColorPanel, 1);
   private = g_new (ColorPanelPrivate, 1);
   private->color_select = NULL;
   private->color_select_active = 0;
-  private->gc = NULL;
   color_panel->private_part = private;
 
   /*  set the initial color  */
@@ -62,18 +60,22 @@ color_panel_new (unsigned char *initial,
     color_panel->color[i] = (initial) ? initial[i] : 0;
 
   color_panel->color_panel_widget = gtk_frame_new (NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (color_panel->color_panel_widget), GTK_SHADOW_IN);
 
   /*  drawing area  */
   private->drawing_area = gtk_drawing_area_new ();
-  gtk_drawing_area_size (GTK_DRAWING_AREA (private->drawing_area), width, height);
-  gtk_widget_set_events (private->drawing_area, EVENT_MASK);
-  gtk_signal_connect (GTK_OBJECT (private->drawing_area), "event",
-		      (GtkSignalFunc) color_panel_events,
-		      color_panel);
-  gtk_object_set_user_data (GTK_OBJECT (private->drawing_area), color_panel);
-  gtk_container_add (GTK_CONTAINER (color_panel->color_panel_widget), private->drawing_area);
-  gtk_widget_show (private->drawing_area);
+  gtk_drawing_area_set_content_width (GTK_DRAWING_AREA (private->drawing_area), width);
+  gtk_drawing_area_set_content_height (GTK_DRAWING_AREA (private->drawing_area), height);
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (private->drawing_area),
+				  color_panel_draw_func, color_panel, NULL);
+
+  click = gtk_gesture_click_new ();
+  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (click), 1);
+  g_signal_connect (click, "pressed",
+		    G_CALLBACK (color_panel_pressed), color_panel);
+  gtk_widget_add_controller (private->drawing_area, GTK_EVENT_CONTROLLER (click));
+
+  g_object_set_data (G_OBJECT (private->drawing_area), "user_data", color_panel);
+  gtk_frame_set_child (GTK_FRAME (color_panel->color_panel_widget), private->drawing_area);
 
   return color_panel;
 }
@@ -84,16 +86,20 @@ color_panel_free (ColorPanel *color_panel)
   ColorPanelPrivate *private;
 
   private = (ColorPanelPrivate *) color_panel->private_part;
-  
+
   /* make sure we hide and free color_select */
   if (private->color_select)
     {
       color_select_hide (private->color_select);
       color_select_free (private->color_select);
     }
-  
-  if (private->gc)
-    gdk_gc_destroy (private->gc);
+
+  /*  The drawing area may outlive us for a moment: stop drawing from
+   *  the freed panel.
+   */
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (private->drawing_area),
+				  NULL, NULL, NULL);
+
   g_free (color_panel->private_part);
   g_free (color_panel);
 }
@@ -101,76 +107,61 @@ color_panel_free (ColorPanel *color_panel)
 static void
 color_panel_draw (ColorPanel *color_panel)
 {
-  GtkWidget *widget;
   ColorPanelPrivate *private;
-  GdkColor fg;
 
   private = (ColorPanelPrivate *) color_panel->private_part;
-  widget = private->drawing_area;
-
-  fg.pixel = old_color_pixel;
-  store_color (&fg.pixel,
-	       color_panel->color[0],
-	       color_panel->color[1],
-	       color_panel->color[2]);
-
-  gdk_gc_set_foreground (private->gc, &fg);
-  gdk_draw_rectangle (widget->window, private->gc, 1, 0, 0,
-		      widget->allocation.width, widget->allocation.height);
+  gtk_widget_queue_draw (private->drawing_area);
 }
 
-static gint
-color_panel_events (GtkWidget *widget,
-		    GdkEvent  *event)
+static void
+color_panel_draw_func (GtkDrawingArea *area,
+		       cairo_t        *cr,
+		       int             width,
+		       int             height,
+		       gpointer        data)
 {
-  GdkEventButton *bevent;
+  ColorPanel *color_panel = (ColorPanel *) data;
+
+  cairo_set_source_rgb (cr,
+			color_panel->color[0] / 255.0,
+			color_panel->color[1] / 255.0,
+			color_panel->color[2] / 255.0);
+  cairo_rectangle (cr, 0, 0, width, height);
+  cairo_fill (cr);
+}
+
+static void
+color_panel_pressed (GtkGestureClick *gesture,
+		     gint             n_press,
+		     gdouble          x,
+		     gdouble          y,
+		     gpointer         data)
+{
   ColorPanel *color_panel;
   ColorPanelPrivate *private;
 
-  color_panel = (ColorPanel *) gtk_object_get_user_data (GTK_OBJECT (widget));
+  color_panel = (ColorPanel *) data;
   private = (ColorPanelPrivate *) color_panel->private_part;
 
-  switch (event->type)
+  if (! private->color_select)
     {
-    case GDK_EXPOSE:
-      if (!private->gc)
-	private->gc = gdk_gc_new (widget->window);
-
-      color_panel_draw (color_panel);
-      break;
-
-    case GDK_BUTTON_PRESS:
-      bevent = (GdkEventButton *) event;
-
-      if (bevent->button == 1)
-	{
-	  if (! private->color_select)
-	    {
-	      private->color_select = color_select_new (color_panel->color[0],
-							color_panel->color[1],
-							color_panel->color[2],
-							color_panel_select_callback,
-							color_panel,
-							FALSE);
-	      private->color_select_active = 1;
-	    }
-	  else
-	    {
-	      if (! private->color_select_active)
-		color_select_show (private->color_select);
-	      color_select_set_color (private->color_select,
-				      color_panel->color[0],
-				      color_panel->color[1],
-				      color_panel->color[2], 1);
-	    }
-	}
-      break;
-
-    default:
-      break;
+      private->color_select = color_select_new (color_panel->color[0],
+						color_panel->color[1],
+						color_panel->color[2],
+						color_panel_select_callback,
+						color_panel,
+						FALSE);
+      private->color_select_active = 1;
     }
-
-  return FALSE;
+  else
+    {
+      if (! private->color_select_active)
+	color_select_show (private->color_select);
+      color_select_set_color (private->color_select,
+			      color_panel->color[0],
+			      color_panel->color[1],
+			      color_panel->color[2], 1);
+    }
 }
 
 static void
@@ -195,7 +186,7 @@ color_panel_select_callback (int   r,
 	color_panel->color[0] = r;
 	color_panel->color[1] = g;
 	color_panel->color[2] = b;
-	
+
 	color_panel_draw (color_panel);
 	/* Fallthrough */
       case COLOR_SELECT_CANCEL:

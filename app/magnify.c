@@ -55,10 +55,10 @@ static void   zoom_in                   (int *, int *, int);
 static void   zoom_out                  (int *, int *, int);
 
 /*  magnify action functions  */
-static void   magnify_button_press      (Tool *, GdkEventButton *, gpointer);
-static void   magnify_button_release    (Tool *, GdkEventButton *, gpointer);
-static void   magnify_motion            (Tool *, GdkEventMotion *, gpointer);
-static void   magnify_cursor_update     (Tool *, GdkEventMotion *, gpointer);
+static void   magnify_button_press      (Tool *, GimpButtonEvent *, gpointer);
+static void   magnify_button_release    (Tool *, GimpButtonEvent *, gpointer);
+static void   magnify_motion            (Tool *, GimpMotionEvent *, gpointer);
+static void   magnify_cursor_update     (Tool *, GimpMotionEvent *, gpointer);
 static void   magnify_control           (Tool *, int, gpointer);
 
 static void  *magnify_options = NULL;
@@ -107,7 +107,7 @@ magnify_toggle_update (GtkWidget *w,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -125,26 +125,20 @@ create_magnify_options (void)
   options = (MagnifyOptions *) g_malloc (sizeof (MagnifyOptions));
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
+  vbox = gimp_vbox_new (FALSE, 1);
 
   /*  the main label  */
   label = gtk_label_new ("Magnify Options");
 
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_box_pack_start (vbox, label, FALSE, FALSE, 0);
 
   /*  the allow_resize toggle button  */
-  allow_resize_toggle = gtk_check_button_new ();
-  gtk_box_pack_start (GTK_BOX (vbox), allow_resize_toggle, FALSE, FALSE, 0);
-  label = gtk_label_new ("Allow Window Resizing");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_container_add (GTK_CONTAINER (allow_resize_toggle), label);
-  gtk_widget_show (label);
-  gtk_signal_connect (GTK_OBJECT (allow_resize_toggle), "toggled",
-		      (GtkSignalFunc) magnify_toggle_update,
+  allow_resize_toggle = gtk_check_button_new_with_label ("Allow Window Resizing");
+  gimp_box_pack_start (vbox, allow_resize_toggle, FALSE, FALSE, 0);
+  g_signal_connect (allow_resize_toggle, "toggled",
+		      G_CALLBACK (magnify_toggle_update),
 		      &allow_resize_windows);
-  gtk_widget_show (allow_resize_toggle);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (allow_resize_toggle), allow_resize_windows);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (allow_resize_toggle), allow_resize_windows);
 
   /*  Register this selection options widget with the main tools options dialog  */
   tools_register_options (MAGNIFY, vbox);
@@ -155,7 +149,7 @@ create_magnify_options (void)
 
 static void
 magnify_button_press (Tool           *tool,
-		      GdkEventButton *bevent,
+		      GimpButtonEvent *bevent,
 		      gpointer        gdisp_ptr)
 {
   GDisplay * gdisp;
@@ -172,10 +166,6 @@ magnify_button_press (Tool           *tool,
   magnify->w = 0;
   magnify->h = 0;
 
-  gdk_pointer_grab (gdisp->canvas->window, FALSE,
-		    GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-		    NULL, NULL, bevent->time);
-
   tool->state = ACTIVE;
   tool->gdisp_ptr = gdisp_ptr;
 
@@ -185,14 +175,14 @@ magnify_button_press (Tool           *tool,
     magnify->op = ZOOMIN;  /*  default  */
 
   draw_core_start (magnify->core,
-		   gdisp->canvas->window,
+		   gdisp->canvas,
 		   tool);
 }
 
 
 static void
 magnify_button_release (Tool           *tool,
-			GdkEventButton *bevent,
+			GimpButtonEvent *bevent,
 			gpointer        gdisp_ptr)
 {
   Magnify * magnify;
@@ -206,8 +196,6 @@ magnify_button_release (Tool           *tool,
   gdisp = (GDisplay *) gdisp_ptr;
   magnify = (Magnify *) tool->private;
 
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
 
   draw_core_stop (magnify->core, tool);
   tool->state = INACTIVE;
@@ -259,7 +247,7 @@ magnify_button_release (Tool           *tool,
 
 static void
 magnify_motion (Tool           *tool,
-		GdkEventMotion *mevent,
+		GimpMotionEvent *mevent,
 		gpointer        gdisp_ptr)
 {
   Magnify * magnify;
@@ -284,14 +272,14 @@ magnify_motion (Tool           *tool,
 
 static void
 magnify_cursor_update (Tool           *tool,
-		       GdkEventMotion *mevent,
+		       GimpMotionEvent *mevent,
 		       gpointer        gdisp_ptr)
 {
   GDisplay * gdisp;
 
   gdisp = (GDisplay *) gdisp_ptr;
 
-  gdisplay_install_tool_cursor (gdisp, GDK_TCROSS);
+  gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TCROSS);
 }
 
 
@@ -313,7 +301,7 @@ magnify_draw (Tool *tool)
   gdisplay_transform_coords (gdisp, x1, y1, &x1, &y1, 0);
   gdisplay_transform_coords (gdisp, x2, y2, &x2, &y2, 0);
 
-  gdk_draw_rectangle (magnify->core->win, magnify->core->gc, 0,
+  draw_core_rectangle (magnify->core, 0,
 		      x1, y1, (x2 - x1), (y2 - y1));
 }
 

@@ -216,7 +216,7 @@ static Argument * convert_indexed_palette_invoker   (Argument *);
 
 static void indexed_ok_callback     (GtkWidget *, gpointer);
 static void indexed_cancel_callback (GtkWidget *, gpointer);
-static gint indexed_delete_callback (GtkWidget *, GdkEvent *, gpointer);
+static gboolean indexed_delete_callback (GtkWindow *, gpointer);
 static void indexed_num_cols_update (GtkWidget *, gpointer);
 static void indexed_radio_update    (GtkWidget *, gpointer);
 static void indexed_dither_update   (GtkWidget *, gpointer);
@@ -278,8 +278,8 @@ convert_to_indexed (void *gimage_ptr)
   GtkWidget *text;
   GtkWidget *frame;
   GtkWidget *toggle;
-  GSList *group = NULL;
-  static gboolean shown_message_already = False;
+  GtkWidget *group = NULL;
+  static gboolean shown_message_already = FALSE;
 
   gimage = (GImage *) gimage_ptr;
   dialog = (IndexedDialog *) g_malloc (sizeof (IndexedDialog));
@@ -304,7 +304,7 @@ convert_to_indexed (void *gimage_ptr)
       if (!shown_message_already)
 	{
 	  g_message ("Note:  You are attempting to convert an image\nwith alpha/layers.  It is recommended that you quantize\nto no more than 255 colors if you wish to make\na transparent or animated GIF from it.\n\nYou won't get this message again\nuntil the next time you run GIMP.\nHave a nice day!");
-	  shown_message_already = True;
+	  shown_message_already = TRUE;
 	}
     }
   dialog->makepal_flag = TRUE;
@@ -312,42 +312,34 @@ convert_to_indexed (void *gimage_ptr)
   dialog->custompal_flag = FALSE;
   dialog->monopal_flag = FALSE;
   dialog->reusepal_flag = FALSE;
-  dialog->shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (dialog->shell), "indexed_color_conversion", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (dialog->shell), "Indexed Color Conversion");
-  gtk_signal_connect (GTK_OBJECT (dialog->shell), "delete_event",
-		      GTK_SIGNAL_FUNC (indexed_delete_callback),
-		      dialog);
+  dialog->shell = gimp_dialog_new ("Indexed Color Conversion");
+  g_signal_connect (dialog->shell, "close-request",
+		    G_CALLBACK (indexed_delete_callback),
+		    dialog);
 
   frame = gtk_frame_new ("Palette Options");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 2);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog->shell)->vbox), frame, TRUE, TRUE, 0);
-  gtk_widget_show(frame);
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 2);
-  gtk_container_border_width (GTK_CONTAINER (GTK_BOX (GTK_DIALOG (dialog->shell)->vbox)), 4);
+  gimp_container_set_border_width (frame, 2);
+  gimp_container_set_border_width (gimp_dialog_get_vbox (dialog->shell), 4);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dialog->shell), frame, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (vbox, 2);
   /* put the vbox in the frame */
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
-  gtk_widget_show(vbox);
+  gtk_frame_set_child (GTK_FRAME (frame), vbox);
 
   /*  'generate palette'  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 2);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (FALSE, 1);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
 
-  toggle = gtk_radio_button_new_with_label (group, "Generate optimal palette: ");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) indexed_radio_update,
-		      &(dialog->makepal_flag));
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), dialog->makepal_flag);
-  gtk_widget_show (toggle);
+  toggle = gimp_radio_button_new (group, "Generate optimal palette: ");
+  group = toggle;
+  gimp_box_pack_start (hbox, toggle, TRUE, TRUE, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), dialog->makepal_flag);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (indexed_radio_update),
+		    &(dialog->makepal_flag));
   label = gtk_label_new ("# of colors: ");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (hbox), label, TRUE, FALSE, 0);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_box_pack_start (hbox, label, TRUE, FALSE, 0);
 
   text = gtk_entry_new ();
   if ((!gimage_is_empty (gimage))
@@ -358,112 +350,93 @@ convert_to_indexed (void *gimage_ptr)
        layer_has_alpha((Layer *) gimage->layers->data)
        )
       )
-    gtk_entry_set_text (GTK_ENTRY (text), "255");
+    gtk_editable_set_text (GTK_EDITABLE (text), "255");
   else
-    gtk_entry_set_text (GTK_ENTRY (text), "256");
-  gtk_widget_set_usize (text, 50, 25);
-  gtk_box_pack_start (GTK_BOX (hbox), text, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (text), "changed",
-		      (GtkSignalFunc) indexed_num_cols_update,
-		      dialog);
-  gtk_widget_show (text);
-  gtk_widget_show (hbox);
+    gtk_editable_set_text (GTK_EDITABLE (text), "256");
+  gtk_widget_set_size_request (text, 50, -1);
+  gtk_editable_set_width_chars (GTK_EDITABLE (text), 4);
+  gimp_box_pack_start (hbox, text, FALSE, FALSE, 0);
+  g_signal_connect (text, "changed",
+		    G_CALLBACK (indexed_num_cols_update),
+		    dialog);
 
   if (gimage->base_type == RGB)
     {
-		GtkWidget *menu;
-		GtkWidget *palette_option_menu;
-		int default_palette;
+      GtkWidget *palette_option_menu;
+      int default_palette;
+
       /*  'web palette'  */
-      hbox = gtk_hbox_new (FALSE, 1);
-      gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-      toggle =
-	gtk_radio_button_new_with_label (group, "Use WWW-optimised palette");
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-      gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, TRUE, 0);
-      gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-			  (GtkSignalFunc) indexed_radio_update,
-			  &(dialog->webpal_flag));
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), dialog->webpal_flag);
-      gtk_widget_show (toggle);
-      gtk_widget_show (hbox);
+      hbox = gimp_hbox_new (FALSE, 1);
+      gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
+      toggle = gimp_radio_button_new (group, "Use WWW-optimised palette");
+      gimp_box_pack_start (hbox, toggle, TRUE, TRUE, 0);
+      gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), dialog->webpal_flag);
+      g_signal_connect (toggle, "toggled",
+			G_CALLBACK (indexed_radio_update),
+			&(dialog->webpal_flag));
 
-      menu = build_palette_menu(&default_palette);
-      if (menu) {
-          /* 'custom' palette from dialog */
-          hbox = gtk_hbox_new (FALSE, 1);
-          gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-          toggle = gtk_radio_button_new_with_label (group, "Use custom palette");
-          group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-          gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, TRUE, 0);
-          gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-			      (GtkSignalFunc) indexed_radio_update,
-			      &(dialog->custompal_flag));
-          gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle),
-				   dialog->custompal_flag);
-          gtk_widget_show (toggle);
+      palette_option_menu = build_palette_menu (&default_palette);
+      if (palette_option_menu)
+	{
+	  /* 'custom' palette from dialog */
+	  hbox = gimp_hbox_new (FALSE, 1);
+	  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
+	  toggle = gimp_radio_button_new (group, "Use custom palette");
+	  gimp_box_pack_start (hbox, toggle, TRUE, TRUE, 0);
+	  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle),
+				       dialog->custompal_flag);
+	  g_signal_connect (toggle, "toggled",
+			    G_CALLBACK (indexed_radio_update),
+			    &(dialog->custompal_flag));
 
-          palette_option_menu = gtk_option_menu_new();
-          gtk_option_menu_set_menu (GTK_OPTION_MENU(palette_option_menu), menu);
-          gtk_option_menu_set_history(GTK_OPTION_MENU(palette_option_menu),
-				      default_palette);
-          gtk_box_pack_start(GTK_BOX(hbox), palette_option_menu, TRUE, TRUE, 2);
-	  gtk_widget_show(palette_option_menu);
-          gtk_widget_show (hbox);
-      }
+	  gimp_option_menu_set_history (palette_option_menu, default_palette);
+	  gimp_box_pack_start (hbox, palette_option_menu, TRUE, TRUE, 2);
+	}
     }
 
   /*  'mono palette'  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-  toggle =
-    gtk_radio_button_new_with_label (group, "Use black/white (1-bit) palette");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) indexed_radio_update,
-		      &(dialog->monopal_flag));
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), dialog->monopal_flag);
-  gtk_widget_show (toggle);
-  gtk_widget_show (hbox);
+  hbox = gimp_hbox_new (FALSE, 1);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
+  toggle = gimp_radio_button_new (group, "Use black/white (1-bit) palette");
+  gimp_box_pack_start (hbox, toggle, TRUE, TRUE, 0);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), dialog->monopal_flag);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (indexed_radio_update),
+		    &(dialog->monopal_flag));
 
   frame = gtk_frame_new ("Dither Options");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 2);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog->shell)->vbox), frame, TRUE, TRUE, 0);
-  gtk_widget_show(frame);
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 1);
+  gimp_container_set_border_width (frame, 2);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dialog->shell), frame, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (vbox, 1);
   /* put the vbox in the frame */
-  gtk_container_add (GTK_CONTAINER (frame), vbox);
-  gtk_widget_show(vbox);
+  gtk_frame_set_child (GTK_FRAME (frame), vbox);
   /*  The dither toggle  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (FALSE, 1);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
 
   toggle = gtk_check_button_new_with_label ("Enable Floyd-Steinberg dithering");
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), dialog->dither);
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) indexed_dither_update,
-		      dialog);
-  gtk_widget_show (label);
-  gtk_widget_show (toggle);
-  gtk_widget_show (hbox);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), dialog->dither);
+  gimp_box_pack_start (hbox, toggle, TRUE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (indexed_dither_update),
+		    dialog);
 
   /*  The action area  */
   action_items[0].user_data = dialog;
   action_items[1].user_data = dialog;
-  build_action_area (GTK_DIALOG (dialog->shell), action_items, 2, 0);
+  build_action_area (dialog->shell, action_items, 2, 0);
 
-  gtk_widget_show (vbox);
-  gtk_widget_show (dialog->shell);
+  gtk_window_present (GTK_WINDOW (dialog->shell));
 }
 
+/*  An option menu of the palettes with at most 256 colors, or NULL when
+ *  there are no palettes.  default_palette is set to the position of
+ *  the current custom palette in it.
+ */
 static GtkWidget *
 build_palette_menu(int *default_palette){
   GtkWidget *menu;
-  GtkWidget *menu_item;
   GSList *list;
   PaletteEntriesP entries;
   int i;
@@ -479,24 +452,22 @@ build_palette_menu(int *default_palette){
   if (!list)
     return NULL;
 
-  menu = gtk_menu_new();
+  menu = gimp_option_menu_new ();
 
   for(i=0,list = palette_entries_list,*default_palette=-1;
       list;
-      i++,list = g_slist_next (list))
+      list = g_slist_next (list))
     {
       entries = (PaletteEntriesP) list->data;
       /*      fprintf(stderr, "(palette %s)\n", entries->filename);*/
 
       /* We can't dither to > 256 colors */
       if (entries->n_colors <= 256) {
-	menu_item = gtk_menu_item_new_with_label (entries->name);
-	gtk_signal_connect( GTK_OBJECT(menu_item), "activate",
-			    (GtkSignalFunc) palette_entries_callback,
-			    (gpointer)entries);
-	gtk_container_add(GTK_CONTAINER(menu), menu_item);
-	gtk_widget_show(menu_item);
+	gimp_option_menu_append (menu, entries->name,
+				 G_CALLBACK (palette_entries_callback),
+				 (gpointer) entries);
 	if (theCustomPalette == entries) *default_palette = i;
+	i++;
       }
     }
 
@@ -540,17 +511,16 @@ indexed_ok_callback (GtkWidget *widget,
       gdisplays_flush ();
     }
 
-  gtk_widget_destroy (dialog->shell);
+  gtk_window_destroy (GTK_WINDOW (dialog->shell));
   g_free (dialog);
   dialog = NULL;
 }
 
-static gint
-indexed_delete_callback (GtkWidget *w,
-			 GdkEvent *e,
+static gboolean
+indexed_delete_callback (GtkWindow *w,
 			 gpointer client_data)
 {
-  indexed_cancel_callback (w, client_data);
+  indexed_cancel_callback (GTK_WIDGET (w), client_data);
 
   return TRUE;
 }
@@ -562,7 +532,7 @@ indexed_cancel_callback (GtkWidget *widget,
   IndexedDialog *dialog;
 
   dialog = (IndexedDialog *) client_data;
-  gtk_widget_destroy (dialog->shell);
+  gtk_window_destroy (GTK_WINDOW (dialog->shell));
   g_free (dialog);
   dialog = NULL;
 }
@@ -572,9 +542,9 @@ indexed_num_cols_update (GtkWidget *w,
 			 gpointer   data)
 {
   IndexedDialog *dialog;
-  char *str;
+  const char *str;
 
-  str = gtk_entry_get_text (GTK_ENTRY (w));
+  str = gtk_editable_get_text (GTK_EDITABLE (w));
   dialog = (IndexedDialog *) data;
   dialog->num_cols = BOUNDS(((int) atof (str)), 1, 256);
 }
@@ -585,7 +555,7 @@ indexed_radio_update (GtkWidget *widget,
 {
   gint *toggle_val;
   toggle_val = (int *) data;
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -598,7 +568,7 @@ indexed_dither_update (GtkWidget *w,
 
   dialog = (IndexedDialog *) data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     dialog->dither = TRUE;
   else
     dialog->dither = FALSE;

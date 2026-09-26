@@ -18,14 +18,19 @@
 #ifndef __DISP_CALLBACKS_H__
 #define __DISP_CALLBACKS_H__
 
-#define CANVAS_EVENT_MASK  GDK_EXPOSURE_MASK | GDK_POINTER_MOTION_MASK | \
-                           GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON_PRESS_MASK | \
-			   GDK_BUTTON_RELEASE_MASK | GDK_STRUCTURE_MASK | \
-			   GDK_ENTER_NOTIFY_MASK | GDK_KEY_PRESS_MASK | GDK_KEY_RELEASE_MASK
+#include <gtk/gtk.h>
 
-gint gdisplay_canvas_events (GtkWidget *, GdkEvent *);
-gint gdisplay_hruler_button_press (GtkWidget *, GdkEventButton *, gpointer);
-gint gdisplay_vruler_button_press (GtkWidget *, GdkEventButton *, gpointer);
+/*  The image window's canvas: its events (a GtkEventControllerLegacy
+ *  handler), its "resize" handler and its draw function; data is the
+ *  GDisplay.
+ */
+gboolean gdisplay_canvas_events    (GtkEventControllerLegacy *, GdkEvent *, gpointer);
+void     gdisplay_canvas_resize    (GtkDrawingArea *, int, int, gpointer);
+void     gdisplay_canvas_draw_func (GtkDrawingArea *, cairo_t *, int, int, gpointer);
+
+/*  The rulers' event handlers (GtkEventControllerLegacy).  */
+gboolean gdisplay_hruler_events    (GtkEventControllerLegacy *, GdkEvent *, gpointer);
+gboolean gdisplay_vruler_events    (GtkEventControllerLegacy *, GdkEvent *, gpointer);
 
 
 #endif /*  __DISP_CALLBACKS_H__  */

@@ -43,13 +43,22 @@
  *         FCS
  *
  * Please send any patches or suggestions to the author: meo@rru.com .
- * 
+ *
  ****************************************************************************/
+
+/*
+ * gimp42: ported to GTK 4.  Tooltips are plain widget tooltips (the
+ * theme picks their colours), tables are the GtkGrids of gimpwidgets.h
+ * and radio groups are grouped check buttons; the GSList a caller keeps
+ * for a group holds the buttons already in it.
+ */
 
 #include <stdlib.h>
 #include <time.h>
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include "libgimp/gimpui.h"
+#include "gpc.h"
 
 
 /*
@@ -61,7 +70,7 @@ gpc_toggle_update(GtkWidget *widget, gpointer data) {
 
     toggle_val = (int *) data;
 
-    if (GTK_TOGGLE_BUTTON(widget)->active)
+    if (gtk_check_button_get_active(GTK_CHECK_BUTTON(widget)))
       *toggle_val = TRUE;
     else
       *toggle_val = FALSE;
@@ -71,7 +80,7 @@ gpc_toggle_update(GtkWidget *widget, gpointer data) {
  */
 void
 gpc_close_callback(GtkWidget *widget, gpointer data) {
-    gtk_main_quit();
+    gimp_main_loop_quit();
 }
 
 /*
@@ -79,7 +88,7 @@ gpc_close_callback(GtkWidget *widget, gpointer data) {
  */
 void
 gpc_cancel_callback(GtkWidget *widget, gpointer data) {
-    gtk_widget_destroy(GTK_WIDGET(data));
+    gtk_window_destroy(GTK_WINDOW(data));
 }
 
 /*
@@ -87,7 +96,7 @@ gpc_cancel_callback(GtkWidget *widget, gpointer data) {
  */
 void
 gpc_scale_update(GtkAdjustment *adjustment, double *scale_val) {
-    *scale_val = adjustment->value;
+    *scale_val = gtk_adjustment_get_value(adjustment);
 }
 
 
@@ -100,7 +109,7 @@ gpc_text_update(GtkWidget *widget, gpointer data) {
 
   text_val = (gint *) data;
 
-  *text_val = atoi(gtk_entry_get_text(GTK_ENTRY(widget)));
+  *text_val = atoi(gtk_editable_get_text(GTK_EDITABLE(widget)));
 }
 
 
@@ -108,34 +117,15 @@ gpc_text_update(GtkWidget *widget, gpointer data) {
 /*
  *  TOOLTIPS ROUTINES
  */
-static GtkTooltips *tips;
-
 
 /*
  *  TOOLTIP INITIALIZATION
+ *
+ *  GTK 4 tooltips need no setup and take their colours from the theme.
  */
 void
 gpc_setup_tooltips(GtkWidget *parent)
 {
-    static GdkColor tips_fg, tips_bg;
-
-    tips = gtk_tooltips_new();
-
-    /* black as foreground: */
-
-    tips_fg.red   = 0;
-    tips_fg.green = 0;
-    tips_fg.blue  = 0;
-    gdk_color_alloc(gtk_widget_get_colormap(parent), &tips_fg);
-
-    /* postit yellow (khaki) as background: */
-
-    tips_bg.red   = 61669;
-    tips_bg.green = 59113;
-    tips_bg.blue  = 35979;
-    gdk_color_alloc(gtk_widget_get_colormap(parent), &tips_bg);
-
-    gtk_tooltips_set_colors(tips, &tips_bg, &tips_fg);
 }
 
 
@@ -146,7 +136,7 @@ void
 gpc_set_tooltip(GtkWidget *widget, const char *tip)
 {
     if (tip && tip[0])
-        gtk_tooltips_set_tip(tips, widget, (char *) tip, NULL);
+        gtk_widget_set_tooltip_text(widget, tip);
 }
 
 
@@ -154,18 +144,12 @@ gpc_set_tooltip(GtkWidget *widget, const char *tip)
  *  ADD ACTION BUTTON to a dialog
  */
 void
-gpc_add_action_button(char *label, GtkSignalFunc callback, GtkWidget *dialog,
+gpc_add_action_button(char *label, GCallback callback, GtkWidget *dialog,
     char *tip)
 {
     GtkWidget *button;
 
-    button = gtk_button_new_with_label(label);
-    GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-    gtk_signal_connect(GTK_OBJECT(button), "clicked", callback, dialog);
-    gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->action_area),
-	button, TRUE, TRUE, 0);
-    gtk_widget_grab_default(button);
-    gtk_widget_show(button);
+    button = gimp_dialog_add_button(dialog, label, callback, dialog, TRUE);
     gpc_set_tooltip(button, tip);
 }
 
@@ -176,17 +160,16 @@ gpc_add_action_button(char *label, GtkSignalFunc callback, GtkWidget *dialog,
 void
 gpc_add_radio_button(GSList **group, char *label, GtkWidget *box,
     gint *value, char *tip)
-{ 
+{
     GtkWidget *toggle;
 
-    toggle = gtk_radio_button_new_with_label(*group, label);
-    *group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
-    gtk_box_pack_start(GTK_BOX(box), toggle, FALSE, FALSE, 0);
-    gtk_signal_connect(GTK_OBJECT(toggle), "toggled",
-        (GtkSignalFunc) gpc_toggle_update, value);
-    gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), *value);
-    gtk_widget_show(toggle);
-    gtk_widget_show(box);
+    toggle = gimp_radio_button_new(*group ? GTK_WIDGET((*group)->data) : NULL,
+        label);
+    *group = g_slist_prepend(*group, toggle);
+    gtk_box_append(GTK_BOX(box), toggle);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(toggle), *value);
+    g_signal_connect(toggle, "toggled",
+        G_CALLBACK(gpc_toggle_update), value);
     gpc_set_tooltip(toggle, tip);
 }
 
@@ -201,10 +184,10 @@ gpc_add_label(char *value, GtkWidget *table, int left, int right,
     GtkWidget *label;
 
     label = gtk_label_new(value);
-    gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
-    gtk_table_attach(GTK_TABLE(table), label, left, right, top, bottom,
-        GTK_FILL | GTK_EXPAND, GTK_FILL, 5, 0);
-    gtk_widget_show(label);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+    gtk_label_set_yalign(GTK_LABEL(label), 0.5);
+    gimp_table_attach(table, label, left, right, top, bottom,
+        GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 5, 0);
 }
 
 
@@ -216,18 +199,15 @@ gpc_add_hscale(GtkWidget *table, int width, float low, float high,
     gdouble *val, int left, int right, int top, int bottom, char *tip)
 {
     GtkWidget *scale;
-    GtkObject *scale_data;
+    GtkAdjustment *scale_data;
 
     scale_data = gtk_adjustment_new(*val, low, high, 1.0, 1.0, 0.0);
-    scale = gtk_hscale_new(GTK_ADJUSTMENT(scale_data));
-    gtk_widget_set_usize(scale, width, 0);
-    gtk_table_attach(GTK_TABLE(table), scale, left, right, top, bottom,
-        GTK_FILL | GTK_EXPAND, GTK_FILL, 0, 0);
-    gtk_scale_set_value_pos(GTK_SCALE(scale), GTK_POS_TOP);
-    gtk_scale_set_digits(GTK_SCALE(scale), 0);
-    gtk_range_set_update_policy(GTK_RANGE(scale), GTK_UPDATE_DELAYED);
-    gtk_signal_connect(GTK_OBJECT(scale_data), "value_changed",
-        (GtkSignalFunc) gpc_scale_update, val);
-    gtk_widget_show(scale);
+    scale = gimp_hscale_new(scale_data, 0);
+    gtk_widget_set_size_request(scale, width, -1);
+    gimp_table_attach(table, scale, left, right, top, bottom,
+        GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 0, 0);
+    g_signal_connect(scale_data, "value-changed",
+        G_CALLBACK(gpc_scale_update), val);
     gpc_set_tooltip(scale, tip);
 }
+

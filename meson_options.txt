@@ -1,0 +1,3 @@
+option('jpeg', type: 'feature', value: 'auto', description: 'JPEG file plug-in')
+option('png',  type: 'feature', value: 'auto', description: 'PNG file plug-in')
+option('tiff', type: 'feature', value: 'auto', description: 'TIFF file plug-in')

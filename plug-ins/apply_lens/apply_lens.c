@@ -54,8 +54,9 @@
 #include <stdlib.h>
 #include <math.h>
 
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include "libgimp/gimpui.h"
 
 #ifndef M_PI
 #define M_PI    3.14159265358979323846
@@ -342,7 +343,7 @@ static void
 lens_close_callback(GtkWidget *widget,
 		    gpointer   data)
 {
-  gtk_main_quit();
+  gimp_main_loop_quit();
 }
 
 static void
@@ -350,7 +351,7 @@ lens_ok_callback(GtkWidget *widget,
 		 gpointer   data)
 {
   bint.run = TRUE;
-  gtk_widget_destroy(GTK_WIDGET (data));
+  gtk_window_destroy(GTK_WINDOW (data));
 }
 
 static void
@@ -361,7 +362,7 @@ lens_toggle_update(GtkWidget *widget,
 
   toggle_val = (int *)data;
 
-  if(GTK_TOGGLE_BUTTON (widget)->active)
+  if(gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -371,7 +372,7 @@ static void
 lens_entry_callback(GtkWidget *widget,
 		    gpointer   data)
 {
-  lvals.refraction = atof(gtk_entry_get_text(GTK_ENTRY(widget)));
+  lvals.refraction = atof(gtk_editable_get_text(GTK_EDITABLE(widget)));
   if(lvals.refraction < 1.0) lvals.refraction = 1.0;
 }
 
@@ -388,118 +389,86 @@ lens_dialog(GDrawable *drawable)
   GtkWidget *vbox;
   GtkWidget *hbox;
   gchar buffer[12];
-  gchar **argv;
-  gint argc;
-  GSList *group = NULL;
+  GtkWidget *group = NULL;
   GDrawableType drawtype;
 
   drawtype = gimp_drawable_type(drawable->id);
 
-  argc = 1;
-  argv = g_new(gchar *, 1);
-  argv[0] = g_strdup("apply_lens");
+  gtk_init();
 
-  gtk_init(&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
+  dlg = gimp_dialog_new("Lens effect");
+  g_signal_connect(dlg, "destroy",
+		   G_CALLBACK(lens_close_callback),
+		   NULL);
 
-  dlg = gtk_dialog_new();
-  gtk_window_set_title(GTK_WINDOW(dlg), "Lens effect");
-  gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-                     (GtkSignalFunc)lens_close_callback,
-		     NULL);
-
-  button = gtk_button_new_with_label("OK");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect(GTK_OBJECT(button), "clicked",
-                     (GtkSignalFunc)lens_ok_callback,
-		     dlg);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area),
-		     button, TRUE, TRUE, 0);
-  gtk_widget_grab_default(button);
-  gtk_widget_show(button);
-
-  button = gtk_button_new_with_label("Cancel");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-                            (GtkSignalFunc)gtk_widget_destroy,
-			    GTK_OBJECT(dlg));
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area),
-		     button, TRUE, TRUE, 0);
-  gtk_widget_show(button);
+  gimp_dialog_add_button(dlg, "OK", G_CALLBACK(lens_ok_callback),
+			 dlg, TRUE);
+  button = gimp_dialog_add_button(dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped(button, "clicked",
+			   G_CALLBACK(gtk_window_destroy),
+			   dlg);
 
   frame = gtk_frame_new("Parameter Settings");
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width(GTK_CONTAINER(frame), 10);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), frame, TRUE, TRUE, 0);
-  vbox = gtk_vbox_new(FALSE, 5);
-  gtk_container_border_width(GTK_CONTAINER(vbox), 10);
-  gtk_container_add(GTK_CONTAINER(frame), vbox);
+  gimp_container_set_border_width(frame, 10);
+  gimp_box_pack_start(gimp_dialog_get_vbox(dlg), frame, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new(FALSE, 5);
+  gimp_container_set_border_width(vbox, 10);
+  gtk_frame_set_child(GTK_FRAME(frame), vbox);
 
-  toggle = gtk_radio_button_new_with_label(group,
-					   "Keep original surroundings");
-  group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
-  gtk_box_pack_start(GTK_BOX(vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect(GTK_OBJECT(toggle), "toggled",
-                     (GtkSignalFunc) lens_toggle_update,
-		     &lvals.keep_surr);
-  gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), lvals.keep_surr);
-  gtk_widget_show(toggle);
+  toggle = gimp_radio_button_new(group,
+				 "Keep original surroundings");
+  group = toggle;
+  gtk_box_append(GTK_BOX(vbox), toggle);
+  g_signal_connect(toggle, "toggled",
+		   G_CALLBACK(lens_toggle_update),
+		   &lvals.keep_surr);
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(toggle), lvals.keep_surr);
 
   toggle =
-    gtk_radio_button_new_with_label(group,
-				    drawtype == INDEXEDA_IMAGE ||
-				    drawtype == INDEXED_IMAGE ?
-				    "Set surroundings to index 0" :
-				    "Set surroundings to background color");
-  group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
-  gtk_box_pack_start(GTK_BOX(vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect(GTK_OBJECT(toggle), "toggled",
-                     (GtkSignalFunc) lens_toggle_update,
-		     &lvals.use_bkgr);
-  gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), lvals.use_bkgr);
-  gtk_widget_show(toggle);
+    gimp_radio_button_new(group,
+			  drawtype == INDEXEDA_IMAGE ||
+			  drawtype == INDEXED_IMAGE ?
+			  "Set surroundings to index 0" :
+			  "Set surroundings to background color");
+  gtk_box_append(GTK_BOX(vbox), toggle);
+  g_signal_connect(toggle, "toggled",
+		   G_CALLBACK(lens_toggle_update),
+		   &lvals.use_bkgr);
+  gtk_check_button_set_active(GTK_CHECK_BUTTON(toggle), lvals.use_bkgr);
 
   if((drawtype == INDEXEDA_IMAGE) ||
      (drawtype == GRAYA_IMAGE) ||
      (drawtype == RGBA_IMAGE)) {
-    toggle = gtk_radio_button_new_with_label(group,
-					     "Make surroundings transparent");
-    group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
-    gtk_box_pack_start(GTK_BOX(vbox), toggle, FALSE, FALSE, 0);
-    gtk_signal_connect(GTK_OBJECT(toggle), "toggled",
-		       (GtkSignalFunc) lens_toggle_update,
-		       &lvals.set_transparent);
-    gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle),
+    toggle = gimp_radio_button_new(group,
+				   "Make surroundings transparent");
+    gtk_box_append(GTK_BOX(vbox), toggle);
+    g_signal_connect(toggle, "toggled",
+		     G_CALLBACK(lens_toggle_update),
+		     &lvals.set_transparent);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(toggle),
 				lvals.set_transparent);
-    gtk_widget_show(toggle);
   }
 
 
-  hbox = gtk_hbox_new(FALSE, 5);
-  gtk_box_pack_start(GTK_BOX(vbox), hbox, TRUE, TRUE, 0);
+  hbox = gimp_hbox_new(FALSE, 5);
+  gimp_box_pack_start(vbox, hbox, TRUE, TRUE, 0);
 
   label = gtk_label_new("Lens refraction index: ");
-  gtk_box_pack_start(GTK_BOX(hbox), label, TRUE, FALSE, 0);
-  gtk_widget_show(label);
+  gimp_box_pack_start(hbox, label, TRUE, FALSE, 0);
 
   entry = gtk_entry_new();
-  gtk_box_pack_start(GTK_BOX(hbox), entry, TRUE, TRUE, 0);
-  gtk_widget_set_usize(entry, ENTRY_WIDTH, 0);
+  gimp_box_pack_start(hbox, entry, TRUE, TRUE, 0);
+  gtk_widget_set_size_request(entry, ENTRY_WIDTH, -1);
+  gtk_editable_set_width_chars(GTK_EDITABLE(entry), 6);
   sprintf(buffer, "%.2f", lvals.refraction);
-  gtk_entry_set_text(GTK_ENTRY(entry), buffer);
-  gtk_signal_connect(GTK_OBJECT(entry), "changed",
-		     (GtkSignalFunc)lens_entry_callback,
-		     NULL);
-  gtk_widget_show(entry);
+  gtk_editable_set_text(GTK_EDITABLE(entry), buffer);
+  g_signal_connect(entry, "changed",
+		   G_CALLBACK(lens_entry_callback),
+		   NULL);
 
-  gtk_widget_show(hbox);
-  gtk_widget_show(vbox);
-  gtk_widget_show(frame);
-  gtk_widget_show(dlg);
+  gtk_window_present(GTK_WINDOW(dlg));
 
-  gtk_main();
-  gdk_flush();
+  gimp_main_loop_run();
 
   return bint.run;
 }

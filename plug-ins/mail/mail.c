@@ -50,8 +50,10 @@
    *       works after changing the MAILER, let me know how well or what changes were
    *       needed.
    *
-   * NOTE: Uuencode is needed. If it is in the path, it should work fine as is. Other-
-   *       wise just change the UUENCODE.
+   * NOTE: Uuencoding is now done in the plug-in itself; no uuencode program
+   *       is needed.  The message is handed to sendmail with GSubprocess.  If
+   *       MAILER does not exist, a "sendmail" in PATH is used; where there is
+   *       none (Windows, usually) the plug-in says so and fails.
    *
    *
    * TODO: 1) the aforementioned abilty to specify the 
@@ -92,23 +94,23 @@
 #define MAILER "/usr/lib/sendmail"
 #endif
 
-#ifndef UUENCODE
-#define UUENCODE "uuencode"
-#endif
-
 #define ENCAPSULATION_UUENCODE 0
 #define ENCAPSULATION_MIME     1
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <sys/param.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
 #include <string.h>
-#include <unistd.h>
 #include <errno.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
+#include <gio/gio.h>
+#include <glib/gstdio.h>
+#ifdef G_OS_WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 
 static void query (void);
@@ -124,7 +126,10 @@ static gint save_image (char *filename,
 			gint32 drawable_ID,
 			gint32 run_mode);
 
-static gint save_dialog ();
+static gint save_dialog (void);
+static char *find_mailer (void);
+static void uuencode (FILE *infile, const char *name, FILE *outfile);
+static char *find_content_type (char *filename);
 static void close_callback (GtkWidget * widget, gpointer data);
 static void ok_callback (GtkWidget * widget, gpointer data);
 static void encap_callback (GtkWidget * widget, gpointer data);
@@ -192,7 +197,7 @@ query ()
 
   gimp_install_procedure ("plug_in_mail_image",
 			  "pipe files to uuencode then mail them",
-			  "You need to have uuencode and mail installed",
+			  "You need to have sendmail installed",
 			  "Adrian Likins, Reagan Blundell",
 			  "Adrian Likins, Reagan Blundell, Daniel Risacher, Spencer Kimball and Peter Mattis",
 			  "1995-1997",
@@ -244,10 +249,10 @@ run (char *name,
 	  if(status == STATUS_SUCCESS)
 	    {
 	      /* this hasnt been tested yet */
-	      strncpy (mail_info.filename, param[3].data.d_string,256);
-	      strncpy (mail_info.receipt, param[4].data.d_string,256);
-	      strncpy (mail_info.subject, param[5].data.d_string,256);
-	      strncpy (mail_info.comment, param[6].data.d_string,256);
+	      g_strlcpy (mail_info.filename, param[3].data.d_string, 256);
+	      g_strlcpy (mail_info.receipt, param[4].data.d_string, 256);
+	      g_strlcpy (mail_info.subject, param[5].data.d_string, 256);
+	      g_strlcpy (mail_info.comment, param[6].data.d_string, 256);
 	      mail_info.encapsulation = param[7].data.d_int32;
 	    }
 	  break;
@@ -285,14 +290,29 @@ save_image (char *filename,
   gint retvals;
   char *ext;
   char *tmpname;
-  char mailcmdline[512];
-  int pid;
-  int status;
+  char *mailer;
+  char *msgname = NULL;
+  char *msg;
+  gsize msglen;
+  int msgfd;
+  gboolean ok;
+  GError *error = NULL;
+  GSubprocessLauncher *launcher;
+  GSubprocess *proc;
   FILE *mailpipe;
   FILE *infile;
 
   if (NULL == (ext = find_extension (filename)))
-    return -1;
+    return 0;
+
+  /* there has to be a sendmail to hand the message to */
+  mailer = find_mailer ();
+  if (mailer == NULL)
+    {
+      g_message ("mail: can't send mail, no sendmail program was found\n"
+		 "(looked for " MAILER " and \"sendmail\" in PATH)\n");
+      return 0;
+    }
 
   /* get a temp name with the right extension and save into it. */
   params = gimp_run_procedure ("gimp_temp_name",
@@ -301,17 +321,22 @@ save_image (char *filename,
 			       PARAM_END);
   tmpname = params[1].data.d_string;
 
-  /* construct the "sendmail user@location" line */
-  strcpy (mailcmdline, MAILER);
-  strcat (mailcmdline, " ");
-  strcat (mailcmdline, mail_info.receipt);
-
-  /* create a pipe to sendmail */
-  mailpipe = popen (mailcmdline, "w");
+  /* the message is put together in a second temp file, which then
+   * becomes sendmail's standard input
+   */
+  msgfd = g_file_open_tmp ("gimp-mail-XXXXXX", &msgname, &error);
+  if (msgfd < 0 || (mailpipe = fdopen (msgfd, "wb")) == NULL)
+    {
+      g_message ("mail: can't create a temporary file: %s\n",
+		 error ? error->message : g_strerror (errno));
+      g_clear_error (&error);
+      if (msgfd >= 0)
+	close (msgfd);
+      g_free (msgname);
+      g_free (mailer);
+      return 0;
+    }
   create_headers (mailpipe);
-  
-  /* This is necessary to make the comments and headers work correctly. Not real sure why */
-  fflush (mailpipe);      
 
   params = gimp_run_procedure ("gimp_file_save",
 			       &retvals,
@@ -327,61 +352,126 @@ save_image (char *filename,
 
   if (params[0].data.d_status == FALSE || !valid_file (tmpname))
     {
-      unlink (tmpname);
-      return -1;
+      g_unlink (tmpname);
+      fclose (mailpipe);
+      g_unlink (msgname);
+      g_free (msgname);
+      g_free (mailer);
+      return 0;
+    }
+
+  infile = g_fopen (tmpname, "rb");
+  if (infile == NULL)
+    {
+      g_message ("mail: can't open %s: %s\n", tmpname, g_strerror (errno));
+      g_unlink (tmpname);
+      fclose (mailpipe);
+      g_unlink (msgname);
+      g_free (msgname);
+      g_free (mailer);
+      return 0;
     }
 
   if( mail_info.encapsulation == ENCAPSULATION_UUENCODE ) {
-      /* fork off a uuencode process */
-      if ((pid = fork ()) < 0)
-	  {
-	      g_message ("mail: fork failed: %s\n", g_strerror (errno));
-	      return -1;
-	  }
-      else if (pid == 0)
-	  {
-	      if (-1 == dup2 (fileno (mailpipe), fileno (stdout)))
-		  {
-		      g_message ("mail: dup2 failed: %s\n", g_strerror (errno));
-		  }
-	      
-	      execlp (UUENCODE, UUENCODE, tmpname, filename, NULL);
-	      /* What are we doing here? exec must have failed */
-	      g_message ("mail: exec failed: uuencode: %s\n", g_strerror (errno));
-	      
-	      
-	      /* close the pipe now */
-	      pclose (mailpipe);
-	      _exit (127);
-	  }
-      else
-	  {
-	      waitpid (pid, &status, 0);
-	      
-	      if (!WIFEXITED (status) ||
-		  WEXITSTATUS (status) != 0)
-		  {
-		      g_message ("mail: mail didnt work or something on file %s\n", tmpname);
-		      return 0;
-		  }
-	  }
+      /* this used to run an external uuencode */
+      uuencode (infile, filename, mailpipe);
   }
   else {  /* This must be MIME stuff. Base64 away... */
-      infile = fopen(tmpname,"r");
       to64(infile,mailpipe);
       /* close off mime */
       if( mail_info.encapsulation == ENCAPSULATION_MIME ) {
 	  fprintf(mailpipe, "\n--GUMP-MIME-boundary--\n");
       }
   }
+  fclose (infile);
+  fclose (mailpipe);
+
   /* delete the tmpfile that was generated */
-  unlink (tmpname);
-  return TRUE;
+  g_unlink (tmpname);
+
+  /* and hand the message to "sendmail user@location" */
+  proc = NULL;
+  ok = g_file_get_contents (msgname, &msg, &msglen, &error);
+  if (ok)
+    {
+      GBytes *bytes = g_bytes_new_take (msg, msglen);
+
+      launcher = g_subprocess_launcher_new (G_SUBPROCESS_FLAGS_STDIN_PIPE);
+      proc = g_subprocess_launcher_spawn (launcher, &error,
+					  mailer, mail_info.receipt, NULL);
+      ok = proc &&
+	g_subprocess_communicate (proc, bytes, NULL, NULL, NULL, &error) &&
+	g_subprocess_wait_check (proc, NULL, &error);
+      g_bytes_unref (bytes);
+      g_object_unref (launcher);
+    }
+  if (!ok)
+    g_message ("mail: sending mail with %s failed: %s\n",
+	       mailer, error->message);
+
+  g_clear_error (&error);
+  g_clear_object (&proc);
+  g_unlink (msgname);
+  g_free (msgname);
+  g_free (mailer);
+
+  return ok;
+}
+
+/* The sendmail to use: MAILER if it is there, otherwise a "sendmail"
+ * found in PATH (on Windows there usually is none, and mailing is
+ * then not available).
+ */
+static char *
+find_mailer (void)
+{
+  if (g_file_test (MAILER, G_FILE_TEST_IS_EXECUTABLE))
+    return g_strdup (MAILER);
+
+  return g_find_program_in_path ("sendmail");
+}
+
+/* What "uuencode infile name" used to write */
+static void
+uuencode (FILE       *infile,
+	  const char *name,
+	  FILE       *outfile)
+{
+  unsigned char in[45];
+  size_t n, i;
+
+#define UUENC(c) ((c) ? ((c) & 077) + ' ' : '`')
+
+  fprintf (outfile, "begin 644 %s\n", name);
+
+  while ((n = fread (in, 1, sizeof (in), infile)) > 0)
+    {
+      /* pad the last line to a multiple of 3 */
+      for (i = n; i % 3; i++)
+	in[i] = 0;
+
+      putc (UUENC (n), outfile);
+      for (i = 0; i < n; i += 3)
+	{
+	  int c1 = in[i], c2 = in[i + 1], c3 = in[i + 2];
+
+	  putc (UUENC (c1 >> 2), outfile);
+	  putc (UUENC (((c1 << 4) & 060) | ((c2 >> 4) & 017)), outfile);
+	  putc (UUENC (((c2 << 2) & 074) | ((c3 >> 6) & 03)), outfile);
+	  putc (UUENC (c3 & 077), outfile);
+	}
+      putc ('\n', outfile);
+    }
+
+  putc (UUENC (0), outfile);
+  fprintf (outfile, "\nend\n");
+
+#undef UUENC
 }
 
 
 static gint
-save_dialog ()
+save_dialog (void)
 {
   GtkWidget *dlg;
   GtkWidget *button;
@@ -390,189 +480,161 @@ save_dialog ()
   GtkWidget *label;
   GtkWidget *button1;
   GtkWidget *button2;
-  GSList *group;
+  GtkWidget *group;
 
-  gint argc;
-  gchar **argv;
-  gchar buffer[32];
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("mail");
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Send to mail");
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) close_callback, NULL);
+  gtk_init ();
+
+  dlg = gimp_dialog_new ("Send to mail");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (close_callback), NULL);
   /* action area   */
   /* Okay buton */
   button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-		      (GtkSignalFunc) ok_callback,
+  g_signal_connect (button, "clicked",
+		      G_CALLBACK (ok_callback),
 		      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
+  gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
 
   /* cancel button */
   button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_widget_show (button);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
+  g_signal_connect_swapped (button, "clicked",
+			     G_CALLBACK (gtk_window_destroy),
+			     dlg);
 
   /* table */
-  table = gtk_table_new (5, 3, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show (table);
+  table = gimp_table_new (5, 3, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), table, TRUE, TRUE, 0);
 
-  gtk_table_set_row_spacings (GTK_TABLE (table), 10);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 10);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 10);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 10);
 
   /*  To:  Label */
   label = gtk_label_new ("To:");
-  gtk_table_attach (GTK_TABLE (table), label,
+  gimp_table_attach (table, label,
 		    0, 1, 0, 1,
-		    GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0);
-  gtk_widget_show (label);
 
   /* to: dialog */
   entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry,
+  gimp_table_attach (table, entry,
 		    1, 3, 0, 1, 
-		    GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0);
-  gtk_widget_set_usize (entry, 200, 0);
-  sprintf (buffer, "%s", mail_info.receipt);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) receipt_callback, &mail_info.receipt);
-  gtk_widget_show (entry);
+  gtk_widget_set_size_request (entry, 200, -1);
+  gtk_editable_set_text (GTK_EDITABLE (entry), mail_info.receipt);
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (receipt_callback), &mail_info.receipt);
 
   /*  subject Label */
   label = gtk_label_new ("Subject:");
-  gtk_table_attach (GTK_TABLE (table), label,
+  gimp_table_attach (table, label,
 		    0, 1, 1, 2,
-		    GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0);
-  gtk_widget_show (label);
 
   /* Subject entry */
   entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry,
+  gimp_table_attach (table, entry,
 		    1, 3, 1, 2,
-		    GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0);
-  gtk_widget_set_usize (entry, 200, 0);
-  sprintf (buffer, "%s", mail_info.subject);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) subject_callback, &mail_info.subject);
-  gtk_widget_show (entry);
+  gtk_widget_set_size_request (entry, 200, -1);
+  gtk_editable_set_text (GTK_EDITABLE (entry), mail_info.subject);
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (subject_callback), &mail_info.subject);
 
 
   /* Comment label  */
   label = gtk_label_new ("Comment:");
-  gtk_table_attach (GTK_TABLE (table), label, 
+  gimp_table_attach (table, label, 
 		    0, 1, 2, 3, 
-		    GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0);
-  gtk_widget_show (label);
 
   /* Comment dialog */
   entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry, 
+  gimp_table_attach (table, entry, 
 		    1, 3, 2, 3,
-		    GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0);
-  gtk_widget_set_usize (entry, 200, 0);
-  sprintf (buffer, "%s", mail_info.comment);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) comment_callback, &mail_info.comment);
-  gtk_widget_show (entry);
+  gtk_widget_set_size_request (entry, 200, -1);
+  gtk_editable_set_text (GTK_EDITABLE (entry), mail_info.comment);
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (comment_callback), &mail_info.comment);
 
   /* filename label  */
   label = gtk_label_new ("Filename:");
-  gtk_table_attach (GTK_TABLE (table), label, 
+  gimp_table_attach (table, label, 
 		    0, 1, 3, 4, 
-		    GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0);
-  gtk_widget_show (label);
 
   /* Filename dialog */
   entry = gtk_entry_new ();
-  gtk_table_attach (GTK_TABLE (table), entry, 
+  gimp_table_attach (table, entry, 
 		    1, 3, 3, 4,
-		    GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0);
-  gtk_widget_set_usize (entry, 200, 0);
-  sprintf (buffer, "%s", mail_info.filename);
-  gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) filename_callback, &mail_info.filename);
-  gtk_widget_show (entry);
+  gtk_widget_set_size_request (entry, 200, -1);
+  gtk_editable_set_text (GTK_EDITABLE (entry), mail_info.filename);
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (filename_callback), &mail_info.filename);
 
   /* Encapsulation label */
   label = gtk_label_new ("Encapsulation:");
-  gtk_table_attach( GTK_TABLE (table), label ,
+  gimp_table_attach (table, label ,
 		    0, 1, 4, 5,
-		    GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0);
-  gtk_widget_show(label);
 
   /* Encapsulation radiobutton */
-  button1 = gtk_radio_button_new_with_label( NULL, "Uuencode");
-  group = gtk_radio_button_group( GTK_RADIO_BUTTON( button1 ) );
-  button2 = gtk_radio_button_new_with_label( group, "MIME" );
+  button1 = gimp_radio_button_new (NULL, "Uuencode");
+  group = button1;
+  button2 = gimp_radio_button_new (group, "MIME" );
   if( mail_info.encapsulation == ENCAPSULATION_UUENCODE ) {
-      gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(button1),TRUE);
+      gtk_check_button_set_active (GTK_CHECK_BUTTON (button1),TRUE);
   } else {
-      gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(button2),TRUE);
+      gtk_check_button_set_active (GTK_CHECK_BUTTON (button2),TRUE);
   }
-  gtk_signal_connect (GTK_OBJECT (button1), "toggled",
-		      (GtkSignalFunc) encap_callback,
+  g_signal_connect (button1, "toggled",
+		      G_CALLBACK (encap_callback),
 		      (gpointer) "uuencode" );
-  gtk_signal_connect (GTK_OBJECT (button2), "toggled",
-		      (GtkSignalFunc) encap_callback,
+  g_signal_connect (button2, "toggled",
+		      G_CALLBACK (encap_callback),
 		      (gpointer) "mime" );
 
-  gtk_table_attach( GTK_TABLE (table), button1,
+  gimp_table_attach (table, button1,
 		    1, 2, 4, 5,
-		    GTK_EXPAND | GTK_FILL, 
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL, 
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0 );
-  gtk_widget_show( button1 );
 
-  gtk_table_attach( GTK_TABLE (table), button2,
+  gimp_table_attach (table, button2,
 		    2, 3, 4, 5,
-		    GTK_EXPAND | GTK_FILL,
-		    GTK_EXPAND | GTK_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
+		    GIMP_EXPAND | GIMP_FILL,
 		    0, 0 );
-  gtk_widget_show( button2 );
 
 
-  gtk_widget_show (dlg);
-  gtk_main ();
-  gdk_flush ();
+  gtk_window_present (GTK_WINDOW (dlg));
+  gimp_main_loop_run ();
   return run_flag;
 
 }
@@ -581,9 +643,9 @@ static int
 valid_file (char *filename)
 {
   int stat_res;
-  struct stat buf;
+  GStatBuf buf;
 
-  stat_res = stat (filename, &buf);
+  stat_res = g_stat (filename, &buf);
 
   if ((0 == stat_res) && (buf.st_size > 0))
     return 1;
@@ -591,7 +653,7 @@ valid_file (char *filename)
     return 0;
 }
 
-char *
+static char *
 find_content_type (char *filename)
 {
     /* This function returns a MIME Content-type: value based on the
@@ -678,14 +740,14 @@ find_extension (char *filename)
 static void
 close_callback (GtkWidget * widget, gpointer data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
 ok_callback (GtkWidget * widget, gpointer data)
 {
   run_flag = 1;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
@@ -693,7 +755,7 @@ encap_callback (GtkWidget * widget, gpointer data)
 {
     /* Ignore the toggle-off signal, we are only interested in
        what is being set */
-    if( ! GTK_TOGGLE_BUTTON( widget )->active ) {
+    if( ! gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)) ) {
 	return;
     }
     if(strcmp(data,"uuencode")==0)
@@ -705,27 +767,27 @@ encap_callback (GtkWidget * widget, gpointer data)
 static void
 receipt_callback (GtkWidget * widget, gpointer data)
 {
-  strncpy (mail_info.receipt, gtk_entry_get_text (GTK_ENTRY (widget)), 256);
+  g_strlcpy (mail_info.receipt, gtk_editable_get_text (GTK_EDITABLE (widget)), 256);
 }
 
 static void
 subject_callback (GtkWidget * widget, gpointer data)
 {
-  strncpy (mail_info.subject, gtk_entry_get_text (GTK_ENTRY (widget)), 256);
+  g_strlcpy (mail_info.subject, gtk_editable_get_text (GTK_EDITABLE (widget)), 256);
 }
 
 
 static void
 comment_callback (GtkWidget * widget, gpointer data)
 {
-  strncpy (mail_info.comment, gtk_entry_get_text (GTK_ENTRY (widget)), 256);
+  g_strlcpy (mail_info.comment, gtk_editable_get_text (GTK_EDITABLE (widget)), 256);
 }
 
 
 static void
 filename_callback (GtkWidget * widget, gpointer data)
 {
-  strncpy (mail_info.filename, gtk_entry_get_text (GTK_ENTRY (widget)), 256);
+  g_strlcpy (mail_info.filename, gtk_editable_get_text (GTK_EDITABLE (widget)), 256);
 }
 
 static void
@@ -750,7 +812,7 @@ create_headers (FILE * mailpipe)
       fprintf (mailpipe, "--GUMP-MIME-boundary\n");
       fprintf (mailpipe, "Content-type: text/plain; charset=US-ASCII\n\n");
   }
-  fprintf (mailpipe, mail_info.comment);
+  fputs (mail_info.comment, mailpipe);
   fprintf (mailpipe, "\n\n");
   if(mail_info.encapsulation == ENCAPSULATION_MIME ) {
       char *content;
@@ -811,8 +873,7 @@ WITHOUT ANY EXPRESS OR IMPLIED WARRANTIES.  */
 static char basis_64[] =
    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-static int to64(infile, outfile) 
-FILE *infile, *outfile;
+static int to64(FILE *infile, FILE *outfile)
 {
     int c1, c2, c3, ct=0, written=0;
 
@@ -843,8 +904,7 @@ FILE *infile, *outfile;
 }
 
 static void
-output64chunk(c1, c2, c3, pads, outfile)
-FILE *outfile;
+output64chunk(int c1, int c2, int c3, int pads, FILE *outfile)
 {
     putc(basis_64[c1>>2], outfile);
     putc(basis_64[((c1 & 0x3)<< 4) | ((c2 & 0xF0) >> 4)], outfile);

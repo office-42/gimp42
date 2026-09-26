@@ -1,1 +1,28 @@
+# Meson / Ninja
+/build*/
+!/build-aux/
+/builddir/
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.exe
+.ninja_deps
+.ninja_log
+compile_commands.json
+
+# Editors
+*.swp
+*~
+.vscode/
+.idea/
+
+# What installing and packaging leave behind
+/dist/
+/installer/
+/_install/
+/GIMP42.app/
+
 .claude/settings.local.json
+__pycache__/

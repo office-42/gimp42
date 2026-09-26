@@ -17,8 +17,9 @@
 #include <time.h>
 
 #include "glib.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include "libgimp/gimpui.h"
 
 #include "config.h"
 
@@ -34,14 +35,19 @@ static void run(char *name,
 
 static void do_playback (void);
 
-static gint window_delete_callback (GtkWidget *widget,
-				    GdkEvent  *event,
-				    gpointer   data);
-static void window_close_callback  (GtkWidget *widget,
-				    gpointer   data);
-static gint step_callback  (gpointer   data);
-static void toggle_feedbacktype  (GtkWidget *widget,
-				  gpointer   data);
+static gboolean window_delete_callback (GtkWindow *window,
+					gpointer   data);
+static void window_close_callback  (GtkWidget *widget);
+static gboolean step_callback  (gpointer   data);
+static void toggle_feedbacktype  (GtkGestureClick *gesture,
+				  gint             n_press,
+				  gdouble          x,
+				  gdouble          y,
+				  gpointer         data);
+static void pointer_motion       (GtkEventControllerMotion *controller,
+				  gdouble                   x,
+				  gdouble                   y,
+				  gpointer                  data);
 
 static void         render_frame        (void);
 static void         show_frame          (void);
@@ -68,7 +74,7 @@ static const guint height = 256;
 static guchar*    seed_data;
 static guchar*    preview_data1;
 static guchar*    preview_data2;
-static GtkPreview* preview = NULL;
+static GtkWidget* preview = NULL;
 static gint32     image_id;
 static gint32     total_frames;
 static gint32*    layers;
@@ -77,8 +83,10 @@ static GImageType imagetype;
 static guchar*    palette;
 static gint       ncolours;
 
-static gint       idle_tag;
-static GtkWidget* eventbox;
+static guint      timeout_tag;
+static GtkWidget* window;
+static gdouble    pointer_x = 128.0;
+static gdouble    pointer_y = 128.0;
 static gboolean   feedbacktype = FALSE;
 static gboolean   rgb_mode;
 
@@ -86,7 +94,7 @@ static gboolean   rgb_mode;
 
 MAIN()
 
-static void query()
+static void query(void)
 {
   static GParamDef args[] =
   {
@@ -153,9 +161,6 @@ static void
 build_dialog(GImageType basetype,
 	     char*      imagename)
 {
-  gchar** argv;
-  gint argc;
-
   GtkWidget* dlg;
   GtkWidget* button;
   GtkWidget* frame;
@@ -163,121 +168,85 @@ build_dialog(GImageType basetype,
   GtkWidget* vbox;
   GtkWidget* hbox;
   GtkWidget* hbox2;
-  guchar* color_cube;
+  GtkGesture* click;
+  GtkEventController* motion;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("gee");
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-  gdk_set_use_xshm (gimp_use_xshm ());
-  gtk_preview_set_gamma (gimp_gamma ());
-  gtk_preview_set_install_cmap (gimp_install_cmap ());
-  color_cube = gimp_color_cube ();
-  gtk_preview_set_color_cube (color_cube[0], color_cube[1],
-                              color_cube[2], color_cube[3]);
-  gtk_widget_set_default_visual (gtk_preview_get_visual ());
-  gtk_widget_set_default_colormap (gtk_preview_get_cmap ());
+  gtk_init ();
+
+  dlg = gimp_dialog_new ("GEE!  The GIMP E'er Egg!");
+  window = dlg;
+  g_signal_connect (dlg, "close-request",
+		    G_CALLBACK (window_delete_callback),
+		    NULL);
 
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "GEE!  The GIMP E'er Egg!");
-
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "delete_event",
-		      (GtkSignalFunc) window_delete_callback,
-		      NULL);
-
-  
   /* Action area - 'close' button only. */
 
-  button = gtk_button_new_with_label ("** Thank you for choosing GIMP **");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) window_close_callback,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area),
-		      button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-  
+  button = gimp_dialog_add_button (dlg, "** Thank you for choosing GIMP **",
+				   NULL, NULL, TRUE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (window_close_callback),
+			    dlg);
+
 
   {
     /* The 'playback' half of the dialog */
-    
-    frame = gtk_frame_new (NULL);
 
-    gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-    gtk_container_border_width (GTK_CONTAINER (frame), 3);
-    gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox),
-			frame, TRUE, TRUE, 0);
-    
+    frame = gtk_frame_new (NULL);
+    gimp_container_set_border_width (frame, 3);
+    gimp_box_pack_start (gimp_dialog_get_vbox (dlg),
+			 frame, TRUE, TRUE, 0);
+
     {
-      hbox = gtk_hbox_new (FALSE, 5);
-      gtk_container_border_width (GTK_CONTAINER (hbox), 3);
-      gtk_container_add (GTK_CONTAINER (frame), hbox);
-      
+      hbox = gimp_hbox_new (FALSE, 5);
+      gimp_container_set_border_width (hbox, 3);
+      gtk_frame_set_child (GTK_FRAME (frame), hbox);
+
       {
-	vbox = gtk_vbox_new (FALSE, 5);
-	gtk_container_border_width (GTK_CONTAINER (vbox), 3);
-	gtk_container_add (GTK_CONTAINER (hbox), vbox);
-	
+	vbox = gimp_vbox_new (FALSE, 5);
+	gimp_container_set_border_width (vbox, 3);
+	gimp_box_pack_start (hbox, vbox, TRUE, TRUE, 0);
+
 	{
-	  hbox2 = gtk_hbox_new (TRUE, 0);
-	  gtk_container_border_width (GTK_CONTAINER (hbox2), 0);
-	  gtk_box_pack_start (GTK_BOX (vbox), hbox2, FALSE, FALSE, 0);
+	  hbox2 = gimp_hbox_new (TRUE, 0);
+	  gimp_box_pack_start (vbox, hbox2, FALSE, FALSE, 0);
 	  {
 	    frame2 = gtk_frame_new (NULL);
-	    gtk_frame_set_shadow_type (GTK_FRAME (frame2), GTK_SHADOW_ETCHED_IN);
-	    gtk_box_pack_start (GTK_BOX (hbox2), frame2, FALSE, FALSE, 0);
-	    
-	    {
-	      eventbox = gtk_event_box_new();
-	      gtk_container_add (GTK_CONTAINER (frame2), GTK_WIDGET (eventbox));
-	      
-	      {
-		preview =
-		  GTK_PREVIEW (gtk_preview_new (rgb_mode?
-						GTK_PREVIEW_COLOR:
-						GTK_PREVIEW_GRAYSCALE));
-		gtk_preview_size (preview, width, height);
-		gtk_container_add (GTK_CONTAINER (eventbox),
-				   GTK_WIDGET (preview));
-		gtk_widget_show(GTK_WIDGET (preview));
-	      }
-	      gtk_widget_show(eventbox);
-	      gtk_widget_set_events (eventbox,
-				     gtk_widget_get_events (eventbox)
-				     | GDK_BUTTON_PRESS_MASK);
-	    }
-	    gtk_widget_show(frame2);
-	  }
-	  gtk_widget_show(hbox2);
-	}
-	gtk_widget_show(vbox);
-	
-      }
-      gtk_widget_show(hbox);
-      
-    }
-    gtk_widget_show(frame);
-    
-  }
-  gtk_widget_show(dlg);
+	    gimp_box_pack_start (hbox2, frame2, FALSE, FALSE, 0);
 
-	    
-  idle_tag = gtk_idle_add_priority (
-				    GTK_PRIORITY_LOW,
-				    (GtkFunction) step_callback,
-				    NULL);
-  
-  gtk_signal_connect (GTK_OBJECT (eventbox), "button_press_event",
-		      GTK_SIGNAL_FUNC (toggle_feedbacktype), NULL);
+	    {
+	      preview = gimp_preview_new (rgb_mode?
+					  GIMP_PREVIEW_COLOR:
+					  GIMP_PREVIEW_GRAYSCALE);
+	      gimp_preview_size (GIMP_PREVIEW (preview), width, height);
+	      gtk_frame_set_child (GTK_FRAME (frame2), preview);
+
+	      click = gtk_gesture_click_new ();
+	      g_signal_connect (click, "pressed",
+				G_CALLBACK (toggle_feedbacktype), NULL);
+	      gtk_widget_add_controller (preview,
+					 GTK_EVENT_CONTROLLER (click));
+
+	      /* The animation follows the pointer anywhere in the
+	       * window, as it did with gdk_window_get_pointer (). */
+	      motion = gtk_event_controller_motion_new ();
+	      g_signal_connect (motion, "motion",
+				G_CALLBACK (pointer_motion), NULL);
+	      gtk_widget_add_controller (dlg, motion);
+	    }
+	  }
+	}
+      }
+    }
+  }
+  gtk_window_present (GTK_WINDOW (dlg));
+
+  timeout_tag = g_timeout_add (20, step_callback, NULL);
 }
 
 
 
-static void do_playback()
+static void do_playback(void)
 {
   layers    = gimp_image_get_layers (image_id, &total_frames);
   imagetype = gimp_image_base_type(image_id);
@@ -298,15 +267,14 @@ static void do_playback()
   render_frame();
   show_frame();
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 }
 
 
 /* Rendering Functions */
 
 /* Adam's silly algorithm. */
-void domap1(unsigned char *src, unsigned char *dest,
+static void domap1(unsigned char *src, unsigned char *dest,
 	    int bx, int by, int cx, int cy)
 {
 #ifdef __AAARGH_GNUC__
@@ -375,7 +343,7 @@ void domap1(unsigned char *src, unsigned char *dest,
 }
 
 /* 3bypp variant */
-void domap3(unsigned char *src, unsigned char *dest,
+static void domap3(unsigned char *src, unsigned char *dest,
 	    int bx, int by, int cx, int cy)
 {
 #ifdef __AAARGH_GNUC__
@@ -458,12 +426,9 @@ render_frame(void)
   unsigned char* tmp;
   static gint xp=128, yp=128;
   gint rxp, ryp;
-  GdkModifierType mask;
   gint pixels;
 
   pixels = width*height*(rgb_mode?3:1);
-
-  gdk_flush();
 
   tmp = preview_data2;
   preview_data2 = preview_data1;
@@ -479,7 +444,8 @@ render_frame(void)
 	}
     }
 
-  gdk_window_get_pointer (eventbox->window, &rxp, &ryp, &mask);
+  rxp = (gint) pointer_x;
+  ryp = (gint) pointer_y;
 
   if ((abs(rxp)>60)||(abs(ryp)>60))
     {
@@ -497,7 +463,7 @@ render_frame(void)
 
       for (i=0;i<height;i++)
 	{
-	  gtk_preview_draw_row (preview,
+	  gimp_preview_draw_row (GIMP_PREVIEW (preview),
 				&preview_data1[i*width*3],
 				0, i, width);
 	}
@@ -532,7 +498,7 @@ render_frame(void)
 
       for (i=0;i<height;i++)
 	{
-	  gtk_preview_draw_row (preview,
+	  gimp_preview_draw_row (GIMP_PREVIEW (preview),
 				&preview_data1[i*width],
 				0, i, width);
 	}
@@ -565,8 +531,7 @@ render_frame(void)
 static void
 show_frame(void)
 {
-  /* Tell GTK to physically draw the preview */
-  gtk_widget_draw (GTK_WIDGET (preview), NULL);
+  /* The preview redraws itself after gimp_preview_draw_row ().  */
 }
 
 
@@ -730,43 +695,68 @@ do_step(void)
 
 /*  Callbacks  */
 
-static gint
-window_delete_callback (GtkWidget *widget,
-		        GdkEvent  *event,
-		        gpointer   data)
+static void
+stop_playback (void)
 {
-  gtk_idle_remove (idle_tag);
+  if (timeout_tag)
+    {
+      g_source_remove (timeout_tag);
+      timeout_tag = 0;
+      gimp_main_loop_quit ();
+    }
+}
 
-  gdk_flush();
-  gtk_main_quit();
+static gboolean
+window_delete_callback (GtkWindow *window,
+			gpointer   data)
+{
+  stop_playback ();
 
   return FALSE;
 }
 
 static void
-window_close_callback (GtkWidget *widget,
-                       gpointer   data)
+window_close_callback (GtkWidget *widget)
 {
-  if (data)
-    gtk_widget_destroy(GTK_WIDGET(data));
+  stop_playback ();
 
-  window_delete_callback (NULL, NULL, NULL);
+  if (widget)
+    gtk_window_destroy (GTK_WINDOW (widget));
 }
 
 static void
-toggle_feedbacktype (GtkWidget *widget,
-		     gpointer   data)
+toggle_feedbacktype (GtkGestureClick *gesture,
+		     gint             n_press,
+		     gdouble          x,
+		     gdouble          y,
+		     gpointer         data)
 {
   feedbacktype = !feedbacktype;
 }
 
+static void
+pointer_motion (GtkEventControllerMotion *controller,
+		gdouble                   x,
+		gdouble                   y,
+		gpointer                  data)
+{
+  graphene_point_t in = GRAPHENE_POINT_INIT ((float) x, (float) y);
+  graphene_point_t out;
 
-static gint
+  /* Pointer position relative to the preview, as before. */
+  if (preview && gtk_widget_compute_point (window, preview, &in, &out))
+    {
+      pointer_x = out.x;
+      pointer_y = out.y;
+    }
+}
+
+
+static gboolean
 step_callback (gpointer   data)
 {
   do_step();
   show_frame();
 
-  return TRUE;
+  return G_SOURCE_CONTINUE;
 }
-

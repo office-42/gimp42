@@ -90,7 +90,7 @@ edit_selection_snap (GDisplay *gdisp,
 void
 init_edit_selection (Tool           *tool,
 		     gpointer        gdisp_ptr,
-		     GdkEventButton *bevent,
+		     GimpButtonEvent *bevent,
 		     EditType        edit_type)
 {
   GDisplay *gdisp;
@@ -147,14 +147,14 @@ init_edit_selection (Tool           *tool,
   /*  Create and start the selection core  */
   edit_select.core = draw_core_new (edit_selection_draw);
   draw_core_start (edit_select.core,
-		   gdisp->canvas->window,
+		   gdisp->canvas,
 		   tool);
 }
 
 
 void
 edit_selection_button_release (Tool           *tool,
-			       GdkEventButton *bevent,
+			       GimpButtonEvent *bevent,
 			       gpointer        gdisp_ptr)
 {
   int x, y;
@@ -168,8 +168,6 @@ edit_selection_button_release (Tool           *tool,
   /*  resume the current selection and ungrab the pointer  */
   selection_resume (gdisp->select);
 
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
 
   /*  Stop and free the selection core  */
   draw_core_stop (edit_select.core, tool);
@@ -269,7 +267,7 @@ edit_selection_button_release (Tool           *tool,
 
 void
 edit_selection_motion (Tool           *tool,
-		       GdkEventMotion *mevent,
+		       GimpMotionEvent *mevent,
 		       gpointer        gdisp_ptr)
 {
   GDisplay * gdisp;
@@ -287,13 +285,37 @@ edit_selection_motion (Tool           *tool,
 }
 
 
+/*  Draws segs moved by (diff_x, diff_y), leaving segs as they are.  */
+static void
+edit_selection_draw_segs (GimpSegment *segs,
+			  int          num_segs,
+			  int          diff_x,
+			  int          diff_y)
+{
+  GimpSegment *moved;
+  int i;
+
+  if (num_segs <= 0)
+    return;
+
+  moved = g_new (GimpSegment, num_segs);
+  for (i = 0; i < num_segs; i++)
+    {
+      moved[i].x1 = segs[i].x1 + diff_x;
+      moved[i].x2 = segs[i].x2 + diff_x;
+      moved[i].y1 = segs[i].y1 + diff_y;
+      moved[i].y2 = segs[i].y2 + diff_y;
+    }
+
+  draw_core_segments (edit_select.core, moved, num_segs);
+  g_free (moved);
+}
+
 void
 edit_selection_draw (Tool *tool)
 {
-  int i;
   int diff_x, diff_y;
   GDisplay * gdisp;
-  GdkSegment * seg;
   Selection * select;
   Layer *layer;
   GSList *layer_list;
@@ -314,51 +336,12 @@ edit_selection_draw (Tool *tool)
       layer = gimage_get_active_layer (gdisp->gimage);
       floating_sel = layer_is_floating_sel (layer);
 
-      /*  offset the current selection  */
-      seg = select->segs_in;
-      for (i = 0; i < select->num_segs_in; i++)
-	{
-	  seg->x1 += diff_x;
-	  seg->x2 += diff_x;
-	  seg->y1 += diff_y;
-	  seg->y2 += diff_y;
-	  seg++;
-	}
-      seg = select->segs_out;
-      for (i = 0; i < select->num_segs_out; i++)
-	{
-	  seg->x1 += diff_x;
-	  seg->x2 += diff_x;
-	  seg->y1 += diff_y;
-	  seg->y2 += diff_y;
-	  seg++;
-	}
-
+      /*  draw the current selection, offset  */
       if (! floating_sel)
-	gdk_draw_segments (edit_select.core->win, edit_select.core->gc,
-			   select->segs_in, select->num_segs_in);
-      gdk_draw_segments (edit_select.core->win, edit_select.core->gc,
-			 select->segs_out, select->num_segs_out);
-
-      /*  reset the the current selection  */
-      seg = select->segs_in;
-      for (i = 0; i < select->num_segs_in; i++)
-	{
-	  seg->x1 -= diff_x;
-	  seg->x2 -= diff_x;
-	  seg->y1 -= diff_y;
-	  seg->y2 -= diff_y;
-	  seg++;
-	}
-      seg = select->segs_out;
-      for (i = 0; i < select->num_segs_out; i++)
-	{
-	  seg->x1 -= diff_x;
-	  seg->x2 -= diff_x;
-	  seg->y1 -= diff_y;
-	  seg->y2 -= diff_y;
-	  seg++;
-	}
+	edit_selection_draw_segs (select->segs_in, select->num_segs_in,
+				  diff_x, diff_y);
+      edit_selection_draw_segs (select->segs_out, select->num_segs_out,
+				diff_x, diff_y);
       break;
 
     case MaskToLayerTranslate:
@@ -369,8 +352,7 @@ edit_selection_draw (Tool *tool)
 	}
       gdisplay_transform_coords (gdisp, edit_select.x1, edit_select.y1, &x1, &y1, TRUE);
       gdisplay_transform_coords (gdisp, edit_select.x2, edit_select.y2, &x2, &y2, TRUE);
-      gdk_draw_rectangle (edit_select.core->win,
-			  edit_select.core->gc, 0,
+      draw_core_rectangle (edit_select.core, 0,
 			  x1 + diff_x, y1 + diff_y,
 			  (x2 - x1) - 1, (y2 - y1) - 1);
       break;
@@ -407,37 +389,15 @@ edit_selection_draw (Tool *tool)
 	  layer_list = g_slist_next (layer_list);
 	}
 
-      gdk_draw_rectangle (edit_select.core->win,
-			  edit_select.core->gc, 0,
+      draw_core_rectangle (edit_select.core, 0,
 			  x1 + diff_x, y1 + diff_y,
 			  (x2 - x1) - 1, (y2 - y1) - 1);
       break;
 
     case FloatingSelTranslate:
-      seg = select->segs_in;
-      for (i = 0; i < select->num_segs_in; i++)
-	{
-	  seg->x1 += diff_x;
-	  seg->x2 += diff_x;
-	  seg->y1 += diff_y;
-	  seg->y2 += diff_y;
-	  seg++;
-	}
-
       /*  Draw the items  */
-      gdk_draw_segments (edit_select.core->win, edit_select.core->gc,
-			 select->segs_in, select->num_segs_in);
-
-      /*  reset the the current selection  */
-      seg = select->segs_in;
-      for (i = 0; i < select->num_segs_in; i++)
-	{
-	  seg->x1 -= diff_x;
-	  seg->x2 -= diff_x;
-	  seg->y1 -= diff_y;
-	  seg->y2 -= diff_y;
-	  seg++;
-	}
+      edit_selection_draw_segs (select->segs_in, select->num_segs_in,
+				diff_x, diff_y);
       break;
     }
 }
@@ -466,19 +426,19 @@ edit_selection_control (Tool     *tool,
 
 void
 edit_selection_cursor_update (Tool           *tool,
-			      GdkEventMotion *mevent,
+			      GimpMotionEvent *mevent,
 			      gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
 
   gdisp = (GDisplay *) gdisp_ptr;
-  gdisplay_install_tool_cursor (gdisp, GDK_FLEUR);
+  gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_FLEUR);
 }
 
 
 void
 edit_sel_arrow_keys_func (Tool        *tool,
-			  GdkEventKey *kevent,
+			  GimpKeyEvent *kevent,
 			  gpointer     gdisp_ptr)
 {
   int inc_x, inc_y;
@@ -496,10 +456,10 @@ edit_sel_arrow_keys_func (Tool        *tool,
 
   switch (kevent->keyval)
     {
-    case GDK_Up    : inc_y = -1; break;
-    case GDK_Left  : inc_x = -1; break;
-    case GDK_Right : inc_x =  1; break;
-    case GDK_Down  : inc_y =  1; break;
+    case GDK_KEY_Up    : inc_y = -1; break;
+    case GDK_KEY_Left  : inc_x = -1; break;
+    case GDK_KEY_Right : inc_x =  1; break;
+    case GDK_KEY_Down  : inc_y =  1; break;
     }
 
   /*  If the shift key is down, move by an accelerated increment  */
@@ -509,7 +469,7 @@ edit_sel_arrow_keys_func (Tool        *tool,
       inc_x *= ARROW_VELOCITY;
     }
 
-  if (kevent->state & GDK_MOD1_MASK)
+  if (kevent->state & GDK_ALT_MASK)
     edit_type = MaskTranslate;
   else
     {

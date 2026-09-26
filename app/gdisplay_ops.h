@@ -21,10 +21,6 @@
 #include "gdisplay.h"
 #include "temp_buf.h"
 
-gulong  gdisplay_black_pixel  (GDisplay *);
-gulong  gdisplay_gray_pixel   (GDisplay *);
-gulong  gdisplay_white_pixel  (GDisplay *);
-gulong  gdisplay_color_pixel  (GDisplay *);
 void    gdisplay_new_view     (GDisplay *);
 void    gdisplay_close_window (GDisplay *, int);
 void    gdisplay_shrink_wrap  (GDisplay *);

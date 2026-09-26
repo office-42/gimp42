@@ -52,16 +52,10 @@
 #define SMOOTH       0
 #define GFREE        1
 
-#define RANGE_MASK  GDK_EXPOSURE_MASK | \
-                    GDK_ENTER_NOTIFY_MASK
-
-#define GRAPH_MASK  GDK_EXPOSURE_MASK | \
-		    GDK_POINTER_MOTION_MASK | \
-		    GDK_POINTER_MOTION_HINT_MASK | \
-                    GDK_ENTER_NOTIFY_MASK | \
-		    GDK_BUTTON_PRESS_MASK | \
-		    GDK_BUTTON_RELEASE_MASK | \
-		    GDK_BUTTON1_MOTION_MASK
+/*  What happened on the graph  */
+#define GRAPH_PRESS    0
+#define GRAPH_RELEASE  1
+#define GRAPH_MOTION   2
 
 typedef struct _Curves Curves;
 
@@ -79,7 +73,7 @@ struct _CurvesDialog
   GtkWidget *    xrange;
   GtkWidget *    yrange;
   GtkWidget *    graph;
-  GdkPixmap *    pixmap;
+  int            dragging;      /*  a button is held on the graph  */
 
   GimpDrawable * drawable;
   ImageMap       image_map;
@@ -100,10 +94,10 @@ typedef double CRMatrix[4][4];
 
 /*  curves action functions  */
 
-static void   curves_button_press   (Tool *, GdkEventButton *, gpointer);
-static void   curves_button_release (Tool *, GdkEventButton *, gpointer);
-static void   curves_motion         (Tool *, GdkEventMotion *, gpointer);
-static void   curves_cursor_update  (Tool *, GdkEventMotion *, gpointer);
+static void   curves_button_press   (Tool *, GimpButtonEvent *, gpointer);
+static void   curves_button_release (Tool *, GimpButtonEvent *, gpointer);
+static void   curves_motion         (Tool *, GimpMotionEvent *, gpointer);
+static void   curves_cursor_update  (Tool *, GimpMotionEvent *, gpointer);
 static void   curves_control        (Tool *, int, gpointer);
 
 static CurvesDialog *  curves_new_dialog              (void);
@@ -121,11 +115,14 @@ static void            curves_free_callback           (GtkWidget *, gpointer);
 static void            curves_reset_callback          (GtkWidget *, gpointer);
 static void            curves_ok_callback             (GtkWidget *, gpointer);
 static void            curves_cancel_callback         (GtkWidget *, gpointer);
-static gint            curves_delete_callback         (GtkWidget *, GdkEvent *, gpointer);
+static gint            curves_delete_callback         (GtkWidget *, gpointer);
 static void            curves_preview_update          (GtkWidget *, gpointer);
-static gint            curves_xrange_events           (GtkWidget *, GdkEvent *, CurvesDialog *);
-static gint            curves_yrange_events           (GtkWidget *, GdkEvent *, CurvesDialog *);
-static gint            curves_graph_events            (GtkWidget *, GdkEvent *, CurvesDialog *);
+static void            curves_graph_draw              (GtkDrawingArea *, cairo_t *, int, int, gpointer);
+static void            curves_graph_events            (CurvesDialog *, int, double, double, guint);
+static void            curves_graph_drag_begin        (GtkGestureDrag *, double, double, gpointer);
+static void            curves_graph_drag_update       (GtkGestureDrag *, double, double, gpointer);
+static void            curves_graph_drag_end          (GtkGestureDrag *, double, double, gpointer);
+static void            curves_graph_motion            (GtkEventControllerMotion *, double, double, gpointer);
 static void            curves_CR_compose              (CRMatrix, CRMatrix, CRMatrix);
 
 static void *curves_options = NULL;
@@ -204,7 +201,7 @@ curves (PixelRegion *srcPR,
 
 static void
 curves_button_press (Tool           *tool,
-		     GdkEventButton *bevent,
+		     GimpButtonEvent *bevent,
 		     gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -215,27 +212,27 @@ curves_button_press (Tool           *tool,
 
 static void
 curves_button_release (Tool           *tool,
-		       GdkEventButton *bevent,
+		       GimpButtonEvent *bevent,
 		       gpointer        gdisp_ptr)
 {
 }
 
 static void
 curves_motion (Tool           *tool,
-	       GdkEventMotion *mevent,
+	       GimpMotionEvent *mevent,
 	       gpointer        gdisp_ptr)
 {
 }
 
 static void
 curves_cursor_update (Tool           *tool,
-		      GdkEventMotion *mevent,
+		      GimpMotionEvent *mevent,
 		      gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
 
   gdisp = (GDisplay *) gdisp_ptr;
-  gdisplay_install_tool_cursor (gdisp, GDK_TOP_LEFT_ARROW);
+  gdisplay_install_tool_cursor (gdisp, GIMP_CURSOR_TOP_LEFT_ARROW);
 }
 
 static void
@@ -380,26 +377,26 @@ curves_initialize (void *gdisp_ptr)
 
   /* check for alpha channel */
   if (drawable_has_alpha ( (curves_dialog->drawable)))
-    gtk_widget_set_sensitive( channel_items[4].widget, TRUE);
+    menu_item_set_sensitive (&channel_items[4], TRUE);
   else 
-    gtk_widget_set_sensitive( channel_items[4].widget, FALSE);
+    menu_item_set_sensitive (&channel_items[4], FALSE);
   
   /*  hide or show the channel menu based on image type  */
   if (curves_dialog->color)
     for (i = 0; i < 4; i++) 
-       gtk_widget_set_sensitive( channel_items[i].widget, TRUE);
+       menu_item_set_sensitive (&channel_items[i], TRUE);
   else 
     for (i = 1; i < 4; i++) 
-       gtk_widget_set_sensitive( channel_items[i].widget, FALSE);
+       menu_item_set_sensitive (&channel_items[i], FALSE);
 
   /* set the current selection */
-  gtk_option_menu_set_history ( GTK_OPTION_MENU (curves_dialog->channel_menu), 0);
+  menu_item_set_active (&channel_items[0]);
 
-  if (!GTK_WIDGET_VISIBLE (curves_dialog->shell))
-    gtk_widget_show (curves_dialog->shell);
+  if (!gtk_widget_get_visible (curves_dialog->shell))
+    gtk_window_present (GTK_WINDOW (curves_dialog->shell));
 
 
-  curves_update (curves_dialog, GRAPH | DRAW);
+  curves_update (curves_dialog, GRAPH | XRANGE_TOP | XRANGE_BOTTOM | YRANGE | DRAW);
 }
 
 void
@@ -414,9 +411,7 @@ curves_free ()
 	  active_tool->preserve = FALSE;
 	  curves_dialog->image_map = NULL;
 	}
-      if (curves_dialog->pixmap)
-	gdk_pixmap_unref (curves_dialog->pixmap);
-      gtk_widget_destroy (curves_dialog->shell);
+      gtk_window_destroy (GTK_WINDOW (curves_dialog->shell));
     }
 }
 
@@ -435,14 +430,16 @@ curves_new_dialog ()
   GtkWidget *toggle;
   GtkWidget *option_menu;
   GtkWidget *channel_hbox;
-  GtkWidget *menu;
   GtkWidget *table;
+  GtkGesture *drag;
+  GtkEventController *motion;
   int i, j;
 
   cd = g_malloc (sizeof (CurvesDialog));
   cd->preview = TRUE;
   cd->curve_type = SMOOTH;
-  cd->pixmap = NULL;
+  cd->dragging = FALSE;
+  cd->grab_point = -1;
   cd->channel = HISTOGRAM_VALUE;
   for (i = 0; i < 5; i++)
     for (j = 0; j < 256; j++)
@@ -454,127 +451,108 @@ curves_new_dialog ()
     curve_type_items [i].user_data = (gpointer) cd;
 
   /*  The shell and main vbox  */
-  cd->shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (cd->shell), "curves", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (cd->shell), "Curves");
+  cd->shell = gimp_dialog_new ("Curves");
 
-  gtk_signal_connect (GTK_OBJECT (cd->shell), "delete_event",
-		      GTK_SIGNAL_FUNC (curves_delete_callback),
+  g_signal_connect (cd->shell, "close-request", G_CALLBACK (curves_delete_callback),
 		      cd);
   
-  vbox = gtk_vbox_new (FALSE, 2);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 2);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (cd->shell)->vbox), vbox, TRUE, TRUE, 0);
+  vbox = gimp_vbox_new (FALSE, 2);
+  gimp_container_set_border_width (vbox, 2);
+  gimp_box_pack_start (gimp_dialog_get_vbox (cd->shell), vbox, TRUE, TRUE, 0);
 
   /*  The option menu for selecting channels  */
-  channel_hbox = gtk_hbox_new (FALSE, 2);
-  gtk_box_pack_start (GTK_BOX (vbox), channel_hbox, FALSE, FALSE, 0);
+  channel_hbox = gimp_hbox_new (FALSE, 2);
+  gimp_box_pack_start (vbox, channel_hbox, FALSE, FALSE, 0);
 
   label = gtk_label_new ("Modify Curves for Channel: ");
-  gtk_box_pack_start (GTK_BOX (channel_hbox), label, FALSE, FALSE, 0);
+  gimp_box_pack_start (channel_hbox, label, FALSE, FALSE, 0);
 
-  menu = build_menu (channel_items, NULL);
-  cd->channel_menu = gtk_option_menu_new ();
-  gtk_box_pack_start (GTK_BOX (channel_hbox), cd->channel_menu, FALSE, FALSE, 2);
-
-  gtk_widget_show (label);
-  gtk_widget_show (cd->channel_menu);
-  gtk_widget_show (channel_hbox);
-  gtk_option_menu_set_menu (GTK_OPTION_MENU (cd->channel_menu), menu);
+  cd->channel_menu = build_menu (channel_items, NULL);
+  gimp_box_pack_start (channel_hbox, cd->channel_menu, FALSE, FALSE, 2);
 
   /*  The table for the yrange and the graph  */
-  table = gtk_table_new (2, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 2);
-  gtk_box_pack_start (GTK_BOX (vbox), table, FALSE, FALSE, 0);
+  table = gimp_table_new (2, 2, FALSE);
+  gimp_container_set_border_width (table, 2);
+  gimp_box_pack_start (vbox, table, FALSE, FALSE, 0);
 
   /*  The range drawing area  */
   frame = gtk_frame_new (NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_table_attach (GTK_TABLE (table), frame, 0, 1, 0, 1,
-		    GTK_EXPAND, GTK_EXPAND, 0, 0);
+  gimp_table_attach (table, frame, 0, 1, 0, 1,
+		    GIMP_EXPAND, GIMP_EXPAND, 0, 0);
 
-  cd->yrange = gtk_preview_new (GTK_PREVIEW_GRAYSCALE);
-  gtk_preview_size (GTK_PREVIEW (cd->yrange), YRANGE_WIDTH, YRANGE_HEIGHT);
-  gtk_widget_set_events (cd->yrange, RANGE_MASK);
-  gtk_signal_connect (GTK_OBJECT (cd->yrange), "event",
-		      (GtkSignalFunc) curves_yrange_events,
-		      cd);
-  gtk_container_add (GTK_CONTAINER (frame), cd->yrange);
-  gtk_widget_show (cd->yrange);
-  gtk_widget_show (frame);
+  cd->yrange = gimp_preview_new (GIMP_PREVIEW_GRAYSCALE);
+  gimp_preview_size (GIMP_PREVIEW (cd->yrange), YRANGE_WIDTH, YRANGE_HEIGHT);
+  gimp_container_add (frame, cd->yrange);
 
   /*  The curves graph  */
   frame = gtk_frame_new (NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_table_attach (GTK_TABLE (table), frame, 1, 2, 0, 1,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL,
-		    GTK_FILL, 0, 0);
+  gimp_table_attach (table, frame, 1, 2, 0, 1,
+		    GIMP_EXPAND | GIMP_SHRINK | GIMP_FILL,
+		    GIMP_FILL, 0, 0);
 
   cd->graph = gtk_drawing_area_new ();
-  gtk_drawing_area_size (GTK_DRAWING_AREA (cd->graph),
-			 GRAPH_WIDTH + RADIUS * 2,
-			 GRAPH_HEIGHT + RADIUS * 2);
-  gtk_widget_set_events (cd->graph, GRAPH_MASK);
-  gtk_signal_connect (GTK_OBJECT (cd->graph), "event",
-		      (GtkSignalFunc) curves_graph_events,
-		      cd);
-  gtk_container_add (GTK_CONTAINER (frame), cd->graph);
-  gtk_widget_show (cd->graph);
-  gtk_widget_show (frame);
+  gtk_drawing_area_set_content_width (GTK_DRAWING_AREA (cd->graph),
+				      GRAPH_WIDTH + RADIUS * 2);
+  gtk_drawing_area_set_content_height (GTK_DRAWING_AREA (cd->graph),
+				       GRAPH_HEIGHT + RADIUS * 2);
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (cd->graph),
+				  curves_graph_draw, cd, NULL);
+
+  drag = gtk_gesture_drag_new ();
+  gtk_gesture_single_set_button (GTK_GESTURE_SINGLE (drag), 0);
+  g_signal_connect (drag, "drag-begin", G_CALLBACK (curves_graph_drag_begin), cd);
+  g_signal_connect (drag, "drag-update", G_CALLBACK (curves_graph_drag_update), cd);
+  g_signal_connect (drag, "drag-end", G_CALLBACK (curves_graph_drag_end), cd);
+  gtk_widget_add_controller (cd->graph, GTK_EVENT_CONTROLLER (drag));
+
+  motion = gtk_event_controller_motion_new ();
+  g_signal_connect (motion, "motion", G_CALLBACK (curves_graph_motion), cd);
+  gtk_widget_add_controller (cd->graph, motion);
+  gimp_container_add (frame, cd->graph);
 
   /*  The range drawing area  */
   frame = gtk_frame_new (NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_table_attach (GTK_TABLE (table), frame, 1, 2, 1, 2,
-		    GTK_EXPAND, GTK_EXPAND, 0, 0);
+  gimp_table_attach (table, frame, 1, 2, 1, 2,
+		    GIMP_EXPAND, GIMP_EXPAND, 0, 0);
 
-  cd->xrange = gtk_preview_new (GTK_PREVIEW_GRAYSCALE);
-  gtk_preview_size (GTK_PREVIEW (cd->xrange), XRANGE_WIDTH, XRANGE_HEIGHT);
-  gtk_widget_set_events (cd->xrange, RANGE_MASK);
-  gtk_signal_connect (GTK_OBJECT (cd->xrange), "event",
-		      (GtkSignalFunc) curves_xrange_events,
-		      cd);
-  gtk_container_add (GTK_CONTAINER (frame), cd->xrange);
-  gtk_widget_show (cd->xrange);
-  gtk_widget_show (frame);
-  gtk_widget_show (table);
+  cd->xrange = gimp_preview_new (GIMP_PREVIEW_GRAYSCALE);
+  gimp_preview_size (GIMP_PREVIEW (cd->xrange), XRANGE_WIDTH, XRANGE_HEIGHT);
+  gimp_container_add (frame, cd->xrange);
 
   /*  Horizontal box for preview  */
-  hbox = gtk_hbox_new (FALSE, 2);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
+  hbox = gimp_hbox_new (FALSE, 2);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
 
   /*  The option menu for selecting the drawing method  */
   label = gtk_label_new ("Curve Type: ");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
+  gimp_box_pack_start (hbox, label, FALSE, FALSE, 0);
 
-  menu = build_menu (curve_type_items, NULL);
-  option_menu = gtk_option_menu_new ();
-  gtk_box_pack_start (GTK_BOX (hbox), option_menu, FALSE, FALSE, 2);
-
-  gtk_widget_show (label);
-  gtk_widget_show (option_menu);
-  gtk_widget_show (hbox);
-  gtk_option_menu_set_menu (GTK_OPTION_MENU (option_menu), menu);
+  option_menu = build_menu (curve_type_items, NULL);
+  gimp_box_pack_start (hbox, option_menu, FALSE, FALSE, 2);
 
   /*  The preview toggle  */
   toggle = gtk_check_button_new_with_label ("Preview");
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), cd->preview);
-  gtk_box_pack_start (GTK_BOX (hbox), toggle, TRUE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) curves_preview_update,
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), cd->preview);
+  gimp_box_pack_start (hbox, toggle, TRUE, FALSE, 0);
+  g_signal_connect (toggle, "toggled", G_CALLBACK (curves_preview_update),
 		      cd);
 
-  gtk_widget_show (label);
-  gtk_widget_show (toggle);
-  gtk_widget_show (hbox);
 
   /*  The action area  */
   action_items[0].user_data = cd;
   action_items[1].user_data = cd;
   action_items[2].user_data = cd;
-  build_action_area (GTK_DIALOG (cd->shell), action_items, 3, 0);
+  {
+    int n;
 
-  gtk_widget_show (vbox);
+    for (n = 0; n < 3; n++)
+      gimp_dialog_add_button (cd->shell, action_items[n].label,
+			      G_CALLBACK (action_items[n].callback),
+			      action_items[n].user_data, n == 0);
+  }
+
+  /*  Fill the range previews  */
+  curves_update (cd, XRANGE_TOP | XRANGE_BOTTOM | YRANGE);
 
   return cd;
 }
@@ -583,24 +561,17 @@ static void
 curves_update (CurvesDialog *cd,
 	       int           update)
 {
-  GdkRectangle area;
   int i, j;
 
   if (update & XRANGE_TOP)
     {
       for (i = 0; i < XRANGE_HEIGHT / 2; i++)
-	gtk_preview_draw_row (GTK_PREVIEW (cd->xrange),
+	gimp_preview_draw_row (GIMP_PREVIEW (cd->xrange),
 			      cd->curve[cd->channel],
 			      0, i, XRANGE_WIDTH);
 
       if (update & DRAW)
-	{
-	  area.x = 0;
-	  area.y = 0;
-	  area.width = XRANGE_WIDTH;
-	  area.height = XRANGE_HEIGHT / 2;
-	  gtk_widget_draw (cd->xrange, &area);
-	}
+	gtk_widget_queue_draw (cd->xrange);
     }
   if (update & XRANGE_BOTTOM)
     {
@@ -610,16 +581,10 @@ curves_update (CurvesDialog *cd,
 	buf[i] = i;
 
       for (i = XRANGE_HEIGHT / 2; i < XRANGE_HEIGHT; i++)
-	gtk_preview_draw_row (GTK_PREVIEW (cd->xrange), buf, 0, i, XRANGE_WIDTH);
+	gimp_preview_draw_row (GIMP_PREVIEW (cd->xrange), buf, 0, i, XRANGE_WIDTH);
 
       if (update & DRAW)
-	{
-	  area.x = 0;
-	  area.y = XRANGE_HEIGHT / 2;
-	  area.width = XRANGE_WIDTH;
-	  area.height = XRANGE_HEIGHT / 2;
-	  gtk_widget_draw (cd->xrange, &area);
-	}
+	gtk_widget_queue_draw (cd->xrange);
     }
   if (update & YRANGE)
     {
@@ -630,54 +595,61 @@ curves_update (CurvesDialog *cd,
 	  for (j = 0; j < YRANGE_WIDTH; j++)
 	    buf[j] = (255 - i);
 
-	  gtk_preview_draw_row (GTK_PREVIEW (cd->yrange), buf, 0, i, YRANGE_WIDTH);
+	  gimp_preview_draw_row (GIMP_PREVIEW (cd->yrange), buf, 0, i, YRANGE_WIDTH);
 
 	}
 
       if (update & DRAW)
-	gtk_widget_draw (cd->yrange, NULL);
+	gtk_widget_queue_draw (cd->yrange);
     }
-  if ((update & GRAPH) && (update & DRAW) && cd->pixmap != NULL)
+  if ((update & GRAPH) && (update & DRAW))
+    gtk_widget_queue_draw (cd->graph);
+}
+
+static void
+curves_graph_draw (GtkDrawingArea *area,
+		   cairo_t        *cr,
+		   int             width,
+		   int             height,
+		   gpointer        data)
+{
+  CurvesDialog *cd;
+  int i;
+
+  cd = (CurvesDialog *) data;
+
+  cairo_set_line_width (cr, 1.0);
+
+  /*  Draw the grid lines  */
+  cairo_set_source_rgb (cr, 0.5, 0.5, 0.5);
+  for (i = 0; i < 5; i++)
     {
-      GdkPoint points[256];
-
-      /*  Clear the pixmap  */
-      gdk_draw_rectangle (cd->pixmap, cd->graph->style->bg_gc[GTK_STATE_NORMAL],
-			  TRUE, 0, 0, GRAPH_WIDTH + RADIUS * 2, GRAPH_HEIGHT + RADIUS * 2);
-
-      /*  Draw the grid lines  */
-      for (i = 0; i < 5; i++)
-	{
-	  gdk_draw_line (cd->pixmap, cd->graph->style->dark_gc[GTK_STATE_NORMAL],
-			 RADIUS, i * (GRAPH_HEIGHT / 4) + RADIUS,
-			 GRAPH_WIDTH + RADIUS, i * (GRAPH_HEIGHT / 4) + RADIUS);
-	  gdk_draw_line (cd->pixmap, cd->graph->style->dark_gc[GTK_STATE_NORMAL],
-			 i * (GRAPH_WIDTH / 4) + RADIUS, RADIUS,
-			 i * (GRAPH_WIDTH / 4) + RADIUS, GRAPH_HEIGHT + RADIUS);
-	}
-
-      /*  Draw the curve  */
-      for (i = 0; i < 256; i++)
-	{
-	  points[i].x = i + RADIUS;
-	  points[i].y = 255 - cd->curve[cd->channel][i] + RADIUS;
-	}
-      gdk_draw_points (cd->pixmap, cd->graph->style->black_gc, points, 256);
-
-      /*  Draw the points  */
-      if (cd->curve_type == SMOOTH)
-	for (i = 0; i < 17; i++)
-	  {
-	    if (cd->points[cd->channel][i][0] != -1)
-	      gdk_draw_arc (cd->pixmap, cd->graph->style->black_gc, TRUE,
-			    cd->points[cd->channel][i][0],
-			    255 - cd->points[cd->channel][i][1],
-			    RADIUS * 2, RADIUS * 2, 0, 23040);
-	  }
-
-      gdk_draw_pixmap (cd->graph->window, cd->graph->style->black_gc, cd->pixmap,
-		       0, 0, 0, 0, GRAPH_WIDTH + RADIUS * 2, GRAPH_HEIGHT + RADIUS * 2);
+      cairo_move_to (cr, RADIUS, i * (GRAPH_HEIGHT / 4) + RADIUS + 0.5);
+      cairo_line_to (cr, GRAPH_WIDTH + RADIUS + 1, i * (GRAPH_HEIGHT / 4) + RADIUS + 0.5);
+      cairo_move_to (cr, i * (GRAPH_WIDTH / 4) + RADIUS + 0.5, RADIUS);
+      cairo_line_to (cr, i * (GRAPH_WIDTH / 4) + RADIUS + 0.5, GRAPH_HEIGHT + RADIUS + 1);
     }
+  cairo_stroke (cr);
+
+  /*  Draw the curve, one point per column  */
+  cairo_set_source_rgb (cr, 0.0, 0.0, 0.0);
+  for (i = 0; i < 256; i++)
+    cairo_rectangle (cr, i + RADIUS, 255 - cd->curve[cd->channel][i] + RADIUS, 1, 1);
+  cairo_fill (cr);
+
+  /*  Draw the points  */
+  if (cd->curve_type == SMOOTH)
+    for (i = 0; i < 17; i++)
+      {
+	if (cd->points[cd->channel][i][0] != -1)
+	  {
+	    cairo_arc (cr,
+		       cd->points[cd->channel][i][0] + RADIUS,
+		       255 - cd->points[cd->channel][i][1] + RADIUS,
+		       RADIUS, 0, 2 * G_PI);
+	    cairo_fill (cr);
+	  }
+      }
 }
 
 static void
@@ -837,7 +809,7 @@ curves_value_callback (GtkWidget *w,
   if (cd->channel != HISTOGRAM_VALUE)
     {
       cd->channel = HISTOGRAM_VALUE;
-      curves_update (cd, GRAPH | DRAW);
+      curves_update (cd, GRAPH | XRANGE_TOP | DRAW);
     }
 }
 
@@ -852,7 +824,7 @@ curves_red_callback (GtkWidget *w,
   if (cd->channel != HISTOGRAM_RED)
     {
       cd->channel = HISTOGRAM_RED;
-      curves_update (cd, GRAPH | DRAW);
+      curves_update (cd, GRAPH | XRANGE_TOP | DRAW);
     }
 }
 
@@ -867,7 +839,7 @@ curves_green_callback (GtkWidget *w,
   if (cd->channel != HISTOGRAM_GREEN)
     {
       cd->channel = HISTOGRAM_GREEN;
-      curves_update (cd, GRAPH | DRAW);
+      curves_update (cd, GRAPH | XRANGE_TOP | DRAW);
     }
 }
 
@@ -882,7 +854,7 @@ curves_blue_callback (GtkWidget *w,
   if (cd->channel != HISTOGRAM_BLUE)
     {
       cd->channel = HISTOGRAM_BLUE;
-      curves_update (cd, GRAPH | DRAW);
+      curves_update (cd, GRAPH | XRANGE_TOP | DRAW);
     }
 }
 
@@ -897,7 +869,7 @@ curves_alpha_callback (GtkWidget *w,
   if (cd->channel != HISTOGRAM_ALPHA)
     {
       cd->channel = HISTOGRAM_ALPHA;
-      curves_update (cd, GRAPH | DRAW);
+      curves_update (cd, GRAPH | XRANGE_TOP | DRAW);
     }
 }
 
@@ -982,8 +954,8 @@ curves_ok_callback (GtkWidget *widget,
 
   cd = (CurvesDialog *) client_data;
 
-  if (GTK_WIDGET_VISIBLE (cd->shell))
-    gtk_widget_hide (cd->shell);
+  if (gtk_widget_get_visible (cd->shell))
+    gtk_widget_set_visible (cd->shell, FALSE);
 
   active_tool->preserve = TRUE;  /* We're about to dirty... */
 
@@ -1005,8 +977,8 @@ curves_cancel_callback (GtkWidget *widget,
   CurvesDialog *cd;
 
   cd = (CurvesDialog *) client_data;
-  if (GTK_WIDGET_VISIBLE (cd->shell))
-    gtk_widget_hide (cd->shell);
+  if (gtk_widget_get_visible (cd->shell))
+    gtk_widget_set_visible (cd->shell, FALSE);
 
   if (cd->image_map)
     {
@@ -1021,7 +993,6 @@ curves_cancel_callback (GtkWidget *widget,
 
 static gint 
 curves_delete_callback (GtkWidget *w,
-			GdkEvent *e,
 			gpointer data) 
 {
   curves_cancel_callback (w, data);
@@ -1036,7 +1007,7 @@ curves_preview_update (GtkWidget *w,
 
   cd = (CurvesDialog *) data;
   
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     {
       cd->preview = TRUE;
       curves_preview (cd);
@@ -1045,15 +1016,15 @@ curves_preview_update (GtkWidget *w,
     cd->preview = FALSE;
 }
 
-static gint
-curves_graph_events (GtkWidget    *widget,
-		     GdkEvent     *event,
-		     CurvesDialog *cd)
+static void
+curves_graph_events (CurvesDialog *cd,
+		     int           type,
+		     double        event_x,
+		     double        event_y,
+		     guint         state)
 {
-  static GdkCursorType cursor_type = GDK_TOP_LEFT_ARROW;
-  GdkCursorType new_type;
-  GdkEventButton *bevent;
-  GdkEventMotion *mevent;
+  static GimpCursorType cursor_type = GIMP_CURSOR_TOP_LEFT_ARROW;
+  GimpCursorType new_type;
   int i;
   int tx, ty;
   int x, y;
@@ -1061,11 +1032,12 @@ curves_graph_events (GtkWidget    *widget,
   int distance;
   int x1, x2, y1, y2;
 
-  new_type      = GDK_X_CURSOR;
+  new_type      = GIMP_CURSOR_X_CURSOR;
   closest_point = 0;
 
   /*  get the pointer position  */
-  gdk_window_get_pointer (cd->graph->window, &tx, &ty, NULL);
+  tx = (int) event_x;
+  ty = (int) event_y;
   x = BOUNDS ((tx - RADIUS), 0, 255);
   y = BOUNDS ((ty - RADIUS), 0, 255);
 
@@ -1082,20 +1054,10 @@ curves_graph_events (GtkWidget    *widget,
   if (distance > MIN_DISTANCE)
     closest_point = (x + 8) / 16;
 
-  switch (event->type)
+  switch (type)
     {
-    case GDK_EXPOSE:
-      if (cd->pixmap == NULL)
-	cd->pixmap = gdk_pixmap_new (cd->graph->window,
-				     GRAPH_WIDTH + RADIUS * 2,
-				     GRAPH_HEIGHT + RADIUS * 2, -1);
-
-      curves_update (cd, GRAPH | DRAW);
-      break;
-
-    case GDK_BUTTON_PRESS:
-      bevent = (GdkEventButton *) event;
-      new_type = GDK_TCROSS;
+    case GRAPH_PRESS:
+      new_type = GIMP_CURSOR_TCROSS;
 
       switch (cd->curve_type)
 	{
@@ -1133,23 +1095,15 @@ curves_graph_events (GtkWidget    *widget,
       curves_update (cd, GRAPH | XRANGE_TOP | DRAW);
       break;
 
-    case GDK_BUTTON_RELEASE:
-      new_type = GDK_FLEUR;
+    case GRAPH_RELEASE:
+      new_type = GIMP_CURSOR_FLEUR;
       cd->grab_point = -1;
 
       if (cd->preview)
 	curves_preview (cd);
       break;
 
-    case GDK_MOTION_NOTIFY:
-      mevent = (GdkEventMotion *) event;
-
-      if (mevent->is_hint)
-	{
-	  mevent->x = tx;
-	  mevent->y = ty;
-	}
-
+    case GRAPH_MOTION:
       switch (cd->curve_type)
 	{
 	case SMOOTH:
@@ -1157,14 +1111,14 @@ curves_graph_events (GtkWidget    *widget,
 	  if (cd->grab_point == -1)
 	    {
 	      if (cd->points[cd->channel][closest_point][0] != -1)
-		new_type = GDK_FLEUR;
+		new_type = GIMP_CURSOR_FLEUR;
 	      else
-		new_type = GDK_TCROSS;
+		new_type = GIMP_CURSOR_TCROSS;
 	    }
 	  /*  Else, drag the grabbed point  */
 	  else
 	    {
-	      new_type = GDK_TCROSS;
+	      new_type = GIMP_CURSOR_TCROSS;
 
 	      cd->points[cd->channel][cd->grab_point][0] = -1;
 
@@ -1212,64 +1166,81 @@ curves_graph_events (GtkWidget    *widget,
 	      curves_update (cd, GRAPH | XRANGE_TOP | DRAW);
 	    }
 
-	  if (mevent->state & GDK_BUTTON1_MASK)
-	    new_type = GDK_TCROSS;
+	  if (state & GDK_BUTTON1_MASK)
+	    new_type = GIMP_CURSOR_TCROSS;
 	  else
-	    new_type = GDK_PENCIL;
+	    new_type = GIMP_CURSOR_PENCIL;
 	  break;
 	}
 
       if (new_type != cursor_type)
 	{
 	  cursor_type = new_type;
-	  change_win_cursor (cd->graph->window, cursor_type);
+	  change_win_cursor (cd->graph, cursor_type);
 	}
       break;
 
     default:
       break;
     }
-
-  return FALSE;
 }
 
-static gint
-curves_xrange_events (GtkWidget    *widget,
-		      GdkEvent     *event,
-		      CurvesDialog *cd)
+static void
+curves_graph_drag_begin (GtkGestureDrag *gesture,
+			 double          x,
+			 double          y,
+			 gpointer        data)
 {
-  switch (event->type)
-    {
-    case GDK_EXPOSE:
-      curves_update (cd, XRANGE_TOP | XRANGE_BOTTOM);
-      break;
+  CurvesDialog *cd;
 
-    case GDK_DELETE:
-      break;
-
-    default:
-      break;
-    }
-
-  return FALSE;
+  cd = (CurvesDialog *) data;
+  cd->dragging = TRUE;
+  curves_graph_events (cd, GRAPH_PRESS, x, y, GDK_BUTTON1_MASK);
 }
 
-static gint
-curves_yrange_events (GtkWidget    *widget,
-		      GdkEvent     *event,
-		      CurvesDialog *cd)
+static void
+curves_graph_drag_update (GtkGestureDrag *gesture,
+			  double          offset_x,
+			  double          offset_y,
+			  gpointer        data)
 {
-  switch (event->type)
-    {
-    case GDK_EXPOSE:
-      curves_update (cd, YRANGE);
-      break;
+  double start_x, start_y;
 
-    default:
-      break;
-    }
+  gtk_gesture_drag_get_start_point (gesture, &start_x, &start_y);
+  curves_graph_events ((CurvesDialog *) data, GRAPH_MOTION,
+		       start_x + offset_x, start_y + offset_y, GDK_BUTTON1_MASK);
+}
 
-  return FALSE;
+static void
+curves_graph_drag_end (GtkGestureDrag *gesture,
+		       double          offset_x,
+		       double          offset_y,
+		       gpointer        data)
+{
+  CurvesDialog *cd;
+  double start_x, start_y;
+
+  cd = (CurvesDialog *) data;
+  gtk_gesture_drag_get_start_point (gesture, &start_x, &start_y);
+  cd->dragging = FALSE;
+  curves_graph_events (cd, GRAPH_RELEASE,
+		       start_x + offset_x, start_y + offset_y, 0);
+}
+
+/*  Pointer motion with no button held: only updates the cursor  */
+static void
+curves_graph_motion (GtkEventControllerMotion *controller,
+		     double                    x,
+		     double                    y,
+		     gpointer                  data)
+{
+  CurvesDialog *cd;
+
+  cd = (CurvesDialog *) data;
+  if (cd->dragging)
+    return;
+
+  curves_graph_events (cd, GRAPH_MOTION, x, y, 0);
 }
 
 static void

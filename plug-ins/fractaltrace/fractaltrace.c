@@ -33,6 +33,7 @@
 #include <gtk/gtk.h>
 #include <math.h>
 #include <libgimp/gimp.h>
+#include <libgimp/gimpui.h>
 
 #ifndef PI_2
 #define PI_2 (3.14159265358979323*2.0)
@@ -467,9 +468,9 @@ static int dialog_status;
 
 /******************************************************************************/
 
-static void dialog_entry_gint32_callback( GtkWidget *widget, gpointer *data )
+static void dialog_entry_gint32_callback( GtkWidget *widget, gpointer data )
 {
-  gint32 value = (gint32)atof( gtk_entry_get_text( GTK_ENTRY( widget ) ) );
+  gint32 value = (gint32)atof( gtk_editable_get_text( GTK_EDITABLE( widget ) ) );
   if( *(gint32*)data != value ){
     *(gint32*)data = value;
     dialog_preview_draw();
@@ -484,23 +485,21 @@ static void dialog_entry_gint32_new( char *caption, gint32 *value,
   char       buffer[256];
 
   label = gtk_label_new( caption );
-  gtk_table_attach_defaults( GTK_TABLE( table ), label, 0, 1, row, row + 1 );
-  gtk_widget_show( label );
-  
+  gimp_table_attach_defaults( table, label, 0, 1, row, row + 1 );
+
   entry = gtk_entry_new();
   sprintf( buffer, "%d", *value );
-  gtk_entry_set_text( GTK_ENTRY( entry ), buffer );
-  gtk_signal_connect( GTK_OBJECT( entry ), "changed",
-		      GTK_SIGNAL_FUNC( dialog_entry_gint32_callback ), value );
-  gtk_table_attach_defaults( GTK_TABLE( table ), entry, 1, 2, row, row + 1 );
-  gtk_widget_show( entry );
+  gtk_editable_set_text( GTK_EDITABLE( entry ), buffer );
+  g_signal_connect( entry, "changed",
+		    G_CALLBACK( dialog_entry_gint32_callback ), value );
+  gimp_table_attach_defaults( table, entry, 1, 2, row, row + 1 );
 }
 
 /******************************************************************************/
 
-static void dialog_entry_gdouble_callback( GtkWidget *widget, gpointer *data )
+static void dialog_entry_gdouble_callback( GtkWidget *widget, gpointer data )
 {
-  gdouble value = (gdouble)atof( gtk_entry_get_text( GTK_ENTRY( widget ) ) );
+  gdouble value = (gdouble)atof( gtk_editable_get_text( GTK_EDITABLE( widget ) ) );
   if( *(gdouble*)data != value ){
     *(gdouble*)data = value;
     dialog_preview_draw();
@@ -515,16 +514,14 @@ static void dialog_entry_gdouble_new( char *caption, gdouble *value,
   char       buffer[256];
 
   label = gtk_label_new( caption );
-  gtk_table_attach_defaults( GTK_TABLE( table ), label, 0, 1, row, row + 1 );
-  gtk_widget_show( label );
-  
+  gimp_table_attach_defaults( table, label, 0, 1, row, row + 1 );
+
   entry = gtk_entry_new();
   sprintf( buffer, "%f", *value );
-  gtk_entry_set_text( GTK_ENTRY( entry ), buffer );
-  gtk_signal_connect( GTK_OBJECT( entry ), "changed",
-		      GTK_SIGNAL_FUNC( dialog_entry_gdouble_callback ), value );
-  gtk_table_attach_defaults( GTK_TABLE( table ), entry, 1, 2, row, row + 1 );
-  gtk_widget_show( entry );
+  gtk_editable_set_text( GTK_EDITABLE( entry ), buffer );
+  g_signal_connect( entry, "changed",
+		    G_CALLBACK( dialog_entry_gdouble_callback ), value );
+  gimp_table_attach_defaults( table, entry, 1, 2, row, row + 1 );
 }
 
 /******************************************************************************/
@@ -532,10 +529,10 @@ static void dialog_entry_gdouble_new( char *caption, gdouble *value,
 static GtkWidget* dialog_entry_table( void )
 {
   GtkWidget *table;
-  
-  table = gtk_table_new( 5, 2, FALSE );
-  gtk_table_set_row_spacings( GTK_TABLE( table ), 2 );
-  gtk_table_set_col_spacings( GTK_TABLE( table ), 10 );
+
+  table = gimp_table_new( 5, 2, FALSE );
+  gtk_grid_set_row_spacing( GTK_GRID( table ), 2 );
+  gtk_grid_set_column_spacing( GTK_GRID( table ), 10 );
   dialog_entry_gdouble_new( "X1",   &parameters.x1,    table, 0 );
   dialog_entry_gdouble_new( "X2",   &parameters.x2,    table, 1 );
   dialog_entry_gdouble_new( "Y1",   &parameters.y1,    table, 2 );
@@ -549,20 +546,19 @@ static GtkWidget* dialog_entry_table( void )
 
 static void dialog_destroy_callback( GtkWidget *widget, gpointer data )
 {
-  gtk_main_quit();
-  gdk_flush();
+  gimp_main_loop_quit();
 }
 
 static void dialog_ok_callback( GtkWidget *widget, gpointer data )
 {
   dialog_status = TRUE;
-  gtk_widget_destroy( GTK_WIDGET( data ) );
+  gtk_window_destroy( GTK_WINDOW( data ) );
 }
 
 static void dialog_cancel_callback( GtkWidget *widget, gpointer data )
 {
   dialog_status = FALSE;
-  gtk_widget_destroy( GTK_WIDGET( data ) );
+  gtk_window_destroy( GTK_WINDOW( data ) );
 }
 
 static void dialog_help_callback( GtkWidget *widget, gpointer data )
@@ -571,9 +567,13 @@ static void dialog_help_callback( GtkWidget *widget, gpointer data )
 
 /******************************************************************************/
 
-static void dialog_outside_type_callback( GtkWidget *widget, gpointer *data )
+static void dialog_outside_type_callback( GtkWidget *widget, gpointer data )
 {
   gint32 value = *(gint32*)data;
+
+  /* Radio buttons emit "toggled" when they are switched off too. */
+  if( !gtk_check_button_get_active( GTK_CHECK_BUTTON( widget ) ) )
+    return;
 
   if( parameters.outside_type != value ){
     parameters.outside_type = value;
@@ -615,25 +615,13 @@ static void dialog_preview_store( void )
 {
   gint y;
   for( y = 0; y < preview.height; y++ ){
-    gtk_preview_draw_row( GTK_PREVIEW( preview.preview ),
-			  preview.pixels[y], 0, y, preview.width );
+    gimp_preview_draw_row( GIMP_PREVIEW( preview.preview ),
+			   preview.pixels[y], 0, y, preview.width );
   }
-  gtk_widget_draw( preview.preview, NULL );
-  gdk_flush();
 }
 
 static void dialog_preview_init( void )
 {
-  {
-    guchar *cube;
-    gtk_preview_set_gamma( gimp_gamma() );
-    gtk_preview_set_install_cmap( gimp_install_cmap() );
-    cube = gimp_color_cube();
-    gtk_preview_set_color_cube( cube[0], cube[1], cube[2], cube[3] );
-    gtk_widget_set_default_visual( gtk_preview_get_visual() );
-    gtk_widget_set_default_colormap( gtk_preview_get_cmap() );
-  }
-
   if( image.width < image.height )
     preview.scale = (gdouble)selection.height / (gdouble)PREVIEW_SIZE;
   else
@@ -643,13 +631,13 @@ static void dialog_preview_init( void )
 
   if( image.bpp < 3 ){
     preview.bpp = 1;
-    preview.preview = gtk_preview_new( GTK_PREVIEW_GRAYSCALE );
+    preview.preview = gimp_preview_new( GIMP_PREVIEW_GRAYSCALE );
   } else {
     preview.bpp = 3;
-    preview.preview = gtk_preview_new( GTK_PREVIEW_COLOR );
+    preview.preview = gimp_preview_new( GIMP_PREVIEW_COLOR );
   }
-  gtk_preview_size( GTK_PREVIEW( preview.preview ), preview.width, preview.height );
-  
+  gimp_preview_size( GIMP_PREVIEW( preview.preview ), preview.width, preview.height );
+
   {
     gint y;
     preview.source = (guchar**)g_malloc( preview.height * sizeof( guchar* ) );
@@ -659,7 +647,7 @@ static void dialog_preview_init( void )
       preview.pixels[y] = (guchar*)g_malloc( preview.width * preview.bpp * sizeof( guchar ) );
     }
   }
-  
+
   {
     pixel_t pixel;
     gint    x, y;
@@ -683,6 +671,10 @@ static void dialog_preview_draw( void )
   gdouble scale_x, scale_y;
   gdouble cx, cy;
   gdouble px, py;
+
+  /* The entries are filled in before the preview exists.  */
+  if( preview.preview == NULL )
+    return;
 
   scale_x = ( parameters.x2 - parameters.x1 ) / preview.width;
   scale_y = ( parameters.y2 - parameters.y1 ) / preview.height;
@@ -723,78 +715,59 @@ static void dialog_preview_draw( void )
 
 /******************************************************************************/
 
+static GtkWidget *dialog_outside_type_button( GtkWidget *group, GtkWidget *box,
+					      const gchar *label, gint32 *value )
+{
+  GtkWidget *button;
+
+  button = gimp_radio_button_new( group, label );
+  gimp_box_pack_start( box, button, FALSE, FALSE, 0 );
+  if( parameters.outside_type == *value )
+    gtk_check_button_set_active( GTK_CHECK_BUTTON( button ), TRUE );
+  g_signal_connect( button, "toggled",
+		    G_CALLBACK( dialog_outside_type_callback ), value );
+
+  return button;
+}
+
 static gint dialog_show( void )
 {
   GtkWidget *dialog;
   GtkWidget *mainbox;
-  
+
   dialog_status = FALSE;
-  
-  {
-    gint    argc = 1;
-    gchar **argv = g_new( gchar *, 1 );
-    argv[0]      = g_strdup( PLUG_IN_TITLE );
-    gtk_init( &argc, &argv );
-    gtk_rc_parse( gimp_gtkrc() );
-  }
 
-  dialog = gtk_dialog_new();
-  gtk_signal_connect( GTK_OBJECT( dialog ), "destroy",
-		      GTK_SIGNAL_FUNC( dialog_destroy_callback ), NULL );
+  gtk_init();
 
-  mainbox = gtk_hbox_new( FALSE, 0 );
-  gtk_container_add( GTK_CONTAINER( GTK_DIALOG( dialog )->vbox ), mainbox );
-  gtk_widget_show( mainbox );
-  
-  {
-    GtkWidget *button;
-    
-    button = gtk_button_new_with_label( "OK" );
-    gtk_signal_connect_object( GTK_OBJECT( button ), "clicked",
-			       GTK_SIGNAL_FUNC( dialog_ok_callback ),
-			       GTK_OBJECT( dialog ) );
-    gtk_box_pack_start( GTK_BOX( GTK_DIALOG( dialog )->action_area ),
-			button, TRUE, TRUE, 0 );
-    GTK_WIDGET_SET_FLAGS( button, GTK_CAN_DEFAULT );
-    gtk_widget_grab_default( button );
-    gtk_widget_show( button );
+  dialog = gimp_dialog_new( PLUG_IN_TITLE );
+  g_signal_connect( dialog, "destroy",
+		    G_CALLBACK( dialog_destroy_callback ), NULL );
 
-    button = gtk_button_new_with_label( "Cancel" );
-    gtk_signal_connect_object( GTK_OBJECT( button ), "clicked",
-			       GTK_SIGNAL_FUNC( dialog_cancel_callback ),
-			       GTK_OBJECT( dialog ) );
-    gtk_box_pack_start( GTK_BOX( GTK_DIALOG( dialog )->action_area ),
-			button, TRUE, TRUE, 0 );
-    gtk_widget_show( button );
+  mainbox = gimp_hbox_new( FALSE, 0 );
+  gimp_box_pack_start( gimp_dialog_get_vbox( dialog ), mainbox, TRUE, TRUE, 0 );
 
-    button = gtk_button_new_with_label( "Help" );
-    gtk_signal_connect_object( GTK_OBJECT( button ), "clicked",
-			       GTK_SIGNAL_FUNC( dialog_help_callback ),
-			       GTK_OBJECT( dialog ) );
-    gtk_box_pack_start( GTK_BOX( GTK_DIALOG( dialog )->action_area ),
-			button, TRUE, TRUE, 0 );
-    gtk_widget_show( button );
-  }
-  
+  gimp_dialog_add_button( dialog, "OK",
+			  G_CALLBACK( dialog_ok_callback ), dialog, TRUE );
+  gimp_dialog_add_button( dialog, "Cancel",
+			  G_CALLBACK( dialog_cancel_callback ), dialog, FALSE );
+  gimp_dialog_add_button( dialog, "Help",
+			  G_CALLBACK( dialog_help_callback ), dialog, FALSE );
+
   {
     GtkWidget *vbox;
     GtkWidget *frame;
-    
-    vbox = gtk_vbox_new( TRUE, 0 );
-    gtk_container_border_width( GTK_CONTAINER( vbox ), 10 );
-    gtk_box_pack_start( GTK_BOX( mainbox ), vbox, FALSE, FALSE, 0 );
-    gtk_widget_show( vbox );
+
+    vbox = gimp_vbox_new( TRUE, 0 );
+    gimp_container_set_border_width( vbox, 10 );
+    gimp_box_pack_start( mainbox, vbox, FALSE, FALSE, 0 );
 
     frame = gtk_frame_new( NULL );
-    gtk_frame_set_shadow_type( GTK_FRAME( frame ), GTK_SHADOW_IN );
-    gtk_box_pack_start( GTK_BOX( vbox ), frame, FALSE, FALSE, 0 );
-    gtk_widget_show( frame );
+    gimp_box_pack_start( vbox, frame, FALSE, FALSE, 0 );
 
     dialog_preview_init();
-    gtk_container_add( GTK_CONTAINER( frame ), preview.preview );
-    gtk_widget_show( preview.preview );
+    gtk_frame_set_child( GTK_FRAME( frame ), preview.preview );
   }
-  
+
   {
     GtkWidget *vbox;
     GtkWidget *entrytable;
@@ -802,90 +775,42 @@ static gint dialog_show( void )
     GtkWidget *frame;
     GtkWidget *framebox;
     GtkWidget *button;
-    GSList    *group;
-    
-    vbox = gtk_vbox_new( FALSE, 0 );
-    gtk_container_border_width( GTK_CONTAINER( vbox ), 10 );
-    gtk_box_pack_start( GTK_BOX( mainbox ), vbox, FALSE, FALSE, 0 );
-    gtk_widget_show( vbox );
+
+    vbox = gimp_vbox_new( FALSE, 0 );
+    gimp_container_set_border_width( vbox, 10 );
+    gimp_box_pack_start( mainbox, vbox, FALSE, FALSE, 0 );
 
     entrytable = dialog_entry_table();
-    gtk_box_pack_start( GTK_BOX( vbox ), entrytable, FALSE, FALSE, 0 );
-    gtk_widget_show( entrytable );
-    
-    separator = gtk_hseparator_new();
-    gtk_box_pack_start( GTK_BOX( vbox ), separator, FALSE, FALSE, 0 );
-    gtk_widget_show( entrytable );
+    gimp_box_pack_start( vbox, entrytable, FALSE, FALSE, 0 );
+
+    separator = gtk_separator_new( GTK_ORIENTATION_HORIZONTAL );
+    gimp_box_pack_start( vbox, separator, FALSE, FALSE, 0 );
 
     frame = gtk_frame_new( "Outside Type" );
-    gtk_container_border_width( GTK_CONTAINER( frame ), 5 );
-    gtk_box_pack_start( GTK_BOX( vbox ), frame, TRUE, TRUE, 0 );
-    gtk_widget_show( frame );
+    gimp_container_set_border_width( frame, 5 );
+    gimp_box_pack_start( vbox, frame, TRUE, TRUE, 0 );
 
-    framebox = gtk_vbox_new( FALSE, 0 );
-    gtk_container_border_width( GTK_CONTAINER( framebox ), 5 );
-    gtk_container_add( GTK_CONTAINER( frame ), framebox );
-    gtk_widget_show( framebox );
+    framebox = gimp_vbox_new( FALSE, 0 );
+    gimp_container_set_border_width( framebox, 5 );
+    gtk_frame_set_child( GTK_FRAME( frame ), framebox );
 
-    group = NULL;
-    
-    button = gtk_radio_button_new_with_label( group, "Wrap" );
-    gtk_box_pack_start( GTK_BOX( framebox ), button, FALSE, FALSE, 0 );
-    gtk_signal_connect( GTK_OBJECT( button ), "toggled",
-			GTK_SIGNAL_FUNC( dialog_outside_type_callback ),
-			&outside_type.wrap );
-    gtk_widget_show( button );
-    if( parameters.outside_type == OUTSIDE_TYPE_WRAP ){
-      gtk_toggle_button_toggled( GTK_TOGGLE_BUTTON( button ) );
-      gtk_toggle_button_set_state( GTK_TOGGLE_BUTTON( button ), TRUE );
-    }
-    group = gtk_radio_button_group( GTK_RADIO_BUTTON( button ) );
-
-    button = gtk_radio_button_new_with_label( group, "Transparent" );
-    gtk_box_pack_start( GTK_BOX( framebox ), button, FALSE, FALSE, 0 );
-    gtk_signal_connect( GTK_OBJECT( button ), "toggled",
-			GTK_SIGNAL_FUNC( dialog_outside_type_callback ),
-			&outside_type.transparent );
-    gtk_widget_show( button );
-    if( parameters.outside_type == OUTSIDE_TYPE_TRANSPARENT ){
-      gtk_toggle_button_toggled( GTK_TOGGLE_BUTTON( button ) );
-      gtk_toggle_button_set_state( GTK_TOGGLE_BUTTON( button ), TRUE );
-    }
+    button = dialog_outside_type_button( NULL, framebox, "Wrap",
+					 &outside_type.wrap );
+    button = dialog_outside_type_button( button, framebox, "Transparent",
+					 &outside_type.transparent );
     if( !image.alpha ){
       gtk_widget_set_sensitive( button, FALSE );
     }
-    group = gtk_radio_button_group( GTK_RADIO_BUTTON( button ) );
-    
-    button = gtk_radio_button_new_with_label( group, "Black" );
-    gtk_box_pack_start( GTK_BOX( framebox ), button, FALSE, FALSE, 0 );
-    gtk_signal_connect( GTK_OBJECT( button ), "toggled",
-			GTK_SIGNAL_FUNC( dialog_outside_type_callback ),
-			&outside_type.black );
-    gtk_widget_show( button );
-    if( parameters.outside_type == OUTSIDE_TYPE_BLACK ){
-      gtk_toggle_button_toggled( GTK_TOGGLE_BUTTON( button ) );
-      gtk_toggle_button_set_state( GTK_TOGGLE_BUTTON( button ), TRUE );
-    }
-    group = gtk_radio_button_group( GTK_RADIO_BUTTON( button ) );
-    
-    button = gtk_radio_button_new_with_label( group, "White" );
-    gtk_box_pack_start( GTK_BOX( framebox ), button, FALSE, FALSE, 0 );
-    gtk_signal_connect( GTK_OBJECT( button ), "toggled",
-			GTK_SIGNAL_FUNC( dialog_outside_type_callback ),
-			&outside_type.white );
-    gtk_widget_show( button );
-    if( parameters.outside_type == OUTSIDE_TYPE_WHITE ){
-      gtk_toggle_button_toggled( GTK_TOGGLE_BUTTON( button ) );
-      gtk_toggle_button_set_state( GTK_TOGGLE_BUTTON( button ), TRUE );
-    }
-    group = gtk_radio_button_group( GTK_RADIO_BUTTON( button ) );
-    
+    button = dialog_outside_type_button( button, framebox, "Black",
+					 &outside_type.black );
+    button = dialog_outside_type_button( button, framebox, "White",
+					 &outside_type.white );
   }
-  
-  gtk_widget_show( dialog );
+
+  gtk_window_present( GTK_WINDOW( dialog ) );
   dialog_preview_draw();
 
-  gtk_main();
+  gimp_main_loop_run();
 
   return dialog_status;
 }

@@ -33,19 +33,14 @@
 
 
 #include <setjmp.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <unistd.h>
-#include <sys/mman.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 
 /* Declare local data types
@@ -71,7 +66,7 @@ static gint   save_image (char   *filename,
 			  gint32  image_ID,
 			  gint32  drawable_ID);
 
-static gint   save_dialog ();
+static gint   save_dialog (void);
 
 static void   save_close_callback      (GtkWidget *widget, gpointer data);
 static void   save_ok_callback         (GtkWidget *widget,
@@ -229,8 +224,8 @@ run (char    *name,
 }
 
 /************ load HRZ image row *********************/
-void
-do_hrz_load(void *mapped, GPixelRgn *pixel_rgn)
+static void
+do_hrz_load(const void *mapped, GPixelRgn *pixel_rgn)
 {
   unsigned char *data, *d;
   int            x, y;
@@ -246,7 +241,7 @@ do_hrz_load(void *mapped, GPixelRgn *pixel_rgn)
       scanlines = end - start;
       d = data;
 
-      memcpy(d, ((unsigned char *) mapped)+256*3*y, 256*3*scanlines); /* this is gross */
+      memcpy(d, ((const unsigned char *) mapped)+256*3*y, 256*3*scanlines); /* this is gross */
       /* scale 0..63 into 0..255 properly */
       for (x=0; x<256*3*scanlines; x++)  d[x] = (d[x]>>4) | (d[x]<<2);
       d += 256*3*y;
@@ -267,10 +262,8 @@ load_image (char *filename)
   gint32 image_ID;
   gint32 layer_ID;
   GDrawable *drawable;
-  int filedes;
   char *temp;
-  void *mapped;  /* memory mapped file data */
-  struct stat statbuf;  /* must check file size */
+  GMappedFile *file;  /* memory mapped file data */
 
   temp = g_malloc (strlen (filename) + 11);
   sprintf (temp, "Loading %s:", filename);
@@ -278,27 +271,20 @@ load_image (char *filename)
   g_free (temp);
 
   /* open the file */
-  filedes = open(filename, O_RDONLY);
-  if (filedes == -1)
+  file = g_mapped_file_new (filename, FALSE, NULL);
+  if (file == NULL)
     {
-      /* errno is set to indicate the error, but the user won't know :-( */
+      /* the GError says why, but the user won't know :-( */
       /*gimp_message("hrz filter: can't open file\n");*/
       return -1;
     }
-  /* stat the file to see if it is the right size */
-  fstat(filedes, &statbuf);
-  if(statbuf.st_size != 256*240*3)
+  /* check the file to see if it is the right size */
+  if (g_mapped_file_get_length (file) != 256*240*3)
     {
       fprintf(stderr, "hrz filter: file is not HRZ type\n");
+      g_mapped_file_unref (file);
       return -1;
     }
-  mapped = mmap(NULL, 256*240*3, PROT_READ, MAP_PRIVATE, filedes, 0);
-  if(mapped == (void *)(-1))
-    {
-      fprintf(stderr, "hrz filter: could not map file\n");
-      return -1;
-    }
-  close (filedes);  /* not needed anymore, data is memory mapped */
 
   /* Create new image of proper size; associate filename */
   image_ID = gimp_image_new (256, 240, RGB);
@@ -313,12 +299,10 @@ load_image (char *filename)
   gimp_pixel_rgn_init (&pixel_rgn, drawable, 0, 0, drawable->width, drawable->height, TRUE, FALSE);
 
 
-  do_hrz_load(mapped, &pixel_rgn);
+  do_hrz_load(g_mapped_file_get_contents (file), &pixel_rgn);
 
   /* close the file */
-#ifndef NeXT /* @#%@! NeXTStep */
-  munmap(mapped, 256*240*3);
-#endif
+  g_mapped_file_unref (file);
 
   /* Tell the GIMP to display the image.
    */
@@ -440,49 +424,27 @@ save_image (char   *filename,
 
 /*********** Save dialog ************/
 static gint
-save_dialog ()
+save_dialog (void)
 {
   GtkWidget *dlg;
   GtkWidget *button;
-  gchar **argv;
-  gint argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("save");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Save as HRZ");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) save_close_callback,
-		      NULL);
+  dlg = gimp_dialog_new ("Save as HRZ");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (save_close_callback), NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) save_ok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (save_ok_callback),
+			  dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_widget_show (dlg);
-
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return psint.run;
 }
@@ -494,7 +456,7 @@ static void
 save_close_callback (GtkWidget *widget,
 		     gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -502,7 +464,7 @@ save_ok_callback (GtkWidget *widget,
 		  gpointer   data)
 {
   psint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 /*
@@ -514,7 +476,7 @@ save_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;

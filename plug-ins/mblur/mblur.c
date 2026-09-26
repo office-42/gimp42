@@ -46,11 +46,10 @@
 
 #include <math.h>
 #include <stdlib.h>
-#include <signal.h>
-#include <unistd.h>
 
 #include <gtk/gtk.h>
 #include <libgimp/gimp.h>
+#include <libgimp/gimpui.h>
 
 #ifndef M_PI
 #define M_PI    3.14159265358979323846
@@ -104,7 +103,7 @@ static void    dialog_ok_callback(GtkWidget *, gpointer);
 static void    dialog_cancel_callback(GtkWidget *, gpointer);
 static void    dialog_help_callback(GtkWidget *, gpointer);
 static void    dialog_scale_update(GtkAdjustment *, gint32 *);
-static void    dialog_toggle_update(GtkWidget *, gint32);
+static void    dialog_toggle_update(GtkWidget *, gpointer);
 
 static gboolean		mblur_dialog(void);
 /***** Variables *****/
@@ -732,101 +731,64 @@ mblur_dialog(void)
   GtkWidget	*button, *label;
 
   GtkWidget	*scale;
-  GtkObject	*adjustment;
+  GtkAdjustment	*adjustment;
 
-  gint 		argc;
-  gchar		**argv;	
+  gtk_init();
 
-  argc    = 1;
-  argv    = g_new(gchar *, 1);
-  argv[0] = g_strdup("whirlpinch");
+  dialog= gimp_dialog_new("Motion blur");
+  g_signal_connect(dialog, "destroy",
+		   G_CALLBACK(dialog_close_callback),
+		   NULL);
 
-  gtk_init(&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gimp_dialog_add_button(dialog, "OK",
+			 G_CALLBACK(dialog_ok_callback), dialog, TRUE);
 
-  gdk_set_use_xshm(gimp_use_xshm());
+  gimp_dialog_add_button(dialog, "Cancel",
+			 G_CALLBACK(dialog_cancel_callback), dialog, FALSE);
 
-  dialog= gtk_dialog_new();
-  gtk_window_set_title(GTK_WINDOW(dialog), "Motion blur");
-  gtk_window_position(GTK_WINDOW(dialog), GTK_WIN_POS_MOUSE);
-  gtk_container_border_width(GTK_CONTAINER(dialog), 0);
-  gtk_signal_connect(GTK_OBJECT(dialog), "destroy",
-		     (GtkSignalFunc) dialog_close_callback,
-		     NULL);
-
-  button = gtk_button_new_with_label("OK");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect(GTK_OBJECT(button), "clicked",
-		     (GtkSignalFunc) dialog_ok_callback,
-		     dialog);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default(button);
-  gtk_widget_show(button);
-
-  button = gtk_button_new_with_label("Cancel");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect(GTK_OBJECT(button), "clicked",
-		     (GtkSignalFunc) dialog_cancel_callback,
-		     dialog);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show(button);
-
-  button = gtk_button_new_with_label("Help");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect(GTK_OBJECT(button), "clicked",
-		     (GtkSignalFunc) dialog_help_callback,
-		     dialog);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->action_area),
-		     button, TRUE, TRUE, 0);
+  button = gimp_dialog_add_button(dialog, "Help",
+				  G_CALLBACK(dialog_help_callback), dialog,
+				  FALSE);
   gtk_widget_set_sensitive(button, FALSE);
-  gtk_widget_show(button);
 
   /********************/
 
-  evbox= gtk_vbox_new(FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (evbox), 5);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->vbox),
+  evbox= gimp_vbox_new(FALSE, 5);
+  gimp_container_set_border_width (evbox, 5);
+  gimp_box_pack_start(gimp_dialog_get_vbox(dialog),
 		      evbox, FALSE,FALSE,0);
 
   oframe= gtk_frame_new("Options");
-  gtk_frame_set_shadow_type(GTK_FRAME(oframe), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start(GTK_BOX(evbox),
-		     oframe, TRUE, TRUE, 0);
-  
-  ovbox= gtk_vbox_new(FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (ovbox), 5);
-  gtk_container_add(GTK_CONTAINER(oframe), ovbox);
+  gimp_box_pack_start(evbox,
+		      oframe, TRUE, TRUE, 0);
+
+  ovbox= gimp_vbox_new(FALSE, 5);
+  gimp_container_set_border_width (ovbox, 5);
+  gtk_frame_set_child(GTK_FRAME(oframe), ovbox);
 
   label=gtk_label_new("Length");
-  gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
-  gtk_box_pack_start(GTK_BOX(ovbox), label, FALSE, FALSE, 0);
-  gtk_widget_show(label);
-  
+  gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+  gtk_box_append(GTK_BOX(ovbox), label);
+
   adjustment = gtk_adjustment_new( mbvals.length, 0.0, 256.0,
 				   1.0, 1.0, 1.0);
-  gtk_signal_connect(adjustment,"value_changed",
-		     (GtkSignalFunc) dialog_scale_update,
-		     &(mbvals.length));
+  g_signal_connect(adjustment,"value-changed",
+		   G_CALLBACK(dialog_scale_update),
+		   &(mbvals.length));
 
-  scale= gtk_hscale_new( GTK_ADJUSTMENT(adjustment));
-  gtk_widget_set_usize(GTK_WIDGET(scale), 150, 30);
-  gtk_range_set_update_policy(GTK_RANGE(scale), GTK_UPDATE_DELAYED);
-  gtk_scale_set_digits(GTK_SCALE(scale), 0);
-  gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
-  gtk_box_pack_start(GTK_BOX(ovbox), scale, FALSE, FALSE,0);
-  gtk_widget_show( scale );
+  scale= gimp_hscale_new(adjustment, 0);
+  gtk_widget_set_size_request(scale, 150, 30);
+  gtk_box_append(GTK_BOX(ovbox), scale);
 
   /*****/
 
   iframe= gtk_frame_new("Blur type");
-  gtk_frame_set_shadow_type(GTK_FRAME(iframe), GTK_SHADOW_ETCHED_IN);
-  gtk_box_pack_start(GTK_BOX(ovbox),
-		     iframe, FALSE, FALSE, 0);
+  gtk_box_append(GTK_BOX(ovbox), iframe);
 
-  ivbox= gtk_vbox_new(FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (ivbox), 5);
-  gtk_container_add(GTK_CONTAINER(iframe), ivbox);
-  
+  ivbox= gimp_vbox_new(FALSE, 5);
+  gimp_container_set_border_width (ivbox, 5);
+  gtk_frame_set_child(GTK_FRAME(iframe), ivbox);
+
   {
     int   i;
     char * name[3]= {"Linear", "Radial", "Zoom"};
@@ -834,54 +796,37 @@ mblur_dialog(void)
     button= NULL;
     for (i=0; i < 3; i++)
       {
-	button= gtk_radio_button_new_with_label(
-           (button==NULL)? NULL :
-	      gtk_radio_button_group(GTK_RADIO_BUTTON(button)), 
-	   name[i]);
-	gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(button), 
+	button= gimp_radio_button_new(button, name[i]);
+	gtk_check_button_set_active(GTK_CHECK_BUTTON(button),
 				    (mbvals.mblur_type==i));
 
-	gtk_signal_connect (GTK_OBJECT (button), "toggled",
-			    (GtkSignalFunc) dialog_toggle_update,
-			    (gpointer) i);
+	g_signal_connect (button, "toggled",
+			  G_CALLBACK(dialog_toggle_update),
+			  GINT_TO_POINTER (i));
 
-	gtk_box_pack_start(GTK_BOX(ivbox), button, FALSE, FALSE,0);
-	gtk_widget_show(button);
+	gtk_box_append(GTK_BOX(ivbox), button);
       }
   }
-
-  gtk_widget_show(ivbox);
-  gtk_widget_show(iframe);
 
   /*****/
 
   label=gtk_label_new("Angle");
-  gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.5);
-  gtk_box_pack_start(GTK_BOX(ovbox), label, FALSE, FALSE, 0);
-  gtk_widget_show(label);
+  gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+  gtk_box_append(GTK_BOX(ovbox), label);
 
   adjustment = gtk_adjustment_new( mbvals.angle, 0.0, 360.0,
 				   1.0, 1.0, 1.0);
-  gtk_signal_connect(adjustment,"value_changed",
-		     (GtkSignalFunc) dialog_scale_update,
-		     &(mbvals.angle));
+  g_signal_connect(adjustment,"value-changed",
+		   G_CALLBACK(dialog_scale_update),
+		   &(mbvals.angle));
 
-  scale= gtk_hscale_new( GTK_ADJUSTMENT(adjustment));
-  gtk_widget_set_usize(GTK_WIDGET(scale), 150, 30);
-  gtk_range_set_update_policy(GTK_RANGE(scale), GTK_UPDATE_DELAYED);
-  gtk_scale_set_digits(GTK_SCALE(scale), 0);
-  gtk_scale_set_draw_value(GTK_SCALE(scale), TRUE);
-  gtk_box_pack_start(GTK_BOX(ovbox), scale, FALSE, FALSE,0);
-  gtk_widget_show( scale );
+  scale= gimp_hscale_new(adjustment, 0);
+  gtk_widget_set_size_request(scale, 150, 30);
+  gtk_box_append(GTK_BOX(ovbox), scale);
 
-  gtk_widget_show(ovbox);
+  gtk_window_present(GTK_WINDOW(dialog));
 
-  gtk_widget_show(oframe);
-  gtk_widget_show(evbox);
-  gtk_widget_show(dialog);
-
-  gtk_main();  
-  gdk_flush();
+  gimp_main_loop_run();
 
   return mb_run;
 }
@@ -889,20 +834,20 @@ mblur_dialog(void)
 static void
 dialog_close_callback(GtkWidget *widget, gpointer data)
 {
-  gtk_main_quit();
+  gimp_main_loop_quit();
 }
 
 static void
 dialog_ok_callback(GtkWidget *widget, gpointer data)
 {
   mb_run= TRUE;
-  gtk_widget_destroy(GTK_WIDGET(data));
+  gtk_window_destroy(GTK_WINDOW(data));
 }
 
 static void
 dialog_cancel_callback(GtkWidget *widget, gpointer data)
 {
-  gtk_widget_destroy(GTK_WIDGET(data));
+  gtk_window_destroy(GTK_WINDOW(data));
 }
 
 static void
@@ -915,12 +860,12 @@ dialog_help_callback(GtkWidget *widget, gpointer data)
 static void
 dialog_scale_update(GtkAdjustment *adjustment, gint32 *value)
 {
-  *value= adjustment->value;
+  *value= gtk_adjustment_get_value(adjustment);
 }
 
 static void
-dialog_toggle_update(GtkWidget *widget, gint32 value)
+dialog_toggle_update(GtkWidget *widget, gpointer data)
 {
-   if (GTK_TOGGLE_BUTTON (widget)->active)
-     mbvals.mblur_type= value;
+   if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
+     mbvals.mblur_type= GPOINTER_TO_INT (data);
 }

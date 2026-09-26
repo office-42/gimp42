@@ -33,8 +33,9 @@ static char ident[] = "@(#) GIMP FITS file-plugin v1.05  20-Dec-97";
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 #include "fitsrw.h"
 
 /* Load info */
@@ -952,9 +953,8 @@ load_dialog (void)
   GtkWidget *toggle;
   GtkWidget *frame;
   GtkWidget *toggle_vbox;
-  GSList *group;
-  gchar **argv;
-  gint argc, k, j;
+  GtkWidget *group;
+  gint k, j;
   char **textptr;
   static char *toggle_text[] = {
     "BLANK/NaN pixel replacement", "Black", "White",
@@ -963,12 +963,7 @@ load_dialog (void)
   };
 
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("Load");
-
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
   vals = g_malloc (sizeof (*vals));
 
   vals->toggle_val[0] = (plvals.replace == 0);
@@ -978,66 +973,45 @@ load_dialog (void)
   vals->toggle_val[4] = (plvals.compose == 0);
   vals->toggle_val[5] = !(vals->toggle_val[4]);
 
-  vals->dialog = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (vals->dialog), "Load FITS");
-  gtk_window_position (GTK_WINDOW (vals->dialog), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (vals->dialog), "destroy",
-                      (GtkSignalFunc) load_close_callback,
-                      NULL);
+  vals->dialog = gimp_dialog_new ("Load FITS");
+  g_signal_connect (vals->dialog, "destroy",
+                    G_CALLBACK (load_close_callback), NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) load_ok_callback,
-                      vals);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dialog)->action_area), button,
-                      TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-                             (GtkSignalFunc) gtk_widget_destroy,
-                             GTK_OBJECT (vals->dialog));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dialog)->action_area), button,
-                      TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (vals->dialog, "OK",
+                          G_CALLBACK (load_ok_callback), vals, TRUE);
+  button = gimp_dialog_add_button (vals->dialog, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+                            G_CALLBACK (gtk_window_destroy), vals->dialog);
 
   textptr = toggle_text;
   for (k = 0; k < LOAD_FITS_TOGGLES; k++)
   {
     frame = gtk_frame_new (*(textptr++));
-    gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-    gtk_container_border_width (GTK_CONTAINER (frame), 10);
-    gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dialog)->vbox),
-                        frame, FALSE, TRUE, 0);
-    toggle_vbox = gtk_vbox_new (FALSE, 5);
-    gtk_container_border_width (GTK_CONTAINER (toggle_vbox), 5);
-    gtk_container_add (GTK_CONTAINER (frame), toggle_vbox);
+    gimp_container_set_border_width (frame, 10);
+    gimp_box_pack_start (gimp_dialog_get_vbox (vals->dialog),
+                         frame, FALSE, TRUE, 0);
+    toggle_vbox = gimp_vbox_new (FALSE, 5);
+    gimp_container_set_border_width (toggle_vbox, 5);
+    gtk_frame_set_child (GTK_FRAME (frame), toggle_vbox);
 
     group = NULL;
     for (j = 0; j < 2; j++)
     {
-      toggle = gtk_radio_button_new_with_label (group, *(textptr++));
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-      gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-                          (GtkSignalFunc) load_toggle_update,
-                          &(vals->toggle_val[k*2+j]));
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle),
+      toggle = gimp_radio_button_new (group, *(textptr++));
+      group = toggle;
+      gtk_box_append (GTK_BOX (toggle_vbox), toggle);
+      g_signal_connect (toggle, "toggled",
+                        G_CALLBACK (load_toggle_update),
+                        &(vals->toggle_val[k*2+j]));
+      gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle),
                                    vals->toggle_val[k*2+j]);
-      gtk_widget_show (toggle);
     }
-    gtk_widget_show (toggle_vbox);
-    gtk_widget_show (frame);
   }
 
-  gtk_widget_show (vals->dialog);
+  gtk_window_present (GTK_WINDOW (vals->dialog));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   g_free (vals);
 
@@ -1050,7 +1024,7 @@ load_close_callback (GtkWidget *widget,
                      gpointer   data)
 
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 
@@ -1070,7 +1044,7 @@ load_ok_callback (GtkWidget *widget,
   plvals.compose = vals->toggle_val[5];
 
   plint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (vals->dialog));
+  gtk_window_destroy (GTK_WINDOW (vals->dialog));
 }
 
 
@@ -1083,7 +1057,7 @@ load_toggle_update (GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = 1;
   else
     *toggle_val = 0;

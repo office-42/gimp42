@@ -21,8 +21,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 /* Variables set in dialog box */
 typedef struct data {
@@ -74,7 +75,7 @@ static int inblock(int pos, int size);
 MAIN ()
 
 static void
-query ()
+query (void)
 {
   static GParamDef args[] =
   {
@@ -343,7 +344,7 @@ inblock( gint pos, gint size)
 
 
 static gint
-check_dialog ()
+check_dialog (void)
 {
   GtkWidget *dlg;
   GtkWidget *button;
@@ -352,82 +353,49 @@ check_dialog ()
   GtkWidget *label;
   GtkWidget *toggle;
   GtkWidget *slider;
-  GtkObject *size_data;
-  gchar **argv;
-  gint argc;
+  GtkAdjustment *size_data;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("whirl");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Checkerboard");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) check_close_callback,
-		      NULL);
+  dlg = gimp_dialog_new ("Checkerboard");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (check_close_callback), NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) check_ok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (check_ok_callback),
+			  dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Parameter Settings");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  table = gtk_table_new (5, 5, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  table = gimp_table_new (5, 5, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gtk_frame_set_child (GTK_FRAME (frame), table);
 
   toggle = gtk_check_button_new_with_label ("Psychobilly");
-  gtk_table_attach (GTK_TABLE (table), toggle, 0, 1, 0, 1, GTK_FILL | GTK_EXPAND, GTK_FILL, 5, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) check_toggle_update,
-		      &cvals.mode);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), cvals.mode);
-  gtk_widget_show (toggle);
+  gimp_table_attach (table, toggle, 0, 1, 0, 1, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 5, 0);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (check_toggle_update), &cvals.mode);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), cvals.mode);
 
   label = gtk_label_new ("Check Size");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.5, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 3, 4, GTK_FILL | GTK_EXPAND, GTK_FILL, 0, 0);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.5);
+  gimp_table_attach (table, label, 0, 1, 3, 4, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 0, 0);
 
   size_data = gtk_adjustment_new (cvals.size, 1, 400, 1, 1, 0);
-  slider = gtk_hscale_new (GTK_ADJUSTMENT (size_data));
-  gtk_widget_set_usize (slider, 300, 0);
-  gtk_table_attach (GTK_TABLE (table), slider, 0, 1, 4, 5, GTK_FILL | GTK_EXPAND, GTK_FILL, 0, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (slider), GTK_POS_TOP);
-  gtk_scale_set_digits (GTK_SCALE (slider), 0);
-  gtk_range_set_update_policy (GTK_RANGE (slider), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (size_data), "value_changed",
-		      (GtkSignalFunc) check_slider_update,
-		      &cvals.size);
-  gtk_widget_show (slider);
+  slider = gimp_hscale_new (size_data, 0);
+  gtk_widget_set_size_request (slider, 300, -1);
+  gimp_table_attach (table, slider, 0, 1, 4, 5, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 0, 0);
+  g_signal_connect (size_data, "value-changed",
+		    G_CALLBACK (check_slider_update), &cvals.size);
 
-  gtk_widget_show (frame);
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return cint.run;
 }
@@ -436,7 +404,7 @@ static void
 check_slider_update (GtkAdjustment *adjustment,
 		     gint        *size_val)
 {
-  *size_val = adjustment->value;
+  *size_val = gtk_adjustment_get_value (adjustment);
 }
 
 
@@ -448,7 +416,7 @@ check_toggle_update (GtkWidget *widget,
 
   toggle_val = (gint *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -458,7 +426,7 @@ static void
 check_close_callback (GtkWidget *widget,
 			 gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -466,5 +434,5 @@ check_ok_callback (GtkWidget *widget,
 		      gpointer   data)
 {
   cint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }

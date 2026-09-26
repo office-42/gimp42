@@ -11,6 +11,7 @@
 #include <aalib.h>
 #include <string.h>
 #include <libgimp/gimp.h>
+#include "libgimp/gimpui.h"
 #include <gtk/gtk.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,7 +90,7 @@ MAIN()
 static int get_type_from_string(char *string)
 {
 	int type = 0;
-	aa_format **p = aa_formats;
+	const aa_format *const *p = aa_formats;
 
 	while (*p && strcmp((*p)->formatname, string)) {
 		p++;
@@ -261,86 +262,59 @@ static gint aa_savable(gint32 drawable_ID)
 
 static gint type_dialog(int selected) {
 	GtkWidget *dlg;
-	GtkWidget *button;
 	GtkWidget *toggle;
 	GtkWidget *frame;
 	GtkWidget *toggle_vbox;
-	GSList *group;
-	gchar **argv;
-	gint argc;
+	GtkWidget *group;
 
-	argc = 1;
-	argv = g_new(gchar *, 1);
-	argv[0] = g_strdup("save");
 
-	gtk_init(&argc, &argv);
-	gtk_rc_parse(gimp_gtkrc());
+	gtk_init ();
 
 	/* Create the actual window. */
-	dlg = gtk_dialog_new();
-	gtk_window_set_title(GTK_WINDOW(dlg), "Save as text");
-	gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-	gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-										 (GtkSignalFunc) type_dialog_close_callback, NULL);
+	dlg = gimp_dialog_new ("Save as text");
+	g_signal_connect (dlg, "destroy",
+										 G_CALLBACK (type_dialog_close_callback), NULL);
 
 	/*  Action area  */
-	button = gtk_button_new_with_label("OK");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect(GTK_OBJECT(button), "clicked",
-										 (GtkSignalFunc) type_dialog_ok_callback, dlg);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button,
-										 TRUE, TRUE, 0);
-	gtk_widget_grab_default(button);
-	gtk_widget_show(button);
-
-	button = gtk_button_new_with_label("Cancel");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-											 (GtkSignalFunc) type_dialog_cancel_callback,
-											 GTK_OBJECT(dlg));
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button,
-										 TRUE, TRUE, 0);
-	gtk_widget_show(button);
+	gimp_dialog_add_button (dlg, "OK", G_CALLBACK (type_dialog_ok_callback),
+				dlg, TRUE);
+	gimp_dialog_add_button (dlg, "Cancel",
+				G_CALLBACK (type_dialog_cancel_callback), dlg, FALSE);
 
 	/*  file save type  */
 	frame = gtk_frame_new("Data Formatting");
-	gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-	gtk_container_border_width(GTK_CONTAINER(frame), 10);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), frame, FALSE, TRUE, 0);
-	toggle_vbox = gtk_vbox_new(FALSE, 5);
-	gtk_container_border_width(GTK_CONTAINER(toggle_vbox), 5);
-	gtk_container_add(GTK_CONTAINER(frame), toggle_vbox);
+	gimp_container_set_border_width (frame, 10);
+	gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, FALSE, TRUE, 0);
+	toggle_vbox = gimp_vbox_new(FALSE, 5);
+	gimp_container_set_border_width (toggle_vbox, 5);
+	gimp_container_add (frame, toggle_vbox);
 
 	group = NULL;
 	{
-		aa_format **p = aa_formats;
+		const aa_format *const *p = aa_formats;
 		int current = 0;
 
 		while (*p != NULL) {
-			toggle = gtk_radio_button_new_with_label(group, (*p)->formatname);
-			group = gtk_radio_button_group(GTK_RADIO_BUTTON(toggle));
-  		gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-			gtk_signal_connect(GTK_OBJECT(toggle), "toggled",
-												 (GtkSignalFunc) type_dialog_toggle_update,
-												 (*p)->formatname);
+			toggle = gimp_radio_button_new (group, (*p)->formatname);
+			group = toggle;
+			gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+			g_signal_connect (toggle, "toggled",
+			  G_CALLBACK (type_dialog_toggle_update),
+			  (gpointer) (*p)->formatname);
 			if (current == selected)
-				gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), 1);
+				gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), 1);
 			else
-				gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), 0);
+				gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), 0);
 
-			gtk_widget_show(toggle);
 			p++;
 			current++;
 		}
 	}
 
-	gtk_widget_show(toggle_vbox);
-	gtk_widget_show(frame);
 
-	gtk_widget_show(dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-	gtk_main();
-	gdk_flush();
+	gimp_main_loop_run ();
 
 	return selected_type;
 }
@@ -350,16 +324,16 @@ static gint type_dialog(int selected) {
  */
 
 static void type_dialog_close_callback(GtkWidget *widget, gpointer data) {
-  gtk_main_quit();
+  gimp_main_loop_quit ();
 }
 
 static void type_dialog_ok_callback (GtkWidget *widget, gpointer   data) {
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void type_dialog_cancel_callback (GtkWidget *widget, gpointer   data) {
 	selected_type = -1;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void type_dialog_toggle_update (GtkWidget *widget, gpointer data) {

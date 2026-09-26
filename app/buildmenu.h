@@ -18,12 +18,9 @@
 #ifndef __BUILDMENU_H__
 #define __BUILDMENU_H__
 
-#define PULLDOWN   0
-#define POPUP      1
-#define OPTION     2
+#include <gtk/gtk.h>
 
 /* Structures */
-
 typedef struct _MenuItem   MenuItem;
 
 typedef void (*MenuItemCallback) (GtkWidget *widget,
@@ -32,16 +29,29 @@ typedef void (*MenuItemCallback) (GtkWidget *widget,
 struct _MenuItem
 {
   char *label;
-  char  accelerator_key;
-  int   accelerator_mods;
+  char  accelerator_key;          /*  unused  */
+  int   accelerator_mods;         /*  unused  */
   MenuItemCallback callback;
   gpointer user_data;
-  MenuItem *subitems;
-  GtkWidget *widget;
+  MenuItem *subitems;             /*  unused  */
+  GtkWidget *widget;              /*  the option menu the item is in  */
+  int index;                      /*  its position there              */
 };
 
-
 /* Function declarations */
-GtkWidget *  build_menu (MenuItem *, GtkAccelGroup *);
+
+/*  Builds an option menu (see gimp_option_menu_new) from items, which
+ *  end with one whose label is NULL.  Labels starting with '-' were
+ *  separators and are left out.  Choosing an item calls its callback
+ *  with the option menu and the item's user_data.  Pack the result
+ *  directly; there is no separate GtkOptionMenu any more.
+ */
+GtkWidget *  build_menu (MenuItem *items, gpointer unused);
+
+/*  Makes one item of such a menu (in)sensitive.  */
+void         menu_item_set_sensitive (MenuItem *item, int sensitive);
+
+/*  Shows item as the chosen one, without calling its callback.  */
+void         menu_item_set_active (MenuItem *item);
 
 #endif /* BUILDMENU_H */

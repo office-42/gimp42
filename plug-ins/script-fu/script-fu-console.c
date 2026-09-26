@@ -19,10 +19,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <dirent.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include "gdk/gdkkeysyms.h"
+#include <glib/gstdio.h>
 #include "gtk/gtk.h"
 #include "libgimp/gimp.h"
 #include "libgimp/gimpui.h"
@@ -38,16 +35,12 @@
 
 typedef struct
 {
-  GtkWidget *console;
-  GtkWidget *cc;
-  GtkAdjustment *vadj;
+  GtkWidget     *console;
+  GtkWidget     *cc;
+  GtkTextBuffer *buffer;
+  GtkTextMark   *end_mark;
 
-  GdkFont   *font_strong;
-  GdkFont   *font_emphasis;
-  GdkFont   *font_weak;
-  GdkFont   *font;
-
-  gint32     input_id;
+  GtkWidget     *browser;
 } ConsoleInterface;
 
 /*
@@ -59,12 +52,15 @@ static void  script_fu_close_callback    (GtkWidget        *widget,
 					  gpointer          data);
 static void  script_fu_browse_callback    (GtkWidget        *widget,
 					  gpointer          data);
-static void  script_fu_siod_read         (gpointer          data,
-					  gint              id,
-					  GdkInputCondition cond);
+static void  script_fu_siod_read         (void);
+static void  script_fu_console_insert    (const gchar      *text,
+					  const gchar      *tag);
+static void  script_fu_console_scroll_end (void);
 static gint  script_fu_cc_is_empty       (void);
-static gint  script_fu_cc_key_function   (GtkWidget         *widget,
-					  GdkEventKey       *event,
+static gboolean script_fu_cc_key_function (GtkEventControllerKey *controller,
+					  guint              keyval,
+					  guint              keycode,
+					  GdkModifierType    state,
 					  gpointer           data);
 
 static FILE *script_fu_open_siod_console (void);
@@ -78,23 +74,26 @@ static ConsoleInterface cint =
 {
   NULL,  /*  console  */
   NULL,  /*  current command  */
-  NULL,  /*  vertical adjustment  */
+  NULL,  /*  text buffer  */
+  NULL,  /*  end of text mark  */
 
-  NULL,  /*  strong font  */
-  NULL,  /*  emphasis font  */
-  NULL,  /*  weak font  */
-  NULL,  /*  normal font  */
-
-  -1     /*  input id  */
+  NULL   /*  procedure browser  */
 };
 
-static char   read_buffer[BUFSIZE];
 static GList *history = NULL;
 static int    history_len = 0;
 static int    history_cur = 0;
 static int    history_max = 50;
 
-static int   siod_output_pipe[2];
+/*  SIOD writes its output to a FILE.  For the console that is a temporary
+ *  file, and whatever was written since the last look is copied into the
+ *  console after each evaluation (the interpreter runs in this thread, so
+ *  it could not be read any earlier).  This replaces the pipe the output
+ *  used to go through, which could fill up and block.
+ */
+static gchar *siod_output_name = NULL;
+static long   siod_output_read = 0;
+
 extern int   siod_verbose_level;
 extern char  siod_err_msg[];
 extern FILE *siod_output;
@@ -153,172 +152,145 @@ script_fu_console_interface ()
   GtkWidget *dlg;
   GtkWidget *button;
   GtkWidget *label;
-  GtkWidget *vsb;
-  GtkWidget *table;
+  GtkWidget *scrolled_window;
   GtkWidget *hbox;
-  gchar **argv;
-  gint argc;
+  GtkEventController *controller;
+  GtkTextIter iter;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("script-fu");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Script-Fu Console");
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) script_fu_close_callback,
-		      NULL);
-  gtk_signal_connect (GTK_OBJECT (dlg),
-		      "destroy",
-		      GTK_SIGNAL_FUNC (gtk_widget_destroyed),
-		      &dlg);
-  gtk_container_border_width (GTK_CONTAINER (GTK_DIALOG (dlg)->vbox), 2);
-  gtk_container_border_width (GTK_CONTAINER (GTK_DIALOG (dlg)->action_area), 2);
+  dlg = gimp_dialog_new ("Script-Fu Console");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (script_fu_close_callback),
+		    NULL);
+  g_object_add_weak_pointer (G_OBJECT (dlg), (gpointer *) &dlg);
+  gimp_container_set_border_width (gimp_dialog_get_vbox (dlg), 2);
+  gimp_container_set_border_width (gimp_dialog_get_action_area (dlg), 2);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("Close");
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) script_fu_close_callback,
-                      NULL);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "Close",
+			  G_CALLBACK (script_fu_close_callback), NULL, FALSE);
 
   /*  The info vbox  */
   label = gtk_label_new ("SIOD Output");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), label, FALSE, TRUE, 0);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), label, FALSE, TRUE, 0);
 
   /*  The output text widget  */
-  cint.vadj = GTK_ADJUSTMENT (gtk_adjustment_new (0.0, 0.0, 0.0, 0.0, 0.0, 0.0));
-  vsb = gtk_vscrollbar_new (cint.vadj);
-  cint.console = gtk_text_new (NULL, cint.vadj);
-  gtk_text_set_editable (GTK_TEXT (cint.console), FALSE);
-  gtk_widget_set_usize (cint.console, TEXT_WIDTH, TEXT_HEIGHT);
+  scrolled_window = gtk_scrolled_window_new ();
+  gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolled_window),
+				  GTK_POLICY_NEVER, GTK_POLICY_ALWAYS);
+  gimp_container_set_border_width (scrolled_window, 2);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), scrolled_window,
+		       TRUE, TRUE, 0);
 
-  table  = gtk_table_new (1, 2, FALSE);
-  gtk_table_set_col_spacing (GTK_TABLE (table), 0, 2);
+  cint.console = gtk_text_view_new ();
+  gtk_text_view_set_editable (GTK_TEXT_VIEW (cint.console), FALSE);
+  gtk_text_view_set_cursor_visible (GTK_TEXT_VIEW (cint.console), FALSE);
+  gtk_text_view_set_wrap_mode (GTK_TEXT_VIEW (cint.console), GTK_WRAP_CHAR);
+  gtk_widget_set_size_request (cint.console, TEXT_WIDTH, TEXT_HEIGHT);
+  gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolled_window),
+				 cint.console);
 
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), table, TRUE, TRUE, 0);
+  /*  The fonts the text used to be drawn in  */
+  cint.buffer = gtk_text_view_get_buffer (GTK_TEXT_VIEW (cint.console));
+  gtk_text_buffer_create_tag (cint.buffer, "strong",
+			      "family", "Sans",
+			      "weight", PANGO_WEIGHT_BOLD,
+			      "scale", 1.2,
+			      NULL);
+  gtk_text_buffer_create_tag (cint.buffer, "emphasis",
+			      "family", "Sans",
+			      "style", PANGO_STYLE_OBLIQUE,
+			      NULL);
+  gtk_text_buffer_create_tag (cint.buffer, "weak",
+			      "family", "Sans",
+			      NULL);
+  gtk_text_buffer_create_tag (cint.buffer, "normal",
+			      "family", "Monospace",
+			      NULL);
 
-  gtk_table_attach (GTK_TABLE (table), vsb, 1, 2, 0, 1,
-		    0, GTK_EXPAND | GTK_SHRINK | GTK_FILL, 0, 0);
-  gtk_table_attach (GTK_TABLE (table), cint.console, 0, 1, 0, 1,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL,
-		    GTK_EXPAND | GTK_SHRINK | GTK_FILL, 0, 0);
+  gtk_text_buffer_get_end_iter (cint.buffer, &iter);
+  cint.end_mark = gtk_text_buffer_create_mark (cint.buffer, "end", &iter,
+					       FALSE);
 
-  gtk_container_border_width (GTK_CONTAINER (table), 2);
-
-  cint.font_strong = gdk_font_load ("-*-helvetica-bold-r-normal-*-*-120-*-*-*-*-*-*");
-  cint.font_emphasis = gdk_font_load ("-*-helvetica-medium-o-normal-*-*-100-*-*-*-*-*-*");
-  cint.font_weak = gdk_font_load ("-*-helvetica-medium-r-normal-*-*-100-*-*-*-*-*-*");
-  cint.font = gdk_font_load ("-*-*-medium-r-normal-*-*-100-*-*-c-*-*-*");
-
-  /*  Realize the widget before allowing new text to be inserted  */
-  gtk_widget_realize (cint.console);
-
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_strong, NULL, NULL,
-		   "The GIMP - GNU Image Manipulation Program\n\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_emphasis, NULL, NULL,
-		   "Copyright (C) 1995 Spencer Kimball and Peter Mattis\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "This program is free software; you can redistribute it and/or modify\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "it under the terms of the GNU General Public License as published by\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "the Free Software Foundation; either version 2 of the License, or\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "(at your option) any later version.\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "This program is distributed in the hope that it will be useful,\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "but WITHOUT ANY WARRANTY; without even the implied warranty of\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "See the GNU General Public License for more details.\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "You should have received a copy of the GNU General Public License\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "along with this program; if not, write to the Free Software\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL,
-		   "\n\n", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_strong, NULL, NULL,
-		   "Script-Fu Console - ", -1);
-  gtk_text_insert (GTK_TEXT (cint.console), cint.font_emphasis, NULL, NULL,
-		   "Interactive Scheme Development\n\n", -1);
-
-  gtk_widget_show (vsb);
-  gtk_widget_show (cint.console);
-  gtk_widget_show (table);
+  script_fu_console_insert ("The GIMP - GNU Image Manipulation Program\n\n", "strong");
+  script_fu_console_insert ("Copyright (C) 1995 Spencer Kimball and Peter Mattis\n", "emphasis");
+  script_fu_console_insert ("\n", "weak");
+  script_fu_console_insert ("This program is free software; you can redistribute it and/or modify\n", "weak");
+  script_fu_console_insert ("it under the terms of the GNU General Public License as published by\n", "weak");
+  script_fu_console_insert ("the Free Software Foundation; either version 2 of the License, or\n", "weak");
+  script_fu_console_insert ("(at your option) any later version.\n", "weak");
+  script_fu_console_insert ("\n", "weak");
+  script_fu_console_insert ("This program is distributed in the hope that it will be useful,\n", "weak");
+  script_fu_console_insert ("but WITHOUT ANY WARRANTY; without even the implied warranty of\n", "weak");
+  script_fu_console_insert ("MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n", "weak");
+  script_fu_console_insert ("See the GNU General Public License for more details.\n", "weak");
+  script_fu_console_insert ("\n", "weak");
+  script_fu_console_insert ("You should have received a copy of the GNU General Public License\n", "weak");
+  script_fu_console_insert ("along with this program; if not, write to the Free Software\n", "weak");
+  script_fu_console_insert ("Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.\n", "weak");
+  script_fu_console_insert ("\n\n", "weak");
+  script_fu_console_insert ("Script-Fu Console - ", "strong");
+  script_fu_console_insert ("Interactive Scheme Development\n\n", "emphasis");
 
   /*  The current command  */
   label = gtk_label_new ("Current Command");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), label, FALSE, TRUE, 0);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), label, FALSE, TRUE, 0);
 
-  hbox = gtk_hbox_new ( FALSE, 0 );
-  gtk_widget_set_usize (hbox, ENTRY_WIDTH, 0);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), hbox, FALSE, TRUE, 0);
-  gtk_widget_show (hbox);
-    
+  hbox = gimp_hbox_new (FALSE, 0);
+  gtk_widget_set_size_request (hbox, ENTRY_WIDTH, -1);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), hbox, FALSE, TRUE, 0);
+
   cint.cc = gtk_entry_new ();
-  
-  gtk_box_pack_start (GTK_BOX (hbox), cint.cc, 
-		      TRUE, TRUE, 0);
-  gtk_widget_set_usize (cint.cc, (ENTRY_WIDTH*5)/6, 0); 
-  GTK_WIDGET_SET_FLAGS (cint.cc, GTK_CAN_DEFAULT);
-  gtk_widget_grab_default (cint.cc);
-  gtk_signal_connect (GTK_OBJECT (cint.cc), "key_press_event",
-		      (GtkSignalFunc) script_fu_cc_key_function,
-		      NULL);
+
+  gimp_box_pack_start (hbox, cint.cc, TRUE, TRUE, 0);
+  gtk_widget_set_size_request (cint.cc, (ENTRY_WIDTH*5)/6, -1);
+
+  /*  Seen before the entry's own key handling, for Return and history  */
+  controller = gtk_event_controller_key_new ();
+  gtk_event_controller_set_propagation_phase (controller, GTK_PHASE_CAPTURE);
+  g_signal_connect (controller, "key-pressed",
+		    G_CALLBACK (script_fu_cc_key_function),
+		    NULL);
+  gtk_widget_add_controller (cint.cc, controller);
 
   button = gtk_button_new_with_label ("Browse...");
-  gtk_widget_set_usize (button, (ENTRY_WIDTH)/6, 0);
-  gtk_box_pack_start (GTK_BOX (hbox), button, 
-		      FALSE, TRUE, 0);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-		      (GtkSignalFunc) script_fu_browse_callback,
-		      NULL);
-  gtk_widget_show (button);
-  gtk_widget_show (cint.cc);
+  gtk_widget_set_size_request (button, (ENTRY_WIDTH)/6, -1);
+  gimp_box_pack_start (hbox, button, FALSE, TRUE, 0);
+  g_signal_connect (button, "clicked",
+		    G_CALLBACK (script_fu_browse_callback),
+		    NULL);
 
-  cint.input_id = gdk_input_add (siod_output_pipe[0],
-				 GDK_INPUT_READ,
-				 script_fu_siod_read,
-				 NULL);
+  /*  Whatever SIOD printed so far (the welcome message)  */
+  script_fu_siod_read ();
 
   /*  Initialize the history  */
   history = g_list_append (history, NULL);
   history_len = 1;
 
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
+  gtk_widget_grab_focus (cint.cc);
 
-  gtk_main ();
+  gimp_main_loop_run ();
 
-  gdk_input_remove (cint.input_id);
+  if (cint.browser)
+    gimp_widget_destroy (cint.browser);
   if (dlg)
-    gtk_widget_destroy (dlg);
-  gdk_flush ();
+    gtk_window_destroy (GTK_WINDOW (dlg));
+
+  cint.console = NULL;
+  cint.cc = NULL;
+  cint.buffer = NULL;
+  cint.end_mark = NULL;
 }
 
 static void
 script_fu_close_callback (GtkWidget *widget,
 			  gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 void apply_callback( gchar *proc_name,
@@ -334,70 +306,103 @@ void apply_callback( gchar *proc_name,
 			   GParamDef *params,
 			   GParamDef *return_vals )
 {
+  GString *text;
   gint i;
 
   if (proc_name==NULL) return;
-  gtk_widget_hide(cint.cc);
-  gtk_entry_set_text( GTK_ENTRY(cint.cc), "(" );
-  gtk_entry_append_text( GTK_ENTRY(cint.cc), scheme_proc_name );
-  if ((nparams==0) || (params==NULL)) return;
-  for (i=0;i<nparams;i++) {
-    gtk_entry_append_text( GTK_ENTRY(cint.cc), " " );
-    gtk_entry_append_text( GTK_ENTRY(cint.cc), params[i].name);
-  }
-  gtk_entry_append_text( GTK_ENTRY(cint.cc), ")" );
-  gtk_widget_show(cint.cc);
+  if (cint.cc == NULL) return;
+
+  text = g_string_new ("(");
+  g_string_append (text, scheme_proc_name);
+  if ((nparams!=0) && (params!=NULL))
+    {
+      for (i=0;i<nparams;i++) {
+	g_string_append (text, " ");
+	g_string_append (text, params[i].name);
+      }
+      g_string_append (text, ")");
+    }
+  gtk_editable_set_text (GTK_EDITABLE (cint.cc), text->str);
+  g_string_free (text, TRUE);
 }
 
 static void
 script_fu_browse_callback(GtkWidget *widget,
 			  gpointer   data)
 {
-  gtk_quit_add_destroy (1, (GtkObject*) gimp_db_browser (apply_callback));
-}
+  /*  The browser goes away with the console  */
+  if (cint.browser)
+    gimp_widget_destroy (cint.browser);
 
-static gint
-script_fu_console_scroll_end (gpointer data)
-{
-  /* The Text widget in 1.0.1 doesn't like being scrolled before
-   * it is size-allocated, so we wait for it
-   */
-  if ((cint.console->allocation.width > 1) && 
-      (cint.console->allocation.height > 1))
-    {
-      cint.vadj->value = cint.vadj->upper - cint.vadj->page_size;
-      gtk_signal_emit_by_name (GTK_OBJECT (cint.vadj), "changed");
-    }
-  else
-    gtk_idle_add (script_fu_console_scroll_end, NULL);
-  
-  return FALSE;
+  cint.browser = gimp_db_browser (apply_callback);
+  if (cint.browser)
+    g_object_add_weak_pointer (G_OBJECT (cint.browser),
+			       (gpointer *) &cint.browser);
 }
 
 static void
-script_fu_siod_read (gpointer          data,
-		     gint              id,
-		     GdkInputCondition cond)
+script_fu_console_insert (const gchar *text,
+			  const gchar *tag)
 {
-  int count;
+  GtkTextIter iter;
+  gchar      *valid;
 
-  if ((count = read (id, read_buffer, BUFSIZE - 1)) != 0)
+  valid = g_utf8_make_valid (text, -1);
+
+  gtk_text_buffer_get_end_iter (cint.buffer, &iter);
+  gtk_text_buffer_insert_with_tags_by_name (cint.buffer, &iter, valid, -1,
+					    tag, NULL);
+  g_free (valid);
+}
+
+static void
+script_fu_console_scroll_end (void)
+{
+  GtkTextIter iter;
+
+  gtk_text_buffer_get_end_iter (cint.buffer, &iter);
+  gtk_text_buffer_move_mark (cint.buffer, cint.end_mark, &iter);
+  gtk_text_view_scroll_to_mark (GTK_TEXT_VIEW (cint.console), cint.end_mark,
+				0.0, FALSE, 0.0, 1.0);
+}
+
+/*  Copies what SIOD wrote since the last call into the console.  */
+static void
+script_fu_siod_read (void)
+{
+  char   read_buffer[BUFSIZE];
+  size_t count;
+  gboolean any = FALSE;
+
+  if (siod_output == stdout || siod_output == NULL || cint.buffer == NULL)
+    return;
+
+  fflush (siod_output);
+  if (fseek (siod_output, siod_output_read, SEEK_SET) == 0)
     {
-      read_buffer[count] = '\0';
-      gtk_text_freeze (GTK_TEXT (cint.console));
-      gtk_text_insert (GTK_TEXT (cint.console), cint.font_weak, NULL, NULL, read_buffer, -1);
-      gtk_text_thaw (GTK_TEXT (cint.console));
+      while ((count = fread (read_buffer, 1, BUFSIZE - 1, siod_output)) > 0)
+	{
+	  read_buffer[count] = '\0';
+	  script_fu_console_insert (read_buffer, "weak");
+	  any = TRUE;
+	}
 
-      script_fu_console_scroll_end (NULL);
+      siod_output_read = ftell (siod_output);
     }
+
+  /*  Further output is appended  */
+  fseek (siod_output, 0, SEEK_END);
+
+  if (any)
+    script_fu_console_scroll_end ();
 }
 
 static gint
 script_fu_cc_is_empty ()
 {
-  char *str;
+  const char *str;
 
-  if ((str = gtk_entry_get_text (GTK_ENTRY (cint.cc))) == NULL)
+  if ((str = gtk_editable_get_text (GTK_EDITABLE (cint.cc))) == NULL)
     return TRUE;
 
   while (*str)
@@ -411,49 +416,48 @@ script_fu_cc_is_empty ()
   return TRUE;
 }
 
-static gint
-script_fu_cc_key_function (GtkWidget   *widget,
-			   GdkEventKey *event,
-			   gpointer     data)
+static gboolean
+script_fu_cc_key_function (GtkEventControllerKey *controller,
+			   guint                  keyval,
+			   guint                  keycode,
+			   GdkModifierType        state,
+			   gpointer               data)
 {
   GList *list;
   int direction = 0;
 
-  switch (event->keyval)
+  switch (keyval)
     {
-    case GDK_Return:
-      gtk_signal_emit_stop_by_name (GTK_OBJECT (widget), "key_press_event");
-
+    case GDK_KEY_Return:
+    case GDK_KEY_KP_Enter:
       if (script_fu_cc_is_empty ())
 	return TRUE;
 
       list = g_list_nth (history, (g_list_length (history) - 1));
       if (list->data)
 	g_free (list->data);
-      list->data = g_strdup (gtk_entry_get_text (GTK_ENTRY (cint.cc)));
+      list->data = g_strdup (gtk_editable_get_text (GTK_EDITABLE (cint.cc)));
 
-      gtk_text_freeze (GTK_TEXT (cint.console));
-      gtk_text_insert (GTK_TEXT (cint.console), cint.font_strong, NULL, NULL, "=> ", -1);
-      gtk_text_insert (GTK_TEXT (cint.console), cint.font, NULL, NULL,
-		       gtk_entry_get_text (GTK_ENTRY (cint.cc)), -1);
-      gtk_text_insert (GTK_TEXT (cint.console), cint.font, NULL, NULL, "\n\n", -1);
-      gtk_text_thaw (GTK_TEXT (cint.console));
+      script_fu_console_insert ("=> ", "strong");
+      script_fu_console_insert (gtk_editable_get_text (GTK_EDITABLE (cint.cc)),
+				"normal");
+      script_fu_console_insert ("\n\n", "normal");
+      script_fu_console_scroll_end ();
 
-      cint.vadj->value = cint.vadj->upper - cint.vadj->page_size;
-      gtk_signal_emit_by_name (GTK_OBJECT (cint.vadj), "changed");
-
-      gtk_entry_set_text (GTK_ENTRY (cint.cc), "");
-      gdk_flush ();
+      gtk_editable_set_text (GTK_EDITABLE (cint.cc), "");
 
       repl_c_string ((char *) list->data, 0, 0, 1);
       gimp_displays_flush ();
 
+      /*  Show what the evaluation printed  */
+      script_fu_siod_read ();
+
       history = g_list_append (history, NULL);
       if (history_len == history_max)
 	{
-	  history = g_list_remove (history, history->data);
 	  if (history->data)
 	    g_free (history->data);
+	  history = g_list_delete_link (history, history);
 	}
       else
 	history_len++;
@@ -462,34 +466,26 @@ script_fu_cc_key_function (GtkWidget   *widget,
       return TRUE;
       break;
 
-    case GDK_KP_Up:
-    case GDK_Up:
-      gtk_signal_emit_stop_by_name (GTK_OBJECT (widget), "key_press_event");
+    case GDK_KEY_KP_Up:
+    case GDK_KEY_Up:
       direction = -1;
       break;
 
-    case GDK_KP_Down:
-    case GDK_Down:
-      gtk_signal_emit_stop_by_name (GTK_OBJECT (widget), "key_press_event");
+    case GDK_KEY_KP_Down:
+    case GDK_KEY_Down:
       direction = 1;
       break;
 
-    case GDK_P:
-    case GDK_p:
-      if (event->state & GDK_CONTROL_MASK)
-	{
-	  gtk_signal_emit_stop_by_name (GTK_OBJECT (widget), "key_press_event");
-	  direction = -1;
-	}
+    case GDK_KEY_P:
+    case GDK_KEY_p:
+      if (state & GDK_CONTROL_MASK)
+	direction = -1;
       break;
 
-    case GDK_N:
-    case GDK_n:
-      if (event->state & GDK_CONTROL_MASK)
-	{
-	  gtk_signal_emit_stop_by_name (GTK_OBJECT (widget), "key_press_event");
-	  direction = 1;
-	}
+    case GDK_KEY_N:
+    case GDK_KEY_n:
+      if (state & GDK_CONTROL_MASK)
+	direction = 1;
       break;
 
     default:
@@ -504,7 +500,7 @@ script_fu_cc_key_function (GtkWidget   *widget,
 	  list = g_list_nth (history, history_cur);
 	  if (list->data)
 	    g_free (list->data);
-	  list->data = g_strdup (gtk_entry_get_text (GTK_ENTRY (cint.cc)));
+	  list->data = g_strdup (gtk_editable_get_text (GTK_EDITABLE (cint.cc)));
 	}
 
       history_cur += direction;
@@ -513,7 +509,10 @@ script_fu_cc_key_function (GtkWidget   *widget,
       if (history_cur >= history_len)
 	history_cur = history_len - 1;
 
-      gtk_entry_set_text (GTK_ENTRY (cint.cc), (char *) (g_list_nth (history, history_cur))->data);
+      list = g_list_nth (history, history_cur);
+      gtk_editable_set_text (GTK_EDITABLE (cint.cc),
+			     list->data ? (char *) list->data : "");
+      gtk_editable_set_position (GTK_EDITABLE (cint.cc), -1);
 
       return TRUE;
     }
@@ -525,19 +524,28 @@ script_fu_cc_key_function (GtkWidget   *widget,
 static FILE *
 script_fu_open_siod_console ()
 {
+  gint fd;
+
   if (siod_output == stdout)
     {
-      if (pipe (siod_output_pipe))
+      fd = g_file_open_tmp ("script-fu-XXXXXX", &siod_output_name, NULL);
+
+      if (fd < 0)
 	{
-	  gimp_message ("Unable to open SIOD output pipe");
+	  gimp_message ("Unable to open SIOD output file");
 	}
-      else if ((siod_output = fdopen (siod_output_pipe [1], "w")) == NULL)
+      else if ((siod_output = fdopen (fd, "w+b")) == NULL)
 	{
-	  gimp_message ("Unable to open a stream on the SIOD output pipe");
+	  gimp_message ("Unable to open a stream on the SIOD output file");
+	  g_close (fd, NULL);
+	  g_unlink (siod_output_name);
+	  g_free (siod_output_name);
+	  siod_output_name = NULL;
 	  siod_output = stdout;
 	}
       else
 	{
+	  siod_output_read = 0;
 	  siod_verbose_level = 2;
 	  print_welcome ();
 	}
@@ -551,8 +559,14 @@ script_fu_close_siod_console ()
 {
   if (siod_output != stdout)
     fclose (siod_output);
-  close (siod_output_pipe[0]);
-  close (siod_output_pipe[1]);
+  siod_output = stdout;
+
+  if (siod_output_name)
+    {
+      g_unlink (siod_output_name);
+      g_free (siod_output_name);
+      siod_output_name = NULL;
+    }
 }
 
 void

@@ -20,13 +20,11 @@
 #include <string.h>
 #include "appenv.h"
 #include "actionarea.h"
-#include "colormaps.h"
 #include "cursorutil.h"
 #include "fileops.h"
 #include "gdisplay_ops.h"
 #include "general.h"
 #include "gimage.h"
-#include "gximage.h"
 #include "interface.h"
 #include "menus.h"
 #include "scale.h"
@@ -42,31 +40,6 @@ static GtkWidget *warning_dialog = NULL;
 /*
  *  This file is for operations on the gdisplay object
  */
-
-gulong
-gdisplay_white_pixel (GDisplay *gdisp)
-{
-  return g_white_pixel;
-}
-
-gulong
-gdisplay_gray_pixel (GDisplay *gdisp)
-{
-  return g_gray_pixel;
-}
-
-gulong
-gdisplay_black_pixel (GDisplay *gdisp)
-{
-  return g_black_pixel;
-}
-
-gulong
-gdisplay_color_pixel (GDisplay *gdisp)
-{
-  return g_color_pixel;
-}
-
 
 void
 gdisplay_new_view (GDisplay *gdisp)
@@ -100,25 +73,107 @@ gdisplay_close_window (GDisplay *gdisp,
       /* If POPUP_SHELL references this shell, then reset it. */
       if (popup_shell == gdisp->shell)
 	popup_shell = NULL;
-      gtk_widget_destroy (gdisp->shell);
+      gtk_window_destroy (GTK_WINDOW (gdisp->shell));
     }
+}
+
+
+/*  The size of the monitor the display is on (or a sensible guess
+ *  before it has one).
+ */
+static void
+gdisplay_screen_size (GDisplay *gdisp,
+		      gint     *s_width,
+		      gint     *s_height)
+{
+  GdkDisplay *display;
+  GdkSurface *surface;
+  GdkMonitor *monitor = NULL;
+  GdkRectangle geometry;
+
+  *s_width = 1024;
+  *s_height = 768;
+
+  display = gtk_widget_get_display (gdisp->shell);
+  surface = gtk_native_get_surface (GTK_NATIVE (gdisp->shell));
+
+  if (display && surface)
+    monitor = gdk_display_get_monitor_at_surface (display, surface);
+
+  if (!monitor && display)
+    {
+      GListModel *monitors = gdk_display_get_monitors (display);
+
+      if (g_list_model_get_n_items (monitors) > 0)
+	{
+	  monitor = g_list_model_get_item (monitors, 0);
+	  g_object_unref (monitor);	/*  the list keeps it alive  */
+	}
+    }
+
+  if (monitor)
+    {
+      gdk_monitor_get_geometry (monitor, &geometry);
+      if (geometry.width > 0 && geometry.height > 0)
+	{
+	  *s_width = geometry.width;
+	  *s_height = geometry.height;
+	}
+    }
+}
+
+/*  What the window adds around the canvas: rulers, scrollbars and
+ *  borders.
+ */
+static void
+gdisplay_border_size (GDisplay *gdisp,
+		      gint     *border_x,
+		      gint     *border_y)
+{
+  gint shell_width, shell_height;
+
+  shell_width = gtk_widget_get_width (gdisp->shell);
+  shell_height = gtk_widget_get_height (gdisp->shell);
+
+  if (shell_width > gdisp->disp_width && shell_height > gdisp->disp_height)
+    {
+      *border_x = shell_width - gdisp->disp_width;
+      *border_y = shell_height - gdisp->disp_height;
+    }
+  else
+    {
+      /*  not allocated yet: the same allowance the display starts with  */
+      *border_x = 40;
+      *border_y = 40;
+    }
+}
+
+/*  Resizes the display's window so that its canvas becomes width x
+ *  height.  The canvas' "resize" handler picks up the size it really
+ *  gets.
+ */
+static void
+gdisplay_set_canvas_size (GDisplay *gdisp,
+			  gint      width,
+			  gint      height,
+			  gint      border_x,
+			  gint      border_y)
+{
+  gtk_window_set_default_size (GTK_WINDOW (gdisp->shell),
+			       width + border_x, height + border_y);
 }
 
 
 void
 gdisplay_shrink_wrap (GDisplay *gdisp)
 {
-  gint x, y;
   gint disp_width, disp_height;
   gint width, height;
-  gint shell_x, shell_y;
-  gint shell_width, shell_height;
   gint max_auto_width, max_auto_height;
   gint border_x, border_y;
   int s_width, s_height;
 
-  s_width = gdk_screen_width ();
-  s_height = gdk_screen_height ();
+  gdisplay_screen_size (gdisp, &s_width, &s_height);
 
   width = SCALE (gdisp, gdisp->gimage->width);
   height = SCALE (gdisp, gdisp->gimage->height);
@@ -126,11 +181,7 @@ gdisplay_shrink_wrap (GDisplay *gdisp)
   disp_width = gdisp->disp_width;
   disp_height = gdisp->disp_height;
 
-  shell_width = gdisp->shell->allocation.width;
-  shell_height = gdisp->shell->allocation.height;
-
-  border_x = shell_width - disp_width;
-  border_y = shell_height - disp_height;
+  gdisplay_border_size (gdisp, &border_x, &border_y);
 
   max_auto_width = (s_width - border_x) * 0.75;
   max_auto_height = (s_height - border_y) * 0.75;
@@ -144,21 +195,7 @@ gdisplay_shrink_wrap (GDisplay *gdisp)
       width = ((width + border_x) < s_width) ? width : max_auto_width;
       height = ((height + border_y) < s_height) ? height : max_auto_height;
 
-      gtk_widget_set_usize (gdisp->canvas,
-			    width, height);
-
-      gtk_widget_show (gdisp->canvas);
-
-      gdk_window_get_origin (gdisp->shell->window, &shell_x, &shell_y);
-
-      shell_width = width + border_x;
-      shell_height = height + border_y;
-
-      x = HIGHPASS (shell_x, BOUNDS (s_width - shell_width, border_x, s_width));
-      y = HIGHPASS (shell_y, BOUNDS (s_height - shell_height, border_y, s_height));
-
-      if (x != shell_x || y != shell_y)
-	gdk_window_move (gdisp->shell->window, x, y);
+      gdisplay_set_canvas_size (gdisp, width, height, border_x, border_y);
 
       /*  Set the new disp_width and disp_height values  */
       gdisp->disp_width = width;
@@ -172,22 +209,9 @@ gdisplay_shrink_wrap (GDisplay *gdisp)
     {
       max_auto_width = MINIMUM (max_auto_width, width);
       max_auto_height = MINIMUM (max_auto_height, height);
-      
-      gtk_widget_set_usize (gdisp->canvas,
-			    max_auto_width, max_auto_height);
 
-      gtk_widget_show (gdisp->canvas);
-
-      gdk_window_get_origin (gdisp->shell->window, &shell_x, &shell_y);
-
-      shell_width = width + border_x;
-      shell_height = height + border_y;
-
-      x = HIGHPASS (shell_x, BOUNDS (s_width - shell_width, border_x, s_width));
-      y = HIGHPASS (shell_y, BOUNDS (s_height - shell_height, border_y, s_height));
-
-      if (x != shell_x || y != shell_y)
-	gdk_window_move (gdisp->shell->window, x, y);
+      gdisplay_set_canvas_size (gdisp, max_auto_width, max_auto_height,
+				border_x, border_y);
 
       /*  Set the new disp_width and disp_height values  */
       gdisp->disp_width = max_auto_width;
@@ -215,6 +239,7 @@ gdisplay_resize_image (GDisplay *gdisp)
 {
   int sx, sy;
   int width, height;
+  int border_x, border_y;
 
   /*  Calculate the width and height of the new canvas  */
   sx = SCALE (gdisp, gdisp->gimage->width);
@@ -225,6 +250,8 @@ gdisplay_resize_image (GDisplay *gdisp)
   /* if the new dimensions of the ximage are different than the old...resize */
   if (width != gdisp->disp_width || height != gdisp->disp_height)
     {
+      gdisplay_border_size (gdisp, &border_x, &border_y);
+
       /*  adjust the gdisplay offsets -- we need to set them so that the
        *  center of our viewport is at the center of the image.
        */
@@ -234,14 +261,7 @@ gdisplay_resize_image (GDisplay *gdisp)
       gdisp->disp_width = width;
       gdisp->disp_height = height;
 
-      if (GTK_WIDGET_VISIBLE (gdisp->canvas))
-	gtk_widget_hide (gdisp->canvas);
-
-      gtk_widget_set_usize (gdisp->canvas,
-			    gdisp->disp_width,
-			    gdisp->disp_height);
-
-      gtk_widget_show (gdisp->canvas);
+      gdisplay_set_canvas_size (gdisp, width, height, border_x, border_y);
     }
 
   return 1;
@@ -261,14 +281,14 @@ gdisplay_close_warning_callback (GtkWidget *w,
 
   menus_set_sensitive ("<Image>/File/Close", TRUE);
   mbox = (GtkWidget *) client_data;
-  gdisp = (GDisplay *) gtk_object_get_user_data (GTK_OBJECT (mbox));
+  gdisp = (GDisplay *) g_object_get_data (G_OBJECT (mbox), "user_data");
 
   /* If POPUP_SHELL references this shell, then reset it. */
   if (popup_shell == gdisp->shell)
     popup_shell = NULL;
-  
-  gtk_widget_destroy (gdisp->shell);
-  gtk_widget_destroy (mbox);
+
+  gtk_window_destroy (GTK_WINDOW (gdisp->shell));
+  gtk_window_destroy (GTK_WINDOW (mbox));
 }
 
 
@@ -280,13 +300,12 @@ gdisplay_cancel_warning_callback (GtkWidget *w,
 
   menus_set_sensitive ("<Image>/File/Close", TRUE);
   mbox = (GtkWidget *) client_data;
-  gtk_widget_destroy (mbox);
+  gtk_window_destroy (GTK_WINDOW (mbox));
 }
 
-static gint
-gdisplay_delete_warning_callback (GtkWidget *widget,
-				  GdkEvent  *event,
-				  gpointer  client_data)
+static gboolean
+gdisplay_delete_warning_callback (GtkWindow *window,
+				  gpointer   client_data)
 {
   menus_set_sensitive ("<Image>/File/Close", TRUE);
 
@@ -295,7 +314,7 @@ gdisplay_delete_warning_callback (GtkWidget *widget,
 
 static void
 gdisplay_destroy_warning_callback (GtkWidget *widget,
-				  gpointer client_data)
+				   gpointer   client_data)
 {
   warning_dialog = NULL;
 }
@@ -320,42 +339,38 @@ gdisplay_close_warning_dialog (char     *image_name,
   /* If a warning dialog already exists raise the window and get out */
   if (warning_dialog != NULL)
     {
-      gdk_window_raise (warning_dialog->window);
+      gtk_window_present (GTK_WINDOW (warning_dialog));
       return;
     }
 
   menus_set_sensitive ("<Image>/File/Close", FALSE);
 
-  warning_dialog = mbox = gtk_dialog_new ();
   /* should this be image_window or the actual image name??? */
-  gtk_window_set_wmclass (GTK_WINDOW (mbox), "really_close", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (mbox), image_name);
-  gtk_window_position (GTK_WINDOW (mbox), GTK_WIN_POS_MOUSE);
-  gtk_object_set_user_data (GTK_OBJECT (mbox), gdisp);
+  warning_dialog = mbox = gimp_dialog_new (image_name);
+  gtk_window_set_transient_for (GTK_WINDOW (mbox), GTK_WINDOW (gdisp->shell));
+  g_object_set_data (G_OBJECT (mbox), "user_data", gdisp);
 
-  gtk_signal_connect (GTK_OBJECT (mbox), "delete_event",
-		      GTK_SIGNAL_FUNC (gdisplay_delete_warning_callback),
-		      mbox);
+  g_signal_connect (mbox, "close-request",
+		    G_CALLBACK (gdisplay_delete_warning_callback),
+		    mbox);
 
-  gtk_signal_connect (GTK_OBJECT (mbox), "destroy",
-		      GTK_SIGNAL_FUNC (gdisplay_destroy_warning_callback),
-		      mbox);
+  g_signal_connect (mbox, "destroy",
+		    G_CALLBACK (gdisplay_destroy_warning_callback),
+		    mbox);
 
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (mbox)->vbox), vbox, TRUE, TRUE, 0);
-  gtk_widget_show (vbox);
+  vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (vbox, 1);
+  gimp_box_pack_start (gimp_dialog_get_vbox (mbox), vbox, TRUE, TRUE, 0);
 
-  warning_buf = (char *) g_malloc (strlen (image_name) + 50);
-  sprintf (warning_buf, "Changes made to %s.  Close anyway?", image_name);
+  warning_buf = g_strdup_printf ("Changes made to %s.  Close anyway?",
+				 image_name);
   label = gtk_label_new (warning_buf);
-  gtk_box_pack_start (GTK_BOX (vbox), label, TRUE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_box_pack_start (vbox, label, TRUE, FALSE, 0);
   g_free (warning_buf);
 
   mbox_action_items[0].user_data = mbox;
   mbox_action_items[1].user_data = mbox;
-  build_action_area (GTK_DIALOG (mbox), mbox_action_items, 2, 0);
+  build_action_area (mbox, mbox_action_items, 2, 0);
 
-  gtk_widget_show (mbox);
+  gtk_window_present (GTK_WINDOW (mbox));
 }

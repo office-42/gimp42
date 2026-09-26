@@ -22,6 +22,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <glib.h>
+#include "datafiles.h"
 #include "general.h"
 
 
@@ -33,45 +34,47 @@ prune_filename (char *filename)
   char *last_slash = filename;
 
   while (*filename)
-    if (*filename++ == '/')
-      last_slash = filename;
+    {
+      char c = *filename++;
+
+      if (c == '/' || c == G_DIR_SEPARATOR)
+	last_slash = filename;
+    }
 
   return last_slash;
 }
 
 
+/*  Looks for filename in the folders of search_path; returns the full
+ *  name of the first match in a static buffer, or NULL.
+ */
 char*
 search_in_path (char *search_path,
 		char *filename)
 {
-  static char path[256];
-  char *local_path, *token;
-  struct stat buf;
-  int err;
+  static char *path = NULL;
+  GList *dirs, *list;
+  char *found = NULL;
 
-  local_path = g_strdup (search_path);
-  token = strtok (local_path, ":");
+  dirs = datafiles_parse_path (search_path);
 
-  while (token)
+  for (list = dirs; list; list = list->next)
     {
-      sprintf (path, "%s", token);
+      char *candidate = g_build_filename (list->data, filename, NULL);
 
-      if (token[strlen (token) - 1] != '/')
-	strcat (path, "/");
-      strcat (path, filename);
-
-      err = stat (path, &buf);
-      if (!err && S_ISREG (buf.st_mode))
+      if (g_file_test (candidate, G_FILE_TEST_IS_REGULAR))
 	{
-	  token = path;
+	  g_free (path);
+	  path = candidate;
+	  found = path;
 	  break;
 	}
 
-      token = strtok (NULL, ":");
+      g_free (candidate);
     }
 
-  g_free (local_path);
-  return token;
+  datafiles_free_path (dirs);
+  return found;
 }
 
 /*****/

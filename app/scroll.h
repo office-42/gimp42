@@ -19,6 +19,7 @@
 #define __SCROLL_H__
 
 #include "gdisplay.h"
+#include "tools.h"
 
 /*  app init and exit routines  */
 void init_scrolling (void);
@@ -30,9 +31,9 @@ gint scrollbar_vert_update (GtkAdjustment *, gpointer);
 gint scrollbar_horz_update (GtkAdjustment *, gpointer);
 
 /*  routines for grabbing the image and scrolling via the pointer  */
-void start_grab_and_scroll (GDisplay *, GdkEventButton *);
-void end_grab_and_scroll (GDisplay *, GdkEventButton *);
-void grab_and_scroll (GDisplay *, GdkEventMotion *);
-void scroll_to_pointer_position (GDisplay *, GdkEventMotion *);
+void start_grab_and_scroll (GDisplay *, GimpButtonEvent *);
+void end_grab_and_scroll (GDisplay *, GimpButtonEvent *);
+void grab_and_scroll (GDisplay *, GimpMotionEvent *);
+void scroll_to_pointer_position (GDisplay *, GimpMotionEvent *);
 
 #endif  /*  __SCROLL_H__  */

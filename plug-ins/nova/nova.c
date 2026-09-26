@@ -54,8 +54,9 @@
 #include <stdlib.h>
 #include <math.h>
 #include <time.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #ifdef RCSID
 static char rcsid[] = "$Id$";
@@ -89,10 +90,6 @@ static void dummy_printf( char *fmt, ... ) {}
 #define CURSOR	  0x2
 #define ALL	  0xf
 
-#define PREVIEW_MASK   GDK_EXPOSURE_MASK | \
-		       GDK_BUTTON_PRESS_MASK | \
-		       GDK_BUTTON1_MOTION_MASK
-
 typedef struct {
   gint	  xcenter, ycenter;
   gint	  color[3];
@@ -105,7 +102,7 @@ typedef struct {
 } NovaInterface;
 
 typedef struct {
-  GtkObject	*adjustment;
+  GtkAdjustment	*adjustment;
   GtkWidget	*entry;
   gint		constraint;
 } NovaEntryScaleData;
@@ -117,6 +114,7 @@ typedef struct
   gint		bpp;
   GtkWidget	*xentry, *yentry;
   GtkWidget	*preview;
+  GtkWidget	*area;			 /* cursor overlay on the preview */
   gint		pwidth, pheight;
   gint		cursor;
   gint		curx, cury;		 /* x,y of cursor in preview */
@@ -144,12 +142,24 @@ static void	   nova_center_draw ( NovaCenter *center, gint update );
 static void	   nova_center_entry_update ( GtkWidget *widget,
 					      gpointer data );
 static void	   nova_center_cursor_update ( NovaCenter *center );
-static gint	   nova_center_preview_expose ( GtkWidget *widget,
-						GdkEvent *event );
-static gint	   nova_center_preview_events ( GtkWidget *widget,
-						GdkEvent *event );
+static void	   nova_center_preview_expose ( GtkDrawingArea *area,
+						cairo_t *cr,
+						gint width,
+						gint height,
+						gpointer data );
+static void	   nova_center_drag_begin ( GtkGestureDrag *gesture,
+					    gdouble x,
+					    gdouble y,
+					    gpointer data );
+static void	   nova_center_drag_update ( GtkGestureDrag *gesture,
+					     gdouble offset_x,
+					     gdouble offset_y,
+					     gpointer data );
+static void	   nova_center_set_cursor ( NovaCenter *center,
+					    gint x,
+					    gint y );
 
-static void	nova_int_entryscale_new ( GtkTable *table, gint x, gint y,
+static void	nova_int_entryscale_new ( GtkWidget *table, gint x, gint y,
 					 gchar *caption, gint *intvar,
 					 gint min, gint max, gint constraint);
 
@@ -194,7 +204,7 @@ static NovaInterface pint =
 MAIN ()
 
 static void
-query()
+query(void)
 {
   static GParamDef args[]=
     {
@@ -338,94 +348,67 @@ nova_dialog ( GDrawable *drawable )
   GtkWidget *table;
   GtkWidget *button;
   GtkWidget *center_frame;
-  guchar *color_cube;
-  gchar **argv;
-  gint	argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("nova");
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  gdk_set_use_xshm (gimp_use_xshm ());
-  gtk_preview_set_gamma (gimp_gamma ());
-  gtk_preview_set_install_cmap (gimp_install_cmap ());
-  color_cube = gimp_color_cube ();
-  gtk_preview_set_color_cube (color_cube[0], color_cube[1],
-			      color_cube[2], color_cube[3]);
 
-  gtk_widget_set_default_visual (gtk_preview_get_visual ());
-  gtk_widget_set_default_colormap (gtk_preview_get_cmap ());
 
 #if 0
   printf("Waiting... (pid %d)\n", getpid());
   kill(getpid(), 19); /* SIGSTOP */
 #endif
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "SuperNova");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) nova_close_callback,
+  dlg = gimp_dialog_new ("SuperNova");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (nova_close_callback),
 		      NULL);
 
   /*  Action area  */
   button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-		      (GtkSignalFunc) nova_ok_callback,
+  g_signal_connect (button, "clicked",
+		      G_CALLBACK (nova_ok_callback),
 		      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
+  gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
   button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  g_signal_connect_swapped (button, "clicked", G_CALLBACK (gtk_window_destroy), dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Parameter Settings");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
 
-  table = gtk_table_new (6, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 3);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 10);
+  table = gimp_table_new (6, 2, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (frame, table);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 3);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 10);
 
   center_frame = nova_center_create ( drawable );
-  gtk_table_attach( GTK_TABLE(table), center_frame, 0, 2, 0, 1,
+  gimp_table_attach (table, center_frame, 0, 2, 0, 1,
 		    0, 0, 0, 0 );
-  nova_int_entryscale_new( GTK_TABLE (table), 0, 1,
+  nova_int_entryscale_new( table, 0, 1,
 			  "R value:", &pvals.color[0],
 			  0, 255, TRUE );
-  nova_int_entryscale_new( GTK_TABLE (table), 0, 2,
+  nova_int_entryscale_new( table, 0, 2,
 			  "G value:", &pvals.color[1],
 			  0, 255, TRUE );
-  nova_int_entryscale_new( GTK_TABLE (table), 0, 3,
+  nova_int_entryscale_new( table, 0, 3,
 			  "B value:", &pvals.color[2],
 			  0, 255, TRUE );
-  nova_int_entryscale_new( GTK_TABLE (table), 0, 4,
+  nova_int_entryscale_new( table, 0, 4,
 			  "Radius:", &pvals.radius,
 			  1, 100, FALSE );
-  nova_int_entryscale_new( GTK_TABLE (table), 0, 5,
+  nova_int_entryscale_new( table, 0, 5,
 			  "Spokes:", &pvals.nspoke,
 			  1, 1024, TRUE );
 
-  gtk_widget_show (frame);
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return pint.run;
 }
@@ -436,7 +419,7 @@ static void
 nova_close_callback (GtkWidget *widget,
 			 gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -444,7 +427,7 @@ nova_ok_callback (GtkWidget *widget,
 		      gpointer	 data)
 {
   pint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 
@@ -472,6 +455,8 @@ nova_center_create ( GDrawable *drawable )
   GtkWidget	 *entry;
   GtkWidget	 *pframe;
   GtkWidget	 *preview;
+  GtkWidget	 *overlay;
+  GtkGesture	 *gesture;
   gchar		 buf[256];
 
   center = g_new( NovaCenter, 1 );
@@ -486,65 +471,72 @@ nova_center_create ( GDrawable *drawable )
   center->cury = 0;
   center->oldx = 0;
   center->oldy = 0;
+  center->area = NULL;
   center->in_call = TRUE;  /* to avoid side effects while initialization */
 
   frame = gtk_frame_new ( "Center of SuperNova" );
-  gtk_signal_connect( GTK_OBJECT( frame ), "destroy",
-		      (GtkSignalFunc) nova_center_destroy,
+  g_signal_connect (frame, "destroy",
+		      G_CALLBACK (nova_center_destroy),
 		      center );
-  gtk_frame_set_shadow_type( GTK_FRAME( frame ) ,GTK_SHADOW_ETCHED_IN );
-  gtk_container_border_width( GTK_CONTAINER( frame ), 10 );
+  gimp_container_set_border_width (frame, 10 );
 
-  table = gtk_table_new ( 2, 4, FALSE );
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 3);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 5);
+  table = gimp_table_new ( 2, 4, FALSE );
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (frame, table);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 3);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 5);
 
   label = gtk_label_new ( "X: " );
-  gtk_misc_set_alignment( GTK_MISC(label), 0.0, 0.5 );
-  gtk_table_attach( GTK_TABLE(table), label, 0, 1, 0, 1, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0 );
-  gtk_widget_show(label);
+  gimp_misc_set_alignment (label, 0.0, 0.5 );
+  gimp_table_attach (table, label, 0, 1, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0 );
 
   center->xentry = entry = gtk_entry_new ();
-  gtk_object_set_user_data( GTK_OBJECT(entry), center );
-  gtk_signal_connect( GTK_OBJECT(entry), "changed",
-		      (GtkSignalFunc) nova_center_entry_update,
+  g_object_set_data (G_OBJECT (entry), "user_data", center );
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (nova_center_entry_update),
 		      &pvals.xcenter );
-  gtk_widget_set_usize( GTK_WIDGET(entry), ENTRY_WIDTH,0 );
-  gtk_table_attach( GTK_TABLE(table), entry, 1, 2, 0, 1, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0 );
-  gtk_widget_show(entry);
+  gtk_widget_set_size_request ( GTK_WIDGET(entry), ENTRY_WIDTH,-1 );
+  gimp_table_attach (table, entry, 1, 2, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0 );
 
   label = gtk_label_new ( "Y: " );
-  gtk_misc_set_alignment( GTK_MISC(label), 0.0, 0.5 );
-  gtk_table_attach( GTK_TABLE(table), label, 2, 3, 0, 1, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0 );
-  gtk_widget_show(label);
+  gimp_misc_set_alignment (label, 0.0, 0.5 );
+  gimp_table_attach (table, label, 2, 3, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0 );
 
   center->yentry = entry = gtk_entry_new ();
-  gtk_object_set_user_data( GTK_OBJECT(entry), center );
-  gtk_signal_connect( GTK_OBJECT(entry), "changed",
-		      (GtkSignalFunc) nova_center_entry_update,
+  g_object_set_data (G_OBJECT (entry), "user_data", center );
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (nova_center_entry_update),
 		      &pvals.ycenter );
-  gtk_widget_set_usize( GTK_WIDGET(entry), ENTRY_WIDTH, 0 );
-  gtk_table_attach( GTK_TABLE(table), entry, 3, 4, 0, 1, GTK_EXPAND | GTK_FILL, GTK_FILL, 0, 0 );
-  gtk_widget_show(entry);
+  gtk_widget_set_size_request ( GTK_WIDGET(entry), ENTRY_WIDTH, -1 );
+  gimp_table_attach (table, entry, 3, 4, 0, 1, GIMP_EXPAND | GIMP_FILL, GIMP_FILL, 0, 0 );
 
   /* frame (shadow_in) that contains preview */
   pframe = gtk_frame_new ( NULL );
-  gtk_frame_set_shadow_type( GTK_FRAME( pframe ), GTK_SHADOW_IN );
-  gtk_table_attach( GTK_TABLE(table), pframe, 0, 4, 1, 2, 0, 0, 0, 0 );
+  gimp_table_attach (table, pframe, 0, 4, 1, 2, 0, 0, 0, 0 );
 
-  /* PREVIEW */
-  center->preview = preview = gtk_preview_new( center->bpp==3 ? GTK_PREVIEW_COLOR : GTK_PREVIEW_GRAYSCALE );
-  gtk_object_set_user_data( GTK_OBJECT(preview), center );
-  gtk_widget_set_events( GTK_WIDGET(preview), PREVIEW_MASK );
-  gtk_signal_connect_after( GTK_OBJECT(preview), "expose_event",
-		      (GtkSignalFunc) nova_center_preview_expose,
-		      center );
-  gtk_signal_connect( GTK_OBJECT(preview), "event",
-		      (GtkSignalFunc) nova_center_preview_events,
-		      center );
-  gtk_container_add( GTK_CONTAINER( pframe ), center->preview );
+  /* PREVIEW, with a transparent drawing area on top for the cross cursor */
+  center->preview = preview = gimp_preview_new( center->bpp==3 ? GIMP_PREVIEW_COLOR : GIMP_PREVIEW_GRAYSCALE );
+  g_object_set_data (G_OBJECT (preview), "user_data", center );
+
+  center->area = gtk_drawing_area_new ();
+  gtk_drawing_area_set_draw_func (GTK_DRAWING_AREA (center->area),
+				  nova_center_preview_expose,
+				  center, NULL);
+  gesture = gtk_gesture_drag_new ();
+  g_signal_connect (gesture, "drag-begin",
+		    G_CALLBACK (nova_center_drag_begin),
+		    center );
+  g_signal_connect (gesture, "drag-update",
+		    G_CALLBACK (nova_center_drag_update),
+		    center );
+  gtk_widget_add_controller (center->area, GTK_EVENT_CONTROLLER (gesture));
+
+  overlay = gtk_overlay_new ();
+  gtk_widget_set_halign (overlay, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (overlay, GTK_ALIGN_CENTER);
+  gtk_overlay_set_child (GTK_OVERLAY (overlay), center->preview);
+  gtk_overlay_add_overlay (GTK_OVERLAY (overlay), center->area);
+  gtk_frame_set_child (GTK_FRAME (pframe), overlay);
 
   /*
    * Resize the greater one of dwidth and dheight to PREVIEW_SIZE
@@ -556,20 +548,16 @@ nova_center_create ( GDrawable *drawable )
     center->pwidth = center->dwidth * PREVIEW_SIZE / center->dheight;
     center->pheight = PREVIEW_SIZE;
   }
-  gtk_preview_size( GTK_PREVIEW( preview ), center->pwidth, center->pheight );
+  gimp_preview_size (GIMP_PREVIEW ( preview ), center->pwidth, center->pheight );
 
   /* Draw the contents of preview, that is saved in the preview widget */
   nova_center_preview_init( center );
-  gtk_widget_show(preview);
 
-  gtk_widget_show( pframe );
-  gtk_widget_show( table );
-  gtk_widget_show( frame );
 
   sprintf( buf, "%d", pvals.xcenter );
-  gtk_entry_set_text( GTK_ENTRY(center->xentry), buf );
+  gtk_editable_set_text (GTK_EDITABLE (center->xentry), buf );
   sprintf( buf, "%d", pvals.ycenter );
-  gtk_entry_set_text( GTK_ENTRY(center->yentry), buf );
+  gtk_editable_set_text (GTK_EDITABLE (center->yentry), buf );
 
   nova_center_cursor_update( center );
 
@@ -637,16 +625,8 @@ render_preview ( GtkWidget *preview, GPixelRgn *srcrgn )
 
   dwidth  = srcrgn->w;
   dheight = srcrgn->h;
-  if( GTK_PREVIEW(preview)->buffer )
-    {
-      pwidth  = GTK_PREVIEW(preview)->buffer_width;
-      pheight = GTK_PREVIEW(preview)->buffer_height;
-    }
-  else
-    {
-      pwidth  = preview->requisition.width;
-      pheight = preview->requisition.height;
-    }
+  pwidth  = gimp_preview_get_width (GIMP_PREVIEW (preview));
+  pheight = gimp_preview_get_height (GIMP_PREVIEW (preview));
 
   bpp = srcrgn->bpp;
   alpha = bpp;
@@ -700,7 +680,7 @@ render_preview ( GtkWidget *preview, GPixelRgn *srcrgn )
 	    }
 	  dest += alpha;
 	}
-      gtk_preview_draw_row( GTK_PREVIEW( preview ), dest_row,
+      gimp_preview_draw_row (GIMP_PREVIEW ( preview ), dest_row,
 			    0, row, pwidth );
     }
 
@@ -732,27 +712,12 @@ nova_center_draw ( NovaCenter *center, gint update )
     {
       DEBUG1("draw-cursor %d old=%d,%d cur=%d,%d\n",
 	     center->cursor, center->oldx, center->oldy, center->curx, center->cury);
-      gdk_gc_set_function ( center->preview->style->black_gc, GDK_INVERT);
-      if( center->cursor )
-	{
-	  gdk_draw_line ( center->preview->window,
-			  center->preview->style->black_gc,
-			  center->oldx, 1, center->oldx, center->pheight-1 );
-	  gdk_draw_line ( center->preview->window,
-			  center->preview->style->black_gc,
-			  1, center->oldy, center->pwidth-1, center->oldy );
-	}
-      gdk_draw_line ( center->preview->window,
-		      center->preview->style->black_gc,
-		      center->curx, 1, center->curx, center->pheight-1 );
-      gdk_draw_line ( center->preview->window,
-		      center->preview->style->black_gc,
-		      1, center->cury, center->pwidth-1, center->cury );
-      /* current position of cursor is updated */
+      /* the cross is drawn by the overlay's draw function */
       center->oldx = center->curx;
       center->oldy = center->cury;
       center->cursor = TRUE;
-      gdk_gc_set_function ( center->preview->style->black_gc, GDK_COPY);
+      if (center->area)
+	gtk_widget_queue_draw (center->area);
     }
 }
 
@@ -770,12 +735,12 @@ nova_center_entry_update ( GtkWidget *widget,
 
   DEBUG1("entry\n");
   val = data;
-  new_val = atoi ( gtk_entry_get_text( GTK_ENTRY(widget) ) );
+  new_val = atoi ( gtk_editable_get_text (GTK_EDITABLE (widget) ) );
 
   if( *val != new_val )
     {
       *val = new_val;
-      center = gtk_object_get_user_data( GTK_OBJECT(widget) );
+      center = g_object_get_data (G_OBJECT (widget), "user_data");
       DEBUG1("entry:newval in_call=%d\n", center->in_call );
       if( !center->in_call )
 	{
@@ -806,64 +771,69 @@ nova_center_cursor_update ( NovaCenter *center )
 /*
  *    Handle the expose event on the preview
  */
-static gint
-nova_center_preview_expose( GtkWidget *widget,
-			    GdkEvent *event )
+static void
+nova_center_preview_expose( GtkDrawingArea *area,
+			    cairo_t *cr,
+			    gint width,
+			    gint height,
+			    gpointer data )
 {
-  NovaCenter *center;
+  NovaCenter *center = data;
 
-  center = gtk_object_get_user_data( GTK_OBJECT(widget) );
-  nova_center_draw( center, ALL );
-  return FALSE;
+  /*  The cross cursor; drawn inverted, like the old GDK_INVERT lines  */
+  cairo_set_operator (cr, CAIRO_OPERATOR_DIFFERENCE);
+  cairo_set_source_rgb (cr, 1.0, 1.0, 1.0);
+  cairo_set_line_width (cr, 1.0);
+  cairo_move_to (cr, center->curx + 0.5, 1);
+  cairo_line_to (cr, center->curx + 0.5, center->pheight - 1);
+  cairo_move_to (cr, 1, center->cury + 0.5);
+  cairo_line_to (cr, center->pwidth - 1, center->cury + 0.5);
+  cairo_stroke (cr);
 }
 
 
 /*
- *    Handle other events on the preview
+ *    Handle mouse button presses and drags on the preview
  */
 
-static gint
-nova_center_preview_events ( GtkWidget *widget,
-			     GdkEvent *event )
+static void
+nova_center_set_cursor ( NovaCenter *center,
+			 gint x,
+			 gint y )
 {
-  NovaCenter *center;
-  GdkEventButton *bevent;
-  GdkEventMotion *mevent;
   gchar buf[256];
 
-  center = gtk_object_get_user_data ( GTK_OBJECT(widget) );
+  center->curx = x;
+  center->cury = y;
+  nova_center_draw( center, CURSOR );
+  center->in_call = TRUE;
+  sprintf(buf, "%d", center->curx * center->dwidth / center->pwidth );
+  gtk_editable_set_text (GTK_EDITABLE (center->xentry), buf );
+  sprintf(buf, "%d", center->cury * center->dheight / center->pheight );
+  gtk_editable_set_text (GTK_EDITABLE (center->yentry), buf );
+  center->in_call = FALSE;
+}
 
-  switch (event->type)
-    {
-    case GDK_EXPOSE:
-      break;
+static void
+nova_center_drag_begin ( GtkGestureDrag *gesture,
+			 gdouble x,
+			 gdouble y,
+			 gpointer data )
+{
+  nova_center_set_cursor ((NovaCenter *) data, (gint) x, (gint) y);
+}
 
-    case GDK_BUTTON_PRESS:
-      bevent = (GdkEventButton *) event;
-      center->curx = bevent->x;
-      center->cury = bevent->y;
-      goto mouse;
+static void
+nova_center_drag_update ( GtkGestureDrag *gesture,
+			  gdouble offset_x,
+			  gdouble offset_y,
+			  gpointer data )
+{
+  gdouble x, y;
 
-    case GDK_MOTION_NOTIFY:
-      mevent = (GdkEventMotion *) event;
-      if ( !mevent->state ) break;
-      center->curx = mevent->x;
-      center->cury = mevent->y;
-    mouse:
-      nova_center_draw( center, CURSOR );
-      center->in_call = TRUE;
-      sprintf(buf, "%d", center->curx * center->dwidth / center->pwidth );
-      gtk_entry_set_text( GTK_ENTRY(center->xentry), buf );
-      sprintf(buf, "%d", center->cury * center->dheight / center->pheight );
-      gtk_entry_set_text( GTK_ENTRY(center->yentry), buf );
-      center->in_call = FALSE;
-      break;
-
-    default:
-      break;
-    }
-
-  return FALSE;
+  gtk_gesture_drag_get_start_point (gesture, &x, &y);
+  nova_center_set_cursor ((NovaCenter *) data,
+			  (gint) (x + offset_x), (gint) (y + offset_y));
 }
 
 /*===================================================================
@@ -890,7 +860,7 @@ nova_center_preview_events ( GtkWidget *widget,
 /***********************************************************************/
 
 static void
-nova_int_entryscale_new ( GtkTable *table, gint x, gint y,
+nova_int_entryscale_new ( GtkWidget *table, gint x, gint y,
 			 gchar *caption, gint *intvar,
 			 gint min, gint max, gint constraint)
 {
@@ -898,56 +868,52 @@ nova_int_entryscale_new ( GtkTable *table, gint x, gint y,
   GtkWidget *label;
   GtkWidget *entry;
   GtkWidget *scale;
-  GtkObject *adjustment;
+  GtkAdjustment *adjustment;
   NovaEntryScaleData *userdata;
   gchar	   buffer[256];
 
 
   label = gtk_label_new (caption);
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
 
   adjustment = gtk_adjustment_new ( *intvar, min, max, 1.0, 1.0, 0.0);
-  scale = gtk_hscale_new ( GTK_ADJUSTMENT(adjustment) );
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
+  scale = gimp_hscale_new (GTK_ADJUSTMENT(adjustment), 1);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
   gtk_scale_set_draw_value (GTK_SCALE (scale), FALSE);
 
   entry = gtk_entry_new ();
-  gtk_widget_set_usize (entry, ENTRY_WIDTH, 0);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
   sprintf( buffer, "%d", *intvar );
-  gtk_entry_set_text( GTK_ENTRY (entry), buffer );
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer );
 
 
   userdata = g_new ( NovaEntryScaleData, 1 );
   userdata->entry = entry;
   userdata->adjustment = adjustment;
   userdata->constraint = constraint;
-  gtk_object_set_user_data (GTK_OBJECT(entry), userdata);
-  gtk_object_set_user_data (GTK_OBJECT(adjustment), userdata);
+  g_object_set_data (G_OBJECT (entry), "user_data", userdata);
+  g_object_set_data (G_OBJECT (adjustment), "user_data", userdata);
 
-  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-		      (GtkSignalFunc) nova_paired_int_entry_update,
+  g_signal_connect (entry, "changed",
+		      G_CALLBACK (nova_paired_int_entry_update),
 		      intvar);
-  gtk_signal_connect ( adjustment, "value_changed",
-		      (GtkSignalFunc) nova_paired_int_scale_update,
+  g_signal_connect ( adjustment, "value-changed",
+		      G_CALLBACK (nova_paired_int_scale_update),
 		      intvar);
-  gtk_signal_connect ( GTK_OBJECT( entry ), "destroy",
-		      (GtkSignalFunc) nova_paired_entry_destroy_callback,
+  g_signal_connect (entry, "destroy",
+		      G_CALLBACK (nova_paired_entry_destroy_callback),
 		      userdata );
 
 
-  hbox = gtk_hbox_new ( FALSE, 5 );
-  gtk_box_pack_start (GTK_BOX (hbox), scale, TRUE, TRUE, 0);
-  gtk_box_pack_start (GTK_BOX (hbox), entry, FALSE, TRUE, 0);
+  hbox = gimp_hbox_new ( FALSE, 5 );
+  gimp_box_pack_start (hbox, scale, TRUE, TRUE, 0);
+  gimp_box_pack_start (hbox, entry, FALSE, TRUE, 0);
 
-  gtk_table_attach (GTK_TABLE (table), label, x, x+1, y, y+1,
-		    GTK_FILL, GTK_FILL, 0, 0);
-  gtk_table_attach (GTK_TABLE (table), hbox, x+1, x+2, y, y+1,
-		    GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
+  gimp_table_attach (table, label, x, x+1, y, y+1,
+		    GIMP_FILL, GIMP_FILL, 0, 0);
+  gimp_table_attach (table, hbox, x+1, x+2, y, y+1,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
-  gtk_widget_show (label);
-  gtk_widget_show (entry);
-  gtk_widget_show (scale);
-  gtk_widget_show (hbox);
 }
 
 
@@ -976,18 +942,18 @@ nova_paired_int_scale_update (GtkAdjustment *adjustment,
   gint *val, new_val;
 
   val = data;
-  new_val = (gint) adjustment->value;
+  new_val = (gint) gtk_adjustment_get_value (adjustment);
 
   *val = new_val;
 
-  userdata = gtk_object_get_user_data (GTK_OBJECT (adjustment));
+  userdata = g_object_get_data (G_OBJECT (adjustment), "user_data");
   entry = GTK_ENTRY( userdata->entry );
   sprintf (buffer, "%d", (int) new_val );
 
   /* avoid infinite loop (scale, entry, scale, entry ...) */
-  gtk_signal_handler_block_by_data ( GTK_OBJECT(entry), data );
-  gtk_entry_set_text ( entry, buffer);
-  gtk_signal_handler_unblock_by_data ( GTK_OBJECT(entry), data );
+  g_signal_handlers_block_matched (entry, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, data);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  g_signal_handlers_unblock_matched (entry, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, data);
 }
 
 /*
@@ -1004,27 +970,26 @@ nova_paired_int_entry_update (GtkWidget *widget,
   int *val;
 
   val = data;
-  new_val = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+  new_val = atoi (gtk_editable_get_text (GTK_EDITABLE (widget)));
   *val = new_val;
 
-  userdata = gtk_object_get_user_data (GTK_OBJECT (widget));
+  userdata = g_object_get_data (G_OBJECT (widget), "user_data");
   adjustment = GTK_ADJUSTMENT( userdata->adjustment );
 
   constraint_val = new_val;
-  if ( constraint_val < adjustment->lower )
-    constraint_val = adjustment->lower;
-  if ( constraint_val > adjustment->upper )
-    constraint_val = adjustment->upper;
+  if ( constraint_val < gtk_adjustment_get_lower (adjustment) )
+    constraint_val = gtk_adjustment_get_lower (adjustment);
+  if ( constraint_val > gtk_adjustment_get_upper (adjustment) )
+    constraint_val = gtk_adjustment_get_upper (adjustment);
 
   if ( userdata->constraint )
     *val = constraint_val;
   else
     *val = new_val;
 
-  adjustment->value = constraint_val;
-  gtk_signal_handler_block_by_data ( GTK_OBJECT(adjustment), data );
-  gtk_signal_emit_by_name ( GTK_OBJECT(adjustment), "value_changed");
-  gtk_signal_handler_unblock_by_data ( GTK_OBJECT(adjustment), data );
+  g_signal_handlers_block_matched (adjustment, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, data);
+  gtk_adjustment_set_value (adjustment, constraint_val);
+  g_signal_handlers_unblock_matched (adjustment, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, data);
 
 }
 

@@ -18,27 +18,28 @@
 #ifndef __INTERFACE_H__
 #define __INTERFACE_H__
 
+#include "tools.h"
+
 /* typedefs */
 typedef void (*QueryFunc) (GtkWidget *, gpointer, gpointer);
+typedef void (*MessageBoxCallback) (GtkWidget *, gpointer);
 
 /* externed variables  */
 extern GtkWidget *tool_widgets[];
 extern GtkWidget *popup_shell;
-extern GtkTooltips *tool_tips;
 
 /* function declarations */
-GtkWidget *  create_pixmap_widget (GdkWindow *, char **, int, int);
+GdkTexture * create_pixmap_texture (char **, int, int);
+GtkWidget *  create_pixmap_widget  (char **, int, int);
 void         create_toolbox (void);
 void	     toolbox_free (void);
 void         toolbox_raise_callback (GtkWidget *, gpointer);
 void         create_display_shell (int, int, int, char *, int);
-void         position_dialog (GtkWidget *, gpointer, gpointer);
-void         center_dialog (GtkWidget *, gpointer, gpointer);
 GtkWidget *  query_string_box (char *, char *, char *, QueryFunc, gpointer);
-GtkWidget *  message_box (char *, GtkCallback, gpointer);
+GtkWidget *  message_box (char *, MessageBoxCallback, gpointer);
 
-void tools_push_label (char *label);
-void tools_pop_label (void);
+/*  Selects a tool, as clicking its button in the toolbox does.  */
+void         tools_select_widget (ToolType);
 
 void progress_start (void);
 void progress_update (float);

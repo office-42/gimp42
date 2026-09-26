@@ -38,53 +38,16 @@ enum {
 };
 */
 
-static void gimp_channel_class_init (GimpChannelClass *klass);
-static void gimp_channel_init       (GimpChannel      *channel);
-static void gimp_channel_destroy    (GtkObject        *object);
+static void gimp_channel_finalize   (GObject          *object);
 
-/*
-static gint channel_signals[LAST_SIGNAL] = { 0 };
-*/
-
-static GimpDrawableClass *parent_class = NULL;
-
-guint
-gimp_channel_get_type ()
-{
-  static guint channel_type = 0;
-
-  if (!channel_type)
-    {
-      GtkTypeInfo channel_info =
-      {
-	"GimpChannel",
-	sizeof (GimpChannel),
-	sizeof (GimpChannelClass),
-	(GtkClassInitFunc) gimp_channel_class_init,
-	(GtkObjectInitFunc) gimp_channel_init,
-	(GtkArgSetFunc) NULL,
-	(GtkArgGetFunc) NULL,
-      };
-
-      channel_type = gtk_type_unique (gimp_drawable_get_type (), &channel_info);
-    }
-
-  return channel_type;
-}
+G_DEFINE_TYPE (GimpChannel, gimp_channel, GIMP_TYPE_DRAWABLE)
 
 static void
 gimp_channel_class_init (GimpChannelClass *class)
 {
-  GtkObjectClass *object_class;
+  GObjectClass *object_class = G_OBJECT_CLASS (class);
 
-  object_class = (GtkObjectClass*) class;
-  parent_class = gtk_type_class (gimp_drawable_get_type ());
-
-  /*
-  gtk_object_class_add_signals (object_class, channel_signals, LAST_SIGNAL);
-  */
-
-  object_class->destroy = gimp_channel_destroy;
+  object_class->finalize = gimp_channel_finalize;
 }
 
 static void
@@ -122,7 +85,7 @@ channel_new (int gimage_ID, int width, int height, char *name, int opacity,
   Channel * channel;
   int i;
 
-  channel = gtk_type_new (gimp_channel_get_type ());
+  channel = g_object_new (GIMP_TYPE_CHANNEL, NULL);
 
   gimp_drawable_configure (GIMP_DRAWABLE(channel), 
 			   gimage_ID, width, height, GRAY_GIMAGE, name);
@@ -151,8 +114,7 @@ channel_new (int gimage_ID, int width, int height, char *name, int opacity,
 Channel *
 channel_ref (Channel *channel)
 {
-  gtk_object_ref  (GTK_OBJECT (channel));
-  gtk_object_sink (GTK_OBJECT (channel));
+  g_object_ref_sink (channel);
   return channel;
 }
 
@@ -160,7 +122,9 @@ channel_ref (Channel *channel)
 void
 channel_unref (Channel *channel)
 {
-  gtk_object_unref (GTK_OBJECT (channel));
+  if (g_object_is_floating (channel))
+    g_object_ref_sink (channel);
+  g_object_unref (channel);
 }
 
 
@@ -212,16 +176,13 @@ channel_get_ID (int ID)
 void
 channel_delete (Channel *channel)
 {
-  gtk_object_unref (GTK_OBJECT (channel));
+  channel_unref (channel);
 }
 
 static void
-gimp_channel_destroy (GtkObject *object)
+gimp_channel_finalize (GObject *object)
 {
   GimpChannel *channel;
-
-  g_return_if_fail (object != NULL);
-  g_return_if_fail (GIMP_IS_CHANNEL (object));
 
   channel = GIMP_CHANNEL (object);
 
@@ -231,9 +192,7 @@ gimp_channel_destroy (GtkObject *object)
   if (channel->segs_out)
     g_free (channel->segs_out);
 
-  if (GTK_OBJECT_CLASS (parent_class)->destroy)
-    (*GTK_OBJECT_CLASS (parent_class)->destroy) (object);
-  
+  G_OBJECT_CLASS (gimp_channel_parent_class)->finalize (object);
 }
 
 void

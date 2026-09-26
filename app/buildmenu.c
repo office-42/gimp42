@@ -17,52 +17,49 @@
  */
 #include "appenv.h"
 #include "buildmenu.h"
-#include "interface.h"
 
 GtkWidget *
-build_menu (MenuItem            *items,
-	    GtkAccelGroup       *accel_group)
+build_menu (MenuItem *items,
+	    gpointer  unused)
 {
-  GtkWidget *menu;
-  GtkWidget *menu_item;
+  GtkWidget *option_menu;
+  int index = 0;
 
-  menu = gtk_menu_new ();
-  gtk_menu_set_accel_group (GTK_MENU (menu), accel_group);
+  option_menu = gimp_option_menu_new ();
 
   while (items->label)
     {
-      if (items->label[0] == '-')
+      if (items->label[0] != '-')
 	{
-	  menu_item = gtk_menu_item_new ();
-	  gtk_container_add (GTK_CONTAINER (menu), menu_item);
+	  gimp_option_menu_append (option_menu, items->label,
+				   G_CALLBACK (items->callback),
+				   items->user_data);
+	  items->widget = option_menu;
+	  items->index = index++;
 	}
       else
 	{
-	  menu_item = gtk_menu_item_new_with_label (items->label);
-	  gtk_container_add (GTK_CONTAINER (menu), menu_item);
-
-	  if (items->accelerator_key && accel_group)
-	    gtk_widget_add_accelerator (menu_item,
-					"activate",
-					accel_group,
-					items->accelerator_key,
-					items->accelerator_mods,
-					GTK_ACCEL_VISIBLE | GTK_ACCEL_LOCKED);
+	  items->widget = NULL;
+	  items->index = -1;
 	}
-
-      if (items->callback)
-	gtk_signal_connect (GTK_OBJECT (menu_item), "activate",
-			    (GtkSignalFunc) items->callback,
-			    items->user_data);
-
-      if (items->subitems)
-	gtk_menu_item_set_submenu (GTK_MENU_ITEM (menu_item), build_menu (items->subitems, accel_group));
-
-      gtk_widget_show (menu_item);
-      items->widget = menu_item;
 
       items++;
     }
 
-  return menu;
+  return option_menu;
+}
+
+void
+menu_item_set_sensitive (MenuItem *item,
+			 int       sensitive)
+{
+  if (item->widget)
+    gimp_option_menu_set_item_sensitive (item->widget, item->index, sensitive);
+}
+
+void
+menu_item_set_active (MenuItem *item)
+{
+  if (item->widget)
+    gimp_option_menu_set_history (item->widget, item->index);
 }

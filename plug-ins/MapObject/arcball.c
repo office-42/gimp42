@@ -224,7 +224,7 @@ HMatrix *Qt_ToMatrix(Quat q, HMatrix out)
   out[X][Z] = xz + wy; out[Y][Z] = yz - wx; out[Z][Z] = 1.0 - (xx + yy);
   out[X][W] = out[Y][W] = out[Z][W] = out[W][X] = out[W][Y] = out[W][Z] = 0.0;
   out[W][W] = 1.0;
-  return ((HMatrix *)&out);
+  return ((HMatrix *)out);
 }
 
 /* Return conjugate of quaternion. */

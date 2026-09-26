@@ -25,9 +25,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 #include "libgimp/gimp.h"
-#include "gtk/gtk.h"
+#include "libgimp/gimpui.h"
+#include <gtk/gtk.h>
 
 /* Declare local functions. */
 static void query(void);
@@ -36,7 +36,7 @@ static void run(char *name,
 		GParam * param,
 		int *nreturn_vals,
 		GParam ** return_vals);
-static gint dialog();
+static gint dialog(void);
 
 static gint32 doit(GDrawable * drawable, gint32 *layer_id);
 
@@ -170,7 +170,7 @@ run (char    *name,
   values[0].data.d_status = status;
 }
 
-#define R (rand())
+#define R ((gint) (g_random_int () & G_MAXINT))
 
 static long
 pix_diff(guchar *pal, int bpp, int i, int j) {
@@ -204,7 +204,6 @@ doit(GDrawable * drawable, gint32 *layer_id) {
   int bpp = drawable->bpp;
   GPixelRgn pr;
 
-  srand(time(0));
 
   new_image_id = gimp_image_new (config.width, config.height, RGB);
   *layer_id = gimp_layer_new (new_image_id, "Background",
@@ -329,131 +328,107 @@ doit(GDrawable * drawable, gint32 *layer_id) {
 
 static void close_callback(GtkWidget * widget, gpointer data)
 {
-  gtk_main_quit();
+  gimp_main_loop_quit ();
 }
 
 static void ok_callback(GtkWidget * widget, gpointer data)
 {
   run_flag = 1;
-  gtk_widget_destroy(GTK_WIDGET(data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void callback(GtkWidget * widget, gpointer data)
 {
   if (&config.width == data) {
-    config.width = atoi(gtk_entry_get_text(GTK_ENTRY(widget)));
+    config.width = atoi(gtk_editable_get_text (GTK_EDITABLE (widget)));
   } else if (&config.height == data) {
-    config.height = atoi(gtk_entry_get_text(GTK_ENTRY(widget)));
+    config.height = atoi(gtk_editable_get_text (GTK_EDITABLE (widget)));
   } else if (&config.ntries == data) {
-    config.ntries = atoi(gtk_entry_get_text(GTK_ENTRY(widget)));
+    config.ntries = atoi(gtk_editable_get_text (GTK_EDITABLE (widget)));
   } else {
-    fprintf(stderr, "bad data in callback: %x\n", (int) data);
+    fprintf(stderr, "bad data in callback: %p\n", data);
   }
 }
 
-static gint dialog()
+static gint dialog(void)
 {
   GtkWidget *dlg;
   GtkWidget *button;
   GtkWidget *table;
   GtkWidget *w;
-  gchar **argv;
-  gint argc;
   char b[12];
 
-  argc = 1;
-  argv = g_new(gchar *, 1);
-  argv[0] = g_strdup("smooth palette");
 
-  gtk_init(&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  dlg = gtk_dialog_new();
-  gtk_window_set_title(GTK_WINDOW(dlg), "Smooth Palette");
-  gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-		     (GtkSignalFunc) close_callback, NULL);
+  dlg = gimp_dialog_new ("Smooth Palette");
+  g_signal_connect (dlg, "destroy",
+		     G_CALLBACK (close_callback), NULL);
 
-  button = gtk_button_new_with_label("ok");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect(GTK_OBJECT(button), "clicked",
-		     (GtkSignalFunc) ok_callback,
+  button = gimp_dialog_add_button (dlg, "ok", NULL, NULL, TRUE);
+  g_signal_connect (button, "clicked",
+		     G_CALLBACK (ok_callback),
 		     dlg);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default(button);
-  gtk_widget_show(button);
 
-  button = gtk_button_new_with_label("Cancel");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-			    (GtkSignalFunc) gtk_widget_destroy,
-			    GTK_OBJECT(dlg));
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show(button);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
-  table = gtk_table_new(4, 4, FALSE);
-  gtk_container_border_width(GTK_CONTAINER(table), 10);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show(table);
+  table = gimp_table_new(4, 4, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), table, TRUE, TRUE, 0);
 
-  gtk_table_set_row_spacings(GTK_TABLE(table), 10);
-  gtk_table_set_col_spacings(GTK_TABLE(table), 10);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 10);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 10);
 
   {
     w = gtk_label_new("Width:");
-    gtk_misc_set_alignment(GTK_MISC(w), 0.0, 0.5);
-    gtk_table_attach(GTK_TABLE(table), w, 0, 2, 0, 1,
-		     GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-    gtk_widget_show(w);
+    gimp_misc_set_alignment (w, 0.0, 0.5);
+    gimp_table_attach (table, w, 0, 2, 0, 1,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
     w = gtk_entry_new();
-    gtk_table_attach(GTK_TABLE(table), w, 2, 4, 0, 1,
-		     GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-    gtk_widget_set_usize(w, 50, 0);
+    gimp_table_attach (table, w, 2, 4, 0, 1,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
+    gtk_widget_set_size_request (w, 50, -1);
     sprintf(b, "%d", config.width);
-    gtk_entry_set_text(GTK_ENTRY(w), b);
-    gtk_signal_connect(GTK_OBJECT(w), "changed",
-		       (GtkSignalFunc) callback, &config.width);
-    gtk_widget_show(w);
+    gtk_editable_set_text (GTK_EDITABLE (w), b);
+    g_signal_connect (w, "changed",
+		       G_CALLBACK (callback), &config.width);
   }
   {
     w = gtk_label_new("Height:");
-    gtk_misc_set_alignment(GTK_MISC(w), 0.0, 0.5);
-    gtk_table_attach(GTK_TABLE(table), w, 0, 2, 2, 3,
-		     GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-    gtk_widget_show(w);
+    gimp_misc_set_alignment (w, 0.0, 0.5);
+    gimp_table_attach (table, w, 0, 2, 2, 3,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
     w = gtk_entry_new();
-    gtk_table_attach(GTK_TABLE(table), w, 2, 4, 2, 3,
-		     GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-    gtk_widget_set_usize(w, 50, 0);
+    gimp_table_attach (table, w, 2, 4, 2, 3,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
+    gtk_widget_set_size_request (w, 50, -1);
     sprintf(b, "%d", config.height);
-    gtk_entry_set_text(GTK_ENTRY(w), b);
-    gtk_signal_connect(GTK_OBJECT(w), "changed",
-		       (GtkSignalFunc) callback, &config.height);
-    gtk_widget_show(w);
+    gtk_editable_set_text (GTK_EDITABLE (w), b);
+    g_signal_connect (w, "changed",
+		       G_CALLBACK (callback), &config.height);
   }
   {
     w = gtk_label_new("Search Time:");
-    gtk_misc_set_alignment(GTK_MISC(w), 0.0, 0.5);
-    gtk_table_attach(GTK_TABLE(table), w, 0, 2, 3, 4,
-		     GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-    gtk_widget_show(w);
+    gimp_misc_set_alignment (w, 0.0, 0.5);
+    gimp_table_attach (table, w, 0, 2, 3, 4,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
     w = gtk_entry_new();
-    gtk_table_attach(GTK_TABLE(table), w, 2, 4, 3, 4,
-		     GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-    gtk_widget_set_usize(w, 50, 0);
+    gimp_table_attach (table, w, 2, 4, 3, 4,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
+    gtk_widget_set_size_request (w, 50, -1);
     sprintf(b, "%d", config.ntries);
-    gtk_entry_set_text(GTK_ENTRY(w), b);
-    gtk_signal_connect(GTK_OBJECT(w), "changed",
-		       (GtkSignalFunc) callback, &config.ntries);
-    gtk_widget_show(w);
+    gtk_editable_set_text (GTK_EDITABLE (w), b);
+    g_signal_connect (w, "changed",
+		       G_CALLBACK (callback), &config.ntries);
   }
 
-  gtk_widget_show(dlg);
-  gtk_main();
-  gdk_flush();
+  gtk_window_present (GTK_WINDOW (dlg));
+  gimp_main_loop_run ();
 
   return run_flag;
 }

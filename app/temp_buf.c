@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <glib/gstdio.h>
 #include <unistd.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -472,7 +473,7 @@ temp_buf_swap (buf)
     }
 
   /*  Open file for overwrite  */
-  if ((fp = fopen (filename, "w")))
+  if ((fp = g_fopen (filename, "wb")))
     {
       size_t blocks_written;
       blocks_written = fwrite (swap->data, swap->width * swap->height * swap->bytes, 1, fp);
@@ -530,7 +531,7 @@ temp_buf_unswap (buf)
   /*  (buf->filname HAS to be != 0 */
   if (!stat (buf->filename, &stat_buf))
     {
-      if ((fp = fopen (buf->filename, "r")))
+      if ((fp = g_fopen (buf->filename, "rb")))
 	{
 	  size_t blocks_read;
 	  blocks_read = fread (buf->data, buf->width * buf->height * buf->bytes, 1, fp);

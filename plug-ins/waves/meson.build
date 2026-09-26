@@ -1,0 +1,6 @@
+executable('waves', 'waves.c',
+  dependencies: [megawidget_dep, plugin_deps],
+  install: true,
+  install_dir: plugin_install_dir,
+  win_subsystem: 'windows',
+)

@@ -17,23 +17,33 @@
  */
 #include <stdlib.h>
 #include <stdio.h>
-#include <sys/param.h>
-#include <sys/wait.h>
 #include <string.h>
-#include <unistd.h>
-#include <errno.h>
-#include "gtk/gtk.h"
+#include <glib.h>
+#include <glib/gstdio.h>
+#include <gio/gio.h>
 #include "libgimp/gimp.h"
 
 /* Author: Josh MacDonald. */
 
-static void   query      (void);
-static void   run        (char    *name,
-                          int      nparams,
-                          GParam  *param,
-                          int     *nreturn_vals,
-                          GParam **return_vals);
-static gint32 load_image (char   *filename);
+/* The file used to be fetched by running wget.  It is now copied with
+ * GIO, which handles every scheme it has a backend for (http, ftp, ...
+ * through gvfs where that is installed).  When GIO cannot open the URI,
+ * curl (shipped with Windows 10 and later) or wget is run instead.
+ */
+
+static void     query          (void);
+static void     run            (char    *name,
+				int      nparams,
+				GParam  *param,
+				int     *nreturn_vals,
+				GParam **return_vals);
+static gint32   load_image     (char    *filename);
+static gboolean fetch_with_gio (const gchar *uri,
+				const gchar *tmpname,
+				GError     **error);
+static gboolean fetch_with_tool (const gchar *uri,
+				 const gchar *tmpname,
+				 GError     **error);
 
 GPlugInInfo PLUG_IN_INFO =
 {
@@ -65,7 +75,7 @@ query ()
 
   gimp_install_procedure ("file_url_load",
                           "loads files given a URL",
-                          "You need to have GNU Wget installed.",
+                          "Downloads with GIO; falls back on curl or GNU Wget when GIO cannot handle the URL.",
                           "Spencer Kimball & Peter Mattis",
                           "Spencer Kimball & Peter Mattis",
                           "1995-1997",
@@ -123,8 +133,7 @@ load_image (char *filename)
   gint retvals;
   char* ext = strrchr (filename, '.');
   char* tmpname;
-  int pid;
-  int status;
+  GError *error = NULL;
 
   if (!ext || ext[1] == 0 || strchr(ext, '/'))
     {
@@ -137,30 +146,26 @@ load_image (char *filename)
 			       PARAM_STRING, ext + 1,
 			       PARAM_END);
 
-  tmpname = params[1].data.d_string;
+  tmpname = g_strdup (params[1].data.d_string);
+  gimp_destroy_params (params, retvals);
 
-  if ((pid = fork()) < 0)
+  if (! fetch_with_gio (filename, tmpname, &error))
     {
-      g_message ("url: fork failed: %s\n", g_strerror(errno));
-      return -1;
-    }
-  else if (pid == 0)
-    {
-      execlp ("wget", "wget", filename, "-O", tmpname, NULL);
-      g_message ("url: exec failed: wget: %s\n", g_strerror(errno));
-      _exit(127);
-    }
-  else
-    {
-      waitpid (pid, &status, 0);
+      GError *tool_error = NULL;
 
-      if (!WIFEXITED(status) ||
-	  WEXITSTATUS(status) != 0)
+      if (! fetch_with_tool (filename, tmpname, &tool_error))
 	{
-	  g_message ("url: wget exited abnormally on URL %s\n", filename);
+	  g_message ("url: could not fetch URL %s: %s\n", filename,
+		     tool_error ? tool_error->message :
+		     (error ? error->message : "unknown error"));
+	  g_clear_error (&tool_error);
+	  g_clear_error (&error);
+	  g_unlink (tmpname);
+	  g_free (tmpname);
 	  return -1;
 	}
     }
+  g_clear_error (&error);
 
   params = gimp_run_procedure ("gimp_file_load",
 			       &retvals,
@@ -169,7 +174,8 @@ load_image (char *filename)
 			       PARAM_STRING, tmpname,
 			       PARAM_END);
 
-  unlink (tmpname);
+  g_unlink (tmpname);
+  g_free (tmpname);
 
   if (params[0].data.d_status == FALSE)
     return -1;
@@ -178,4 +184,81 @@ load_image (char *filename)
       gimp_image_set_filename (params[1].data.d_int32, NULL);
       return params[1].data.d_int32;
     }
+}
+
+static gboolean
+fetch_with_gio (const gchar *uri,
+		const gchar *tmpname,
+		GError     **error)
+{
+  GFile    *src;
+  GFile    *dest;
+  gboolean  success;
+
+  src  = g_file_new_for_uri (uri);
+  dest = g_file_new_for_path (tmpname);
+
+  success = g_file_copy (src, dest,
+			 G_FILE_COPY_OVERWRITE | G_FILE_COPY_TARGET_DEFAULT_PERMS,
+			 NULL, NULL, NULL, error);
+
+  g_object_unref (src);
+  g_object_unref (dest);
+
+  return success;
+}
+
+/*  Runs curl, or wget when there is no curl, to download uri into
+ *  tmpname.
+ */
+static gboolean
+fetch_with_tool (const gchar *uri,
+		 const gchar *tmpname,
+		 GError     **error)
+{
+  GSubprocess *proc;
+  gchar       *tool;
+
+  tool = g_find_program_in_path ("curl");
+  if (tool)
+    {
+      proc = g_subprocess_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
+			       G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+			       error,
+			       tool, "-f", "-s", "-S", "-L",
+			       "-o", tmpname, uri, NULL);
+    }
+  else
+    {
+      tool = g_find_program_in_path ("wget");
+      if (! tool)
+	{
+	  g_set_error (error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED,
+		       "neither GIO, curl nor wget can fetch this URL");
+	  return FALSE;
+	}
+
+      proc = g_subprocess_new (G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
+			       G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+			       error,
+			       tool, "-q", uri, "-O", tmpname, NULL);
+    }
+
+  if (! proc)
+    {
+      g_free (tool);
+      return FALSE;
+    }
+
+  if (! g_subprocess_wait_check (proc, NULL, error))
+    {
+      g_object_unref (proc);
+      g_free (tool);
+      return FALSE;
+    }
+
+  g_object_unref (proc);
+  g_free (tool);
+
+  return TRUE;
 }

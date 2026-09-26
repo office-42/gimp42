@@ -40,7 +40,6 @@
 
 #include <string.h>
 #include <libgimp/gimp.h>
-#include <gtk/gtk.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "bmp.h"
@@ -50,6 +49,9 @@ FILE *errorfile;
 char *prog_name="bmp";
 char *filename;
 int interactive_bmp;
+struct bitmap_file_head Bitmap_File_Head;
+struct bitmap_head Bitmap_Head;
+struct bitmap_os2_head Bitmap_OS2_Head;
 
 /* Declare some local functions.
  */

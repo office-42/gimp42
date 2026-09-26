@@ -26,10 +26,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include <gtk/gtk.h>
 #include <libgimp/gimp.h>
+#include <libgimp/gimpui.h>
 
 static void query(void);
 static void run(char *name, int nparams, GParam *param,
@@ -195,7 +195,7 @@ static gint32 load_image(char *file, char *brief) {
 
 
  /* Open the file for reading */
-  fp = fopen(file, "r");
+  fp = fopen(file, "rb");
 
   if (fp == NULL) {
     g_message("%s\nis not present or is unreadable", file);
@@ -210,7 +210,7 @@ static gint32 load_image(char *file, char *brief) {
 
   fread(header, 4, 1, fp);
 
-  if (strncmp(header, "KiSS", 4)) {
+  if (strncmp((char *) header, "KiSS", 4)) {
     colours= 16;
     width= header[0] + (256 * header[1]);
     height= header[2] + (256 * header[3]);
@@ -309,7 +309,7 @@ static gint32 load_image(char *file, char *brief) {
   if (palette_file == NULL) {
     fp= NULL;
   } else {
-    fp = fopen(palette_file, "r");
+    fp = fopen(palette_file, "rb");
   }
 
   if (fp != NULL) {
@@ -324,7 +324,8 @@ static gint32 load_image(char *file, char *brief) {
 
  /* Close palette file, give back allocated memory */
 
-  fclose(fp);
+  if (fp != NULL)
+    fclose(fp);
   g_free(palette);
 
  /* Now get everything redrawn and hand back the finished image */
@@ -341,7 +342,7 @@ static gint load_palette(FILE *fp, guchar palette[]) {
   int		i, bpp, colours= 0;
 
   fread(header, 4, 1, fp);
-  if (!strncmp(header, "KiSS", 4)) {
+  if (!strncmp((char *) header, "KiSS", 4)) {
     fread(header+4, 28, 1, fp);
     bpp= header[5];
     colours= header[8] + header[9] * 256;
@@ -396,7 +397,7 @@ static gint save_image(char *file, char *brief, gint32 image, gint32 layer) {
   drawable = gimp_drawable_get(layer);
 
  /* Open the file for writing */
-  fp = fopen(file, "w");
+  fp = fopen(file, "wb");
 
   if (fp == NULL) {
     g_message("CEL Couldn't write image to\n%s", file);
@@ -409,7 +410,7 @@ static gint save_image(char *file, char *brief, gint32 image, gint32 layer) {
 
  /* Headers */
   memset(header, 0, 32);
-  strcpy(header, "KiSS");
+  strcpy((char *) header, "KiSS");
   header[4]= 0x20;
 
  /* Work out whether to save as 8bit or 4bit */
@@ -474,42 +475,22 @@ static gint save_image(char *file, char *brief, gint32 image, gint32 layer) {
   return TRUE;
 }
 
-static void palette_ok (GtkWidget  *widget, GtkWidget **fs) {
+static void palette_chosen (const gchar *filename, gpointer data) {
 
-  g_free(palette_file);
-  palette_file= g_strdup(gtk_file_selection_get_filename
-                                     (GTK_FILE_SELECTION(fs)));
-  data_length= strlen(palette_file) + 1;
-  gtk_widget_destroy (GTK_WIDGET (fs));
-}
-
-static void palette_cancel (GtkWidget  *widget, GtkWidget **window) {
-  gtk_main_quit ();
+  if (filename != NULL) {
+    g_free(palette_file);
+    palette_file= g_strdup(filename);
+    data_length= strlen(palette_file) + 1;
+  }
+  gimp_main_loop_quit ();
 }
 
 static gint palette_dialog(char *title) {
-  gchar **argv;
-  gint argc = 1;
-  GtkWidget *dialog;
 
-  argv= g_malloc(sizeof(gchar *));
-  argv[0]= g_strdup("CEL file-filter");
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
-  dialog= gtk_file_selection_new(title);
-  gtk_window_position (GTK_WINDOW (dialog), GTK_WIN_POS_MOUSE);
-  gtk_file_selection_set_filename(GTK_FILE_SELECTION(dialog), palette_file);
+  gimp_file_dialog_open (NULL, title, palette_file, palette_chosen, NULL);
 
-  gtk_signal_connect (GTK_OBJECT (GTK_FILE_SELECTION (dialog)->ok_button),
-                      "clicked", (GtkSignalFunc) palette_ok, dialog);
-  gtk_signal_connect (GTK_OBJECT (dialog),
-                      "destroy", (GtkSignalFunc) palette_cancel, NULL);
-  gtk_signal_connect_object (GTK_OBJECT (GTK_FILE_SELECTION (dialog)->cancel_button), "clicked", (GtkSignalFunc) palette_cancel, GTK_OBJECT (dialog));
-
-  gtk_widget_show(dialog);
-
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
   return 0;
 }

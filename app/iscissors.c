@@ -148,7 +148,7 @@ typedef double CRMatrix[4][4];
 static Tool* last_tool;
 
 /*  The global array of XSegments for drawing the polygon...  */
-static GdkSegment *segs = NULL;
+static GimpSegment *segs = NULL;
 static int         max_segs = 0;
 static Point *     pts = NULL;
 static int         max_pts = 0;
@@ -193,9 +193,9 @@ static IScissorsOptions *iscissors_options = NULL;
 
 static void   selection_to_bezier	(GtkWidget* , gpointer);
 
-static void   iscissors_button_press    (Tool *, GdkEventButton *, gpointer);
-static void   iscissors_button_release  (Tool *, GdkEventButton *, gpointer);
-static void   iscissors_motion          (Tool *, GdkEventMotion *, gpointer);
+static void   iscissors_button_press    (Tool *, GimpButtonEvent *, gpointer);
+static void   iscissors_button_release  (Tool *, GimpButtonEvent *, gpointer);
+static void   iscissors_motion          (Tool *, GimpMotionEvent *, gpointer);
 static void   iscissors_control         (Tool *, int, gpointer);
 static void   iscissors_reset           (Iscissors *);
 static void   iscissors_draw            (Tool *);
@@ -241,7 +241,7 @@ static void   make_curve_d              (int *, int *, double, int);
 
 /*  Catmull-Rom boundary conversion  */
 static void   CR_convert                (Iscissors * , GDisplay *, int);
-static void   CR_convert_points         (GdkPoint *, int);
+static void   CR_convert_points         (GimpPoint *, int);
 static void   CR_convert_line           (GSList **, int, int, int, int);
 static GSList * CR_insert_in_list       (GSList *, int);
 
@@ -258,7 +258,7 @@ selection_toggle_update (GtkWidget *w,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     *toggle_val = TRUE;
   else
     *toggle_val = FALSE;
@@ -268,19 +268,65 @@ static void
 selection_scale_update (GtkAdjustment *adjustment,
 			double        *scale_val)
 {
-  *scale_val = adjustment->value;
+  *scale_val = gtk_adjustment_get_value (adjustment);
 }
 
-static void   
-selection_to_bezier(GtkWidget *w, gpointer none)
+static void
+selection_to_bezier (GtkWidget *w,
+		     gpointer   none)
 {
-   Iscissors *iscissors;
-   if(last_tool) {
-	iscissors = (Iscissors *) last_tool->private;
-	last_tool->state = INACTIVE;
-	bezierify_boundary (last_tool);
+  if (last_tool)
+    {
+      last_tool->state = INACTIVE;
+      bezierify_boundary (last_tool);
     }
-   return;
+}
+
+static GtkWidget *
+iscissors_toggle_new (GtkWidget  *vbox,
+		      const char *label,
+		      int        *value)
+{
+  GtkWidget *toggle;
+
+  toggle = gtk_check_button_new_with_label (label);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), *value);
+  gimp_box_pack_start (vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		    G_CALLBACK (selection_toggle_update),
+		    value);
+
+  return toggle;
+}
+
+static GtkWidget *
+iscissors_scale_new (GtkWidget  *vbox,
+		     const char *text,
+		     double     *value,
+		     double      lower,
+		     double      upper,
+		     double      step,
+		     int         digits)
+{
+  GtkWidget *hbox;
+  GtkWidget *label;
+  GtkWidget *scale;
+  GtkAdjustment *adjustment;
+
+  hbox = gimp_hbox_new (FALSE, 1);
+  gimp_box_pack_start (vbox, hbox, FALSE, FALSE, 0);
+
+  label = gtk_label_new (text);
+  gimp_box_pack_start (hbox, label, FALSE, FALSE, 0);
+
+  adjustment = gtk_adjustment_new (*value, lower, upper, step, step, 0.0);
+  scale = gimp_hscale_new (adjustment, digits);
+  gimp_box_pack_start (hbox, scale, TRUE, TRUE, 0);
+  g_signal_connect (adjustment, "value-changed",
+		    G_CALLBACK (selection_scale_update),
+		    value);
+
+  return scale;
 }
 
 static IScissorsOptions *
@@ -289,18 +335,7 @@ iscissors_selection_options (void)
   IScissorsOptions *options;
   GtkWidget *vbox;
   GtkWidget *label;
-  GtkWidget *hbox;
-  GtkWidget *antialias_toggle;
-  GtkWidget *feather_toggle;
-  GtkWidget *feather_scale;
-  GtkObject *feather_scale_data;
-  GtkWidget *resolution_scale;
-  GtkObject *resolution_scale_data;
-  GtkWidget *elasticity_scale;
-  GtkObject *elasticity_scale_data;
-  GtkWidget *threshold_scale;
   GtkWidget *convert_button;
-  GtkObject *threshold_scale_data;
 
   /*  the new options structure  */
   options = (IScissorsOptions *) g_malloc (sizeof (IScissorsOptions));
@@ -312,124 +347,33 @@ iscissors_selection_options (void)
   options->elasticity = 0.30;
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
+  vbox = gimp_vbox_new (FALSE, 1);
 
   /*  the main label  */
   label = gtk_label_new ("Intelligent Scissors Options");
+  gimp_box_pack_start (vbox, label, FALSE, FALSE, 0);
 
-  gtk_box_pack_start (GTK_BOX (vbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
+  /*  the antialias and feather toggle buttons  */
+  iscissors_toggle_new (vbox, "Antialiasing", &options->antialias);
+  iscissors_toggle_new (vbox, "Feather", &options->feather);
 
-  /*  the antialias toggle button  */
-  antialias_toggle = gtk_check_button_new_with_label ("Antialiasing");
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON(antialias_toggle),
-			       options->antialias);
-  gtk_box_pack_start (GTK_BOX (vbox), antialias_toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (antialias_toggle), "toggled",
-		      (GtkSignalFunc) selection_toggle_update,
-		      &options->antialias);
-  gtk_widget_show (antialias_toggle);
-
-  /*  the feather toggle button  */
-  feather_toggle = gtk_check_button_new_with_label ("Feather");
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON(feather_toggle),
-			       options->feather);
-  gtk_box_pack_start (GTK_BOX (vbox), feather_toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (feather_toggle), "toggled",
-		      (GtkSignalFunc) selection_toggle_update,
-		      &options->feather);
-  gtk_widget_show (feather_toggle);
-
-  /*  the feather radius scale  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-
-  label = gtk_label_new ("Feather Radius");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
-
-  feather_scale_data = gtk_adjustment_new (options->feather_radius,
-					   0.0, 100.0, 1.0, 1.0, 0.0);
-  feather_scale = gtk_hscale_new (GTK_ADJUSTMENT (feather_scale_data));
-  gtk_box_pack_start (GTK_BOX (hbox), feather_scale, TRUE, TRUE, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (feather_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (feather_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (feather_scale_data), "value_changed",
-		      (GtkSignalFunc) selection_scale_update,
-		      &options->feather_radius);
-  gtk_widget_show (feather_scale);
-  gtk_widget_show (hbox);
-
-  /*  the resolution scale  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-
-  label = gtk_label_new ("Curve Resolution");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
-
-  resolution_scale_data = gtk_adjustment_new (options->resolution,
-					      1.0, 200.0, 1.0, 1.0, 0.0);
-  resolution_scale = gtk_hscale_new (GTK_ADJUSTMENT (resolution_scale_data));
-  gtk_box_pack_start (GTK_BOX (hbox), resolution_scale, TRUE, TRUE, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (resolution_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (resolution_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (resolution_scale_data), "value_changed",
-		      (GtkSignalFunc) selection_scale_update,
-		      &options->resolution);
-  gtk_widget_show (resolution_scale);
-  gtk_widget_show (hbox);
-
-  /*  the threshold scale  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-
-  label = gtk_label_new ("Edge Detect Thresh.");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
-
-  threshold_scale_data = gtk_adjustment_new (options->threshold,
-					     1.0, 255.0, 1.0, 1.0, 0.0);
-  threshold_scale = gtk_hscale_new (GTK_ADJUSTMENT (threshold_scale_data));
-  gtk_box_pack_start (GTK_BOX (hbox), threshold_scale, TRUE, TRUE, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (threshold_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (threshold_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (threshold_scale_data), "value_changed",
-		      (GtkSignalFunc) selection_scale_update,
-		      &options->threshold);
-  gtk_widget_show (threshold_scale);
-  gtk_widget_show (hbox);
-
-  /*the elasticity scale  */
-  hbox = gtk_hbox_new (FALSE, 1);
-  gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-
-  label = gtk_label_new ("Elasticity.");
-  gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-  gtk_widget_show (label);
-
-  elasticity_scale_data = gtk_adjustment_new (options->elasticity,
-					      0.0, 1.0, 0.05, 0.05, 0.0);
-  elasticity_scale = gtk_hscale_new (GTK_ADJUSTMENT (elasticity_scale_data));
-  gtk_box_pack_start (GTK_BOX (hbox), elasticity_scale, TRUE, TRUE, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (elasticity_scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (elasticity_scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (elasticity_scale_data), "value_changed",
-		      (GtkSignalFunc) selection_scale_update,
-		      &options -> elasticity);
-  gtk_widget_show (elasticity_scale);
-  gtk_widget_show (hbox);
-
+  /*  the feather radius, resolution, threshold and elasticity scales  */
+  iscissors_scale_new (vbox, "Feather Radius", &options->feather_radius,
+		       0.0, 100.0, 1.0, 1);
+  iscissors_scale_new (vbox, "Curve Resolution", &options->resolution,
+		       1.0, 200.0, 1.0, 1);
+  iscissors_scale_new (vbox, "Edge Detect Thresh.", &options->threshold,
+		       1.0, 255.0, 1.0, 1);
+  iscissors_scale_new (vbox, "Elasticity.", &options->elasticity,
+		       0.0, 1.0, 0.05, 2);
 
   /*  the convert to bezier button  */
   convert_button = gtk_button_new_with_label ("Convert to Bezier Curve");
-  gtk_box_pack_start (GTK_BOX (vbox), convert_button, TRUE, TRUE, 0);
-  gtk_signal_connect(GTK_OBJECT (convert_button) , "clicked",
-			(GtkSignalFunc) selection_to_bezier,
-			NULL);
-  gtk_widget_show (convert_button);
+  gimp_box_pack_start (vbox, convert_button, TRUE, TRUE, 0);
+  g_signal_connect (convert_button, "clicked",
+		    G_CALLBACK (selection_to_bezier),
+		    NULL);
 
-  
   /*  Register this selection options widget with the main tools options dialog  */
   tools_register_options (ISCISSORS, vbox);
 
@@ -495,7 +439,7 @@ tools_free_iscissors (Tool *tool)
 
 static void
 iscissors_button_press (Tool           *tool,
-			GdkEventButton *bevent,
+			GimpButtonEvent *bevent,
 			gpointer        gdisp_ptr)
 {
   GDisplay *gdisp;
@@ -527,13 +471,7 @@ iscissors_button_press (Tool           *tool,
       last_tool = NULL;
       tool->gdisp_ptr = gdisp_ptr;
 
-      gdk_pointer_grab (gdisp->canvas->window, FALSE,
-			(GDK_POINTER_MOTION_HINT_MASK |
-			 GDK_BUTTON1_MOTION_MASK |
-			 GDK_BUTTON_RELEASE_MASK),
-			NULL, NULL, bevent->time);
-
-      if (bevent->state & GDK_MOD1_MASK)
+      if (bevent->state & GDK_ALT_MASK)
 	{
 	  init_edit_selection (tool, gdisp_ptr, bevent, MaskTranslate);
 	  return;
@@ -562,7 +500,7 @@ iscissors_button_press (Tool           *tool,
       add_segment (&(iscissors->num_segs), x, y);
 
       draw_core_start (iscissors->core,
-		       gdisp->canvas->window,
+		       gdisp->canvas,
 		       tool);
       break;
     case BOUNDARY_MODE:
@@ -616,22 +554,17 @@ iscissors_button_press (Tool           *tool,
 
 static void
 iscissors_button_release (Tool           *tool,
-			  GdkEventButton *bevent,
+			  GimpButtonEvent *bevent,
 			  gpointer        gdisp_ptr)
 {
   Iscissors *iscissors;
-  GDisplay *gdisp;
 
-  gdisp = (GDisplay *) gdisp_ptr;
   iscissors = (Iscissors *) tool->private;
 
   /*return;*/
   
   last_tool = tool;
   
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
-
   draw_core_stop (iscissors->core, tool);
 
   /*  First take care of the case where the user "cancels" the action  */
@@ -669,17 +602,15 @@ iscissors_button_release (Tool           *tool,
 
 static void
 iscissors_motion (Tool           *tool,
-		  GdkEventMotion *mevent,
+		  GimpMotionEvent *mevent,
 		  gpointer        gdisp_ptr)
 {
   Iscissors *iscissors;
-  GDisplay *gdisp;
   int x, y;
   
   if (tool->state != ACTIVE)
     return;
 
-  gdisp = (GDisplay *) gdisp_ptr;
   iscissors = (Iscissors *) tool->private;
 
   
@@ -688,10 +619,9 @@ iscissors_motion (Tool           *tool,
     case FREE_SELECT_MODE:
     	x = mevent->x;
 	y = mevent->y;
+      /*  the new segment is drawn with the rest by iscissors_draw  */
       if (add_segment (&(iscissors->num_segs), x, y))
-	
-	gdk_draw_segments (iscissors->core->win, iscissors->core->gc,
-			   segs + (iscissors->num_segs - 1), 1);
+	draw_core_queue_draw (iscissors->core);
       break;
     case BOUNDARY_MODE:
       break;
@@ -712,8 +642,7 @@ iscissors_draw (Tool *tool)
   switch (iscissors->state)
     {
     case FREE_SELECT_MODE:
-      gdk_draw_segments (iscissors->core->win, iscissors->core->gc,
-			 segs, iscissors->num_segs);
+      draw_core_segments (iscissors->core, segs, iscissors->num_segs);
       break;
     case BOUNDARY_MODE:
       for (i = 0; i < iscissors->num_pts; i ++)
@@ -737,7 +666,7 @@ iscissors_draw_CR (GDisplay  *gdisp,
 {
 #define ROUND(x)  ((int) ((x) + 0.5))
 
-  static GdkPoint gdk_points[256];
+  static GimpPoint gdk_points[256];
   static int npoints = 256;
 
   CRMatrix geometry;
@@ -752,8 +681,6 @@ iscissors_draw_CR (GDisplay  *gdisp,
   int index;
   int i;
 
-  GimpDrawable *drawable;
-  drawable = gimage_active_drawable (gdisp->gimage);
 
   /* construct the geometry matrix from the segment */
   /* assumes that a valid segment containing 4 points is passed in */
@@ -861,8 +788,7 @@ iscissors_draw_CR (GDisplay  *gdisp,
 		  CR_convert_points (gdk_points, index);
 		  break;
 		case SCREEN_COORDS:
-		  gdk_draw_points (iscissors->core->win, iscissors->core->gc,
-				   gdk_points, index);
+		  draw_core_points (iscissors->core, gdk_points, index);
 		  break;
 		}
 	      index = 0;
@@ -881,8 +807,7 @@ iscissors_draw_CR (GDisplay  *gdisp,
 	CR_convert_points (gdk_points, index);
 	break;
       case SCREEN_COORDS:
-	gdk_draw_points (iscissors->core->win, iscissors->core->gc,
-			 gdk_points, index);
+	draw_core_points (iscissors->core, gdk_points, index);
 	break;
       }
 }
@@ -949,7 +874,7 @@ add_segment (int *num_segs,
     {
       max_segs += DEFAULT_MAX_INC;
 
-      segs = (GdkSegment *) g_realloc ((void *) segs, sizeof (GdkSegment) * max_segs);
+      segs = (GimpSegment *) g_realloc ((void *) segs, sizeof (GimpSegment) * max_segs);
 
       if (!segs)
 	fatal_error ("Unable to reallocate segment array in iscissors.");
@@ -1437,7 +1362,6 @@ static void
 initial_boundary (Tool *tool)
 {
   Iscissors * iscissors;
-  GDisplay * gdisp;
   Kink * kinks;
   double x, y;
   double dist;
@@ -1446,7 +1370,6 @@ initial_boundary (Tool *tool)
   int i, n, this, next, k;
   int num_pts = 0;
 
-  gdisp = (GDisplay *) tool->gdisp_ptr;
   iscissors = (Iscissors *) tool->private;
   kinks = iscissors->kinks;
 
@@ -1548,7 +1471,6 @@ static void
 orient_boundary (Tool *tool)
 {
   Iscissors * iscissors;
-  GDisplay * gdisp;
   int e1, e2;
   double dx1, dy1, dx2, dy2;
   double edge1[EDGE_WIDTH], edge2[EDGE_WIDTH];
@@ -1563,7 +1485,6 @@ orient_boundary (Tool *tool)
   max_dir = 0;
   max_orient = 0;
 
-  gdisp = (GDisplay *) tool->gdisp_ptr;
   iscissors = (Iscissors *) tool->private;
 
   for (i = 0; i < iscissors->num_pts; i++)
@@ -1649,11 +1570,9 @@ static void
 reset_boundary (Tool *tool)
 {
   Iscissors * iscissors;
-  GDisplay * gdisp;
   double edge[EDGE_WIDTH];
   int i;
 
-  gdisp = (GDisplay *) tool->gdisp_ptr;
   iscissors = (Iscissors *) tool->private;
 
   for (i = 0; i < iscissors->num_pts; i++)
@@ -1674,7 +1593,6 @@ static int
 localize_boundary (Tool *tool)
 {
   Iscissors * iscissors;
-  GDisplay * gdisp;
   double x, y;
   double dx, dy;
   double max;
@@ -1684,7 +1602,6 @@ localize_boundary (Tool *tool)
   int moved = 0;
   double elasticity = iscissors_options->elasticity + 1.0;
 
-  gdisp = (GDisplay *) tool->gdisp_ptr;
   iscissors = (Iscissors *) tool->private;
 
   /*  this function lets the boundary crawl in its desired
@@ -1740,11 +1657,9 @@ static void
 post_process_boundary (Tool *tool)
 {
   Iscissors * iscissors;
-  GDisplay * gdisp;
   int i;
   int left, right;
 
-  gdisp = (GDisplay *) tool->gdisp_ptr;
   iscissors = (Iscissors *) tool->private;
 
   /*  Relocate all points which did not manage to seek an edge
@@ -2621,13 +2536,13 @@ CR_convert (Iscissors *iscissors,
 
       while (list)
         {
-          x = (long) list->data + offx;
+          x = GPOINTER_TO_INT (list->data) + offx;
           if ( x < 0 ) x = 0;
           
           list = list->next;
           if (list)
             {
-              w = (long) list->data - x;
+              w = GPOINTER_TO_INT (list->data) - x;
 
 		  if (w+x > width) w = width - x;
 		  
@@ -2667,7 +2582,7 @@ CR_convert (Iscissors *iscissors,
 }
 
 static void
-CR_convert_points (GdkPoint *points,
+CR_convert_points (GimpPoint *points,
 		   int       npoints)
 {
   int i;
@@ -2813,21 +2728,21 @@ CR_insert_in_list (GSList *list,
   GSList *rest;
 
   if (!list)
-    return g_slist_prepend (list, (gpointer) ((long) x));
+    return g_slist_prepend (list, GINT_TO_POINTER (x));
 
   while (list)
     {
       rest = g_slist_next (list);
-      if (x < (long) list->data)
+      if (x < GPOINTER_TO_INT (list->data))
         {
           rest = g_slist_prepend (rest, list->data);
           list->next = rest;
-          list->data = (gpointer) ((long) x);
+          list->data = GINT_TO_POINTER (x);
           return orig;
         }
       else if (!rest)
         {
-          g_slist_append (list, (gpointer) ((long) x));
+          list = g_slist_append (list, GINT_TO_POINTER (x));
           return orig;
         }
       list = g_slist_next (list);

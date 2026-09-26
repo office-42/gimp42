@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Linux
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'COPYING']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ccache gcc pkg-config meson ninja-build \
+            libgtk-4-dev libglib2.0-dev libcairo2-dev libpango1.0-dev \
+            libgdk-pixbuf-2.0-dev libjpeg-dev libpng-dev libtiff-dev \
+            zlib1g-dev libbz2-dev xvfb
+
+      - name: Restore ccache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ccache
+          key: ccache-linux-${{ github.sha }}
+          restore-keys: ccache-linux-
+
+      - name: Configure
+        run: |
+          export CC="ccache gcc"
+          ccache --max-size=300M
+          # No --werror: the 1998 sources still carry warnings that are
+          # fixed as the port goes on; they stay visible in the log.
+          meson setup builddir --prefix="$PWD/dist"
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Install
+        run: meson install -C builddir
+
+      - name: Smoke test
+        # --version exits before the toolkit starts; the Xvfb run proves
+        # the program links and starts its main loop without a crash.
+        run: |
+          ./dist/bin/gimp42 --version
+          timeout 20 xvfb-run -a ./dist/bin/gimp42 --no-splash --console-messages || test $? -eq 124
+
+      - name: Upload build
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gimp42-linux
+          path: dist
+          retention-days: 14

@@ -21,18 +21,18 @@
 
 #define WIRESIZE 16
 
+/* Line styles for the wireframe */
+/* ============================= */
+
+#define LINE_SOLID  0
+#define LINE_DASHED 1
+
 typedef struct
 {
   gint x1,y1,x2,y2;
   gint linewidth;
-  GdkLineStyle linestyle;
+  gint linestyle;
 } line;
-
-typedef struct
-{
-  gint x,y,w,h;
-  GdkImage *image;
-} BackBuffer;
 
 /* Externally visible variables */
 /* ============================ */
@@ -40,7 +40,6 @@ typedef struct
 extern line       linetab[];
 extern gdouble    mat[3][4];
 extern gint       lightx,lighty;
-extern BackBuffer backbuf;
 
 /* Externally visible functions */
 /* ============================ */
@@ -52,5 +51,7 @@ extern void draw_preview_image     (gint docompute);
 extern void draw_preview_wireframe (void);
 extern gint check_light_hit        (gint xpos,gint ypos);
 extern void update_light           (gint xpos,gint ypos);
+extern void preview_draw           (GtkDrawingArea *area,cairo_t *cr,
+                                    gint width,gint height,gpointer data);
 
 #endif

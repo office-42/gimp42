@@ -8,7 +8,14 @@ line    linetab[WIRESIZE*2+8];
 gdouble mat[3][4];
 
 gint lightx,lighty;
-BackBuffer backbuf={0,0,0,0,NULL};
+
+/* gimp42: GTK 4 has no window to draw on and no XOR, so the preview   */
+/* keeps its state (the preview image, the light marker position and   */
+/* the wireframe lines in linetab) and preview_draw () paints all of   */
+/* it with cairo.  The "draw" and "clear" functions below update that  */
+/* state and ask for a redraw.                                         */
+
+static gint light_marker_visible = FALSE;
 
 /* Protos */
 /* ====== */
@@ -19,6 +26,12 @@ void clear_light_marker (void);
 void draw_wireframe_plane(gint startx,gint starty,gint pw,gint ph);
 void draw_wireframe_sphere(gint startx,gint starty,gint pw,gint ph);
 void clear_wireframe(void);
+
+static void preview_redraw(void)
+{
+  if (previewarea!=NULL)
+    gtk_widget_queue_draw(previewarea);
+}
 
 /**************************************************************/
 /* Computes a preview of the rectangle starting at (x,y) with */
@@ -120,7 +133,7 @@ void compute_preview(gint x,gint y,gint w,gint h,gint pw,gint ph)
   /* Convert to visual type */
   /* ====================== */
 
-  gck_rgb_to_gdkimage(appwin->visinfo,preview_rgb_data,image,pw,ph);
+  gck_rgb_to_cairo_surface(appwin->visinfo,preview_rgb_data,image,pw,ph);
 }
 
 /*************************************************/
@@ -152,57 +165,21 @@ gint check_light_hit(gint xpos,gint ypos)
 
 void draw_light_marker(gint xpos,gint ypos)
 {
-  gck_gc_set_foreground(appwin->visinfo,gc,0,50,255);
-  gck_gc_set_background(appwin->visinfo,gc,0,0,0);
-
-  gdk_gc_set_function(gc,GDK_COPY);
-
   if (mapvals.lightsource.type==POINT_LIGHT)
     {
       lightx=xpos;
       lighty=ypos;
-    
-      /* Save background */
-      /* =============== */
- 
-      backbuf.x=lightx-7;
-      backbuf.y=lighty-7;
-      backbuf.w=14;
-      backbuf.h=14;
-    
-      /* X doesn't like images that's outside a window, make sure */
-      /* we get the backbuffer image from within the boundaries   */
-      /* ======================================================== */
- 
-      if (backbuf.x<0)
-        backbuf.x=0;
-      else if ((backbuf.x+backbuf.w)>PREVIEW_WIDTH)
-        backbuf.w=(PREVIEW_WIDTH-backbuf.x);
-      if (backbuf.y<0)
-        backbuf.y=0;
-      else if ((backbuf.y+backbuf.h)>PREVIEW_HEIGHT)
-        backbuf.h=(PREVIEW_WIDTH-backbuf.y);
- 
-      backbuf.image=gdk_image_get(previewarea->window,backbuf.x,backbuf.y,backbuf.w,backbuf.h);
-      gdk_draw_arc(previewarea->window,gc,TRUE,lightx-7,lighty-7,14,14,0,360*64);
+      light_marker_visible=TRUE;
+      preview_redraw();
     }
 }
 
-void clear_light_marker()
+void clear_light_marker(void)
 {
-  /* Restore background if it has been saved */
-  /* ======================================= */
-  
-  if (backbuf.image!=NULL)
+  if (light_marker_visible==TRUE)
     {
-      gck_gc_set_foreground(appwin->visinfo,gc,255,255,255);
-      gck_gc_set_background(appwin->visinfo,gc,0,0,0);
-
-      gdk_gc_set_function(gc,GDK_COPY);
-      gdk_draw_image(previewarea->window,gc,backbuf.image,0,0,backbuf.x,backbuf.y,
-        backbuf.w,backbuf.h);
-      gdk_image_destroy(backbuf.image);
-      backbuf.image=NULL;
+      light_marker_visible=FALSE;
+      preview_redraw();
     }
 }
 
@@ -246,11 +223,7 @@ void update_light(gint xpos,gint ypos)
 void draw_preview_image(gint docompute)
 {
   gint startx,starty,pw,ph;
-  
-  gck_gc_set_foreground(appwin->visinfo,gc,255,255,255);
-  gck_gc_set_background(appwin->visinfo,gc,0,0,0);
 
-  gdk_gc_set_function(gc,GDK_COPY);
   linetab[0].x1=-1;
 
   pw=PREVIEW_WIDTH >> mapvals.preview_zoom_factor;
@@ -258,19 +231,67 @@ void draw_preview_image(gint docompute)
   startx=(PREVIEW_WIDTH-pw)>>1;
   starty=(PREVIEW_HEIGHT-ph)>>1;
 
-  if (docompute==TRUE)
+  if (docompute==TRUE && image!=NULL)
     {
-      gck_cursor_set(previewarea->window,GDK_WATCH);
+      gck_cursor_set(previewarea,"wait");
       compute_preview(0,0,width-1,height-1,pw,ph);
-      gck_cursor_set(previewarea->window,GDK_HAND2);
+      gck_cursor_set(previewarea,"pointer");
       clear_light_marker();
     }
 
-  if (pw!=PREVIEW_WIDTH)
-    gdk_window_clear(previewarea->window);
-  
-  gdk_draw_image(previewarea->window,gc,image,0,0,startx,starty,pw,ph);
   draw_lights(startx,starty,pw,ph);
+  preview_redraw();
+}
+
+/**************************************************/
+/* Paint the preview: the image, the light marker */
+/* and the wireframe (inverting what is below it) */
+/**************************************************/
+
+void preview_draw(GtkDrawingArea *area,cairo_t *cr,
+                  gint area_width,gint area_height,gpointer data)
+{
+  gint startx,starty,pw,ph,n;
+  static const double dashes[] = { 4.0, 4.0 };
+
+  pw=PREVIEW_WIDTH >> mapvals.preview_zoom_factor;
+  ph=PREVIEW_HEIGHT >> mapvals.preview_zoom_factor;
+  startx=(PREVIEW_WIDTH-pw)>>1;
+  starty=(PREVIEW_HEIGHT-ph)>>1;
+
+  if (image!=NULL)
+    {
+      cairo_set_source_surface(cr,image,startx,starty);
+      cairo_rectangle(cr,startx,starty,pw,ph);
+      cairo_fill(cr);
+    }
+
+  if (light_marker_visible==TRUE && mapvals.lightsource.type==POINT_LIGHT)
+    {
+      gck_cairo_set_source_rgb(cr,0,50,255);
+      cairo_arc(cr,lightx,lighty,7.0,0.0,2.0*M_PI);
+      cairo_fill(cr);
+    }
+
+  if (mapvals.showgrid==TRUE && linetab[0].x1!=-1)
+    {
+      cairo_set_operator(cr,CAIRO_OPERATOR_DIFFERENCE);
+      gck_cairo_set_source_rgb(cr,255,255,255);
+      cairo_set_line_cap(cr,CAIRO_LINE_CAP_BUTT);
+
+      for (n=0;linetab[n].x1!=-1;n++)
+        {
+          cairo_set_line_width(cr,linetab[n].linewidth);
+          if (linetab[n].linestyle==LINE_DASHED)
+            cairo_set_dash(cr,dashes,2,0.0);
+          else
+            cairo_set_dash(cr,NULL,0,0.0);
+
+          cairo_move_to(cr,linetab[n].x1+0.5,linetab[n].y1+0.5);
+          cairo_line_to(cr,linetab[n].x2+0.5,linetab[n].y2+0.5);
+          cairo_stroke(cr);
+        }
+    }
 }
 
 /**************************/
@@ -280,11 +301,6 @@ void draw_preview_image(gint docompute)
 void draw_preview_wireframe(void)
 {
   gint startx,starty,pw,ph;
-
-  gck_gc_set_foreground(appwin->visinfo,gc,255,255,255);
-  gck_gc_set_background(appwin->visinfo,gc,0,0,0);
-
-  gdk_gc_set_function(gc,GDK_INVERT);
 
   pw=PREVIEW_WIDTH >> mapvals.preview_zoom_factor;
   ph=PREVIEW_HEIGHT >> mapvals.preview_zoom_factor;
@@ -310,6 +326,8 @@ void draw_wireframe(gint startx,gint starty,gint pw,gint ph)
         draw_wireframe_sphere(startx,starty,pw,ph);
         break;
     }
+
+  preview_redraw();
 }
 
 void draw_wireframe_plane(gint startx,gint starty,gint pw,gint ph)
@@ -362,9 +380,7 @@ void draw_wireframe_plane(gint startx,gint starty,gint pw,gint ph)
           linetab[n].x2=(gint)(x2+0.5);
           linetab[n].y2=(gint)(y2+0.5);
           linetab[n].linewidth=1;
-          linetab[n].linestyle=GDK_LINE_SOLID;
-          gdk_gc_set_line_attributes(gc,linetab[n].linewidth,linetab[n].linestyle,GDK_CAP_NOT_LAST,GDK_JOIN_MITER);
-          gdk_draw_line(previewarea->window,gc,linetab[n].x1,linetab[n].y1,linetab[n].x2,linetab[n].y2);
+          linetab[n].linestyle=LINE_SOLID;
           n++;
         }
 
@@ -378,9 +394,7 @@ void draw_wireframe_plane(gint startx,gint starty,gint pw,gint ph)
           linetab[n].x2=(gint)(x2+0.5);
           linetab[n].y2=(gint)(y2+0.5);
           linetab[n].linewidth=1;
-          linetab[n].linestyle=GDK_LINE_SOLID;
-          gdk_gc_set_line_attributes(gc,linetab[n].linewidth,linetab[n].linestyle,GDK_CAP_NOT_LAST,GDK_JOIN_MITER);
-          gdk_draw_line(previewarea->window,gc,linetab[n].x1,linetab[n].y1,linetab[n].x2,linetab[n].y2);
+          linetab[n].linestyle=LINE_SOLID;
           n++;
         }
         
@@ -473,9 +487,7 @@ void draw_wireframe_sphere(gint startx,gint starty,gint pw,gint ph)
               linetab[n].x2=(gint)(x2+0.5);
               linetab[n].y2=(gint)(y2+0.5);
               linetab[n].linewidth=3;
-              linetab[n].linestyle=GDK_LINE_SOLID;
-              gdk_gc_set_line_attributes(gc,linetab[n].linewidth,linetab[n].linestyle,GDK_CAP_NOT_LAST,GDK_JOIN_MITER);
-              gdk_draw_line(previewarea->window,gc,linetab[n].x1,linetab[n].y1,linetab[n].x2,linetab[n].y2);
+              linetab[n].linestyle=LINE_SOLID;
               n++;
             }
         }
@@ -499,15 +511,13 @@ void draw_wireframe_sphere(gint startx,gint starty,gint pw,gint ph)
           if (p[cnt2].z<mapvals.position.z || p[cnt2+1].z<mapvals.position.z)
             {
               linetab[n].linewidth=1;
-              linetab[n].linestyle=GDK_LINE_DOUBLE_DASH;
+              linetab[n].linestyle=LINE_DASHED;
             }
           else
             {
               linetab[n].linewidth=3;
-              linetab[n].linestyle=GDK_LINE_SOLID;
+              linetab[n].linestyle=LINE_SOLID;
             }
-          gdk_gc_set_line_attributes(gc,linetab[n].linewidth,linetab[n].linestyle,GDK_CAP_NOT_LAST,GDK_JOIN_MITER);
-          gdk_draw_line(previewarea->window,gc,linetab[n].x1,linetab[n].y1,linetab[n].x2,linetab[n].y2);
           n++;
         }
       cnt2+=2;
@@ -519,15 +529,13 @@ void draw_wireframe_sphere(gint startx,gint starty,gint pw,gint ph)
   linetab[n].x1=-1;
 }
 
+/****************************************************/
+/* The wireframe was erased by drawing it again with */
+/* XOR; now the lines are simply not painted once    */
+/* linetab is emptied, so this only asks for a redraw */
+/****************************************************/
+
 void clear_wireframe(void)
 {
-  gint n=0;
-  
-  while (linetab[n].x1!=-1)
-    {
-      gdk_gc_set_line_attributes(gc,linetab[n].linewidth,linetab[n].linestyle,GDK_CAP_NOT_LAST,GDK_JOIN_MITER);
-      gdk_draw_line(previewarea->window,gc,linetab[n].x1,linetab[n].y1,
-        linetab[n].x2,linetab[n].y2);
-      n++;
-    }
+  preview_redraw();
 }

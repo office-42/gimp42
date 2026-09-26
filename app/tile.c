@@ -25,7 +25,7 @@ int tile_ref_count = 0;
 
 void
 #if defined (TILE_DEBUG) && defined (__GNUC__)
-_tile_ref (Tile *tile, char *func_name)
+_tile_ref (Tile *tile, const char *func_name)
 #else
 tile_ref (Tile *tile)
 #endif
@@ -65,7 +65,7 @@ tile_ref (Tile *tile)
 
 void
 #if defined (TILE_DEBUG) && defined (__GNUC__)
-_tile_unref (Tile *tile, int dirty, char *func_name)
+_tile_unref (Tile *tile, int dirty, const char *func_name)
 #else
 tile_unref (Tile *tile, int dirty)
 #endif

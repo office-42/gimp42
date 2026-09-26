@@ -16,9 +16,17 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
+/* To do this more elegantly, there should be a GtkWidget pixmap_button,  
+ * probably derived from a simple hbox. It should keep track of the widgets 
+ * sensitivity and draw the related pixmap. This way one could avoid the  
+ * need to have a special function to set sensitivity as you'll find below.             
+ *                                                      (sven@gimp.org)
+ */
+
 #ifndef __OPS_BUTTONS_H__
 #define __OPS_BUTTONS_H__
 
+#include <gtk/gtk.h>
 
 /* Structures */
 
@@ -27,29 +35,21 @@ typedef struct _OpsButton OpsButton;
 typedef void (*OpsButtonCallback) (GtkWidget *widget,
 				   gpointer   user_data);
 
-struct _OpsButton 
+struct _OpsButton
 {
   gchar **xpm_data;          /* xpm data for the button in sensitive state */
-  gchar **xpm_is_data;       /* xpm data for the button in insensitive state */
-  OpsButtonCallback callback;   
-  char *tooltip;               
-  GdkPixmap *pixmap;         
-  GdkBitmap *mask;
-  GdkPixmap *is_pixmap;
-  GdkBitmap *is_mask;
-  GtkWidget *pixmapwid;      /* the pixmap widget */
+  gchar **xpm_is_data;       /* unused: GTK draws insensitive buttons itself */
+  OpsButtonCallback callback;
+  char *tooltip;
   GtkWidget *widget;         /* the button widget */
 };
 
-
 /* Function declarations */
 
+/*  A row of icon buttons; each calls its callback with parent.  */
 GtkWidget * ops_button_box_new        (GtkWidget *,      /* parent widget */
-				       GtkTooltips *,    
 				       OpsButton *);
 void ops_button_box_set_insensitive   (OpsButton *);
 void ops_button_set_sensitive         (OpsButton, gint);
 
 #endif /* __OPS_BUTTONS_H__ */
-
-

@@ -155,6 +155,7 @@
 
 #include <gtk/gtk.h>
 #include <libgimp/gimp.h>
+#include "libgimp/gimpui.h"
 
 
 /*
@@ -412,49 +413,51 @@ load_image(char *filename)	/* I - File to load */
   GPixelRgn	pixel_rgn;	/* Pixel region for layer */
   png_structp	pp;		/* PNG read pointer */
   png_infop	info;		/* PNG info pointers */
-  guchar	**pixels,	/* Pixel rows */
-		*pixel;		/* Pixel data */
-  char		progress[255];	/* Title for progress display... */
+  guchar	** volatile pixels = NULL,	/* Pixel rows */
+		* volatile pixel = NULL;	/* Pixel data */
+  char		*progress;	/* Title for progress display... */
+  gchar		*basename;
+  png_uint_32	width, height;	/* Image dimensions */
+  int		bit_depth, color_type;
+  png_color_8p	sig_bit;
+  png_colorp	palette;
+  int		num_palette;
 
-
- /*
-  * Setup the PNG data structures...
-  */
-
-#if PNG_LIBPNG_VER > 88
- /*
-  * Use the "new" calling convention...
-  */
-
-  pp   = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-  info = png_create_info_struct(pp);
-#else
- /*
-  * SGI (and others) supply libpng-88 and not -89c...
-  */
-
-  pp = (png_structp)calloc(sizeof(png_struct), 1);
-  png_read_init(pp);
-
-  info = (png_infop)calloc(sizeof(png_info), 1);
-#endif /* PNG_LIBPNG_VER > 88 */
 
  /*
   * Open the file and initialize the PNG read "engine"...
   */
 
-  fp = fopen(filename, "r");
+  fp = fopen(filename, "rb");
   if (fp == NULL)
     return (-1);
 
+  pp   = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+  info = pp ? png_create_info_struct(pp) : NULL;
+  if (info == NULL)
+  {
+    png_destroy_read_struct(pp ? &pp : NULL, NULL, NULL);
+    fclose(fp);
+    return (-1);
+  }
+
+  if (setjmp(png_jmpbuf(pp)))
+  {
+    g_message("PNG: error while reading %s", filename);
+    png_destroy_read_struct(&pp, &info, NULL);
+    g_free(pixel);
+    g_free(pixels);
+    fclose(fp);
+    return (-1);
+  }
+
   png_init_io(pp, fp);
 
-  if (strrchr(filename, '/') != NULL)
-    sprintf(progress, "Loading %s:", strrchr(filename, '/') + 1);
-  else
-    sprintf(progress, "Loading %s:", filename);
-
+  basename = g_path_get_basename(filename);
+  progress = g_strdup_printf("Loading %s:", basename);
   gimp_progress_init(progress);
+  g_free(progress);
+  g_free(basename);
 
  /*
   * Get the image dimensions and create the image...
@@ -462,34 +465,45 @@ load_image(char *filename)	/* I - File to load */
 
   png_read_info(pp, info);
 
+  width      = png_get_image_width(pp, info);
+  height     = png_get_image_height(pp, info);
+  bit_depth  = png_get_bit_depth(pp, info);
+  color_type = png_get_color_type(pp, info);
+
  /*
   * I have no idea why this used to be the way it was, luckily
   * most people don't use 2bit or 4bit indexed images with PNG
   */
 
-  if (info->bit_depth < 8) 
+  if (bit_depth < 8)
   {
     png_set_packing(pp);
-    if (info->color_type != PNG_COLOR_TYPE_PALETTE) {
+    if (color_type != PNG_COLOR_TYPE_PALETTE) {
       png_set_expand(pp);
 
-      if (info->valid & PNG_INFO_sBIT)
-        png_set_shift(pp, &(info->sig_bit));
+      if (png_get_sBIT(pp, info, &sig_bit) & PNG_INFO_sBIT)
+        png_set_shift(pp, sig_bit);
     }
   }
-  else if (info->bit_depth == 16)
+  else if (bit_depth == 16)
     png_set_strip_16(pp);
 
  /*
   * Turn on interlace handling...
   */
 
-  if (info->interlace_type)
+  if (png_get_interlace_type(pp, info) != PNG_INTERLACE_NONE)
     num_passes = png_set_interlace_handling(pp);
   else
     num_passes = 1;
-  
-  switch (info->color_type)
+
+  png_read_update_info(pp, info);
+
+  bpp = 1;
+  image_type = GRAY;
+  layer_type = GRAY_IMAGE;
+
+  switch (color_type)
   {
     case PNG_COLOR_TYPE_RGB :		/* RGB */
         bpp        = 3;
@@ -522,7 +536,7 @@ load_image(char *filename)	/* I - File to load */
         break;
   };
 
-  image = gimp_image_new(info->width, info->height, image_type);
+  image = gimp_image_new(width, height, image_type);
   if (image == -1)
   {
     g_print("can't allocate new image\n");
@@ -535,14 +549,15 @@ load_image(char *filename)	/* I - File to load */
   * Load the colormap as necessary...
   */
 
-  if (info->color_type & PNG_COLOR_MASK_PALETTE)
-    gimp_image_set_cmap(image, (guchar *)info->palette, info->num_palette);
+  if ((color_type & PNG_COLOR_MASK_PALETTE) &&
+      png_get_PLTE(pp, info, &palette, &num_palette))
+    gimp_image_set_cmap(image, (guchar *)palette, num_palette);
 
  /*
   * Create the "background" layer to hold the image...
   */
 
-  layer = gimp_layer_new(image, "Background", info->width, info->height,
+  layer = gimp_layer_new(image, "Background", width, height,
                          layer_type, 100, NORMAL_MODE);
   gimp_image_add_layer(image, layer, 0);
 
@@ -560,11 +575,11 @@ load_image(char *filename)	/* I - File to load */
   */
 
   tile_height = gimp_tile_height ();
-  pixel       = g_new(guchar, tile_height * info->width * bpp);
+  pixel       = g_new(guchar, tile_height * width * bpp);
   pixels      = g_new(guchar *, tile_height);
 
   for (i = 0; i < tile_height; i ++)
-    pixels[i] = pixel + info->width * info->channels * i;
+    pixels[i] = pixel + width * bpp * i;
 
   for (pass = 0; pass < num_passes; pass ++)
   {
@@ -573,11 +588,11 @@ load_image(char *filename)	/* I - File to load */
     */
 
     for (begin = 0, end = tile_height;
-         begin < info->height;
+         begin < height;
          begin += tile_height, end += tile_height)
     {
-      if (end > info->height)
-        end = info->height;
+      if (end > height)
+        end = height;
 
       num = end - begin;
 	
@@ -588,7 +603,7 @@ load_image(char *filename)	/* I - File to load */
 
       gimp_pixel_rgn_set_rect(&pixel_rgn, pixel, 0, begin, drawable->width, num);
 
-      gimp_progress_update(((double)pass + (double)end / (double)info->height) /
+      gimp_progress_update(((double)pass + (double)end / (double)height) /
                            (double)num_passes);
     };
   };
@@ -598,12 +613,10 @@ load_image(char *filename)	/* I - File to load */
   */
 
   png_read_end(pp, info);
-  png_read_destroy(pp, info, NULL);
+  png_destroy_read_struct(&pp, &info, NULL);
 
-  free(pixel);
-  free(pixels);
-  free(pp);
-  free(info);
+  g_free(pixel);
+  g_free(pixels);
 
   fclose(fp);
 
@@ -642,50 +655,49 @@ save_image(char   *filename,	/* I - File to save to */
   png_structp	pp;		/* PNG read pointer */
   png_infop	info;		/* PNG info pointer */
   gint		num_colors;	/* Number of colors in colormap */
-  guchar	**pixels,	/* Pixel rows */
-		*pixel;		/* Pixel data */
-  char		progress[255];	/* Title for progress display... */
+  guchar	** volatile pixels = NULL,	/* Pixel rows */
+		* volatile pixel = NULL;	/* Pixel data */
+  char		*progress;	/* Title for progress display... */
+  gchar		*basename;
   gdouble	gamma;
-
- /*
-  * Setup the PNG data structures...
-  */
-
-#if PNG_LIBPNG_VER > 88
- /*
-  * Use the "new" calling convention...
-  */
-
-  pp   = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-  info = png_create_info_struct(pp);
-#else
- /*
-  * SGI (and others) supply libpng-88 and not -89c...
-  */
-
-  pp = (png_structp)calloc(sizeof(png_struct), 1);
-  png_write_init(pp);
-
-  info = (png_infop)calloc(sizeof(png_info), 1);
-  png_info_init(info);
-#endif /* PNG_LIBPNG_VER > 88 */
+  int		color_type;	/* PNG colour type */
+  png_color_8	sig_bit;	/* Significant bits */
+  guchar	*cmap = NULL;	/* Colormap of an indexed image */
 
  /*
   * Open the file and initialize the PNG write "engine"...
   */
 
-  fp = fopen(filename, "w");
+  fp = fopen(filename, "wb");
   if (fp == NULL)
     return (0);
 
+  pp   = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+  info = pp ? png_create_info_struct(pp) : NULL;
+  if (info == NULL)
+  {
+    png_destroy_write_struct(pp ? &pp : NULL, NULL);
+    fclose(fp);
+    return (0);
+  }
+
+  if (setjmp(png_jmpbuf(pp)))
+  {
+    g_message("PNG: error while writing %s", filename);
+    png_destroy_write_struct(&pp, &info);
+    g_free(pixel);
+    g_free(pixels);
+    fclose(fp);
+    return (0);
+  }
+
   png_init_io(pp, fp);
 
-  if (strrchr(filename, '/') != NULL)
-    sprintf(progress, "Saving %s:", strrchr(filename, '/') + 1);
-  else
-    sprintf(progress, "Saving %s:", filename);
-
+  basename = g_path_get_basename(filename);
+  progress = g_strdup_printf("Saving %s:", basename);
   gimp_progress_init(progress);
+  g_free(progress);
+  g_free(basename);
 
  /*
   * Get the drawable for the current image...
@@ -705,44 +717,53 @@ save_image(char   *filename,	/* I - File to save to */
 
   gamma = gimp_gamma();
 
-  info->width          = drawable->width;
-  info->height         = drawable->height;
-  info->bit_depth      = 8;
-  info->gamma          = 1.0 / (gamma != 1.00 ? gamma : DEFAULT_GAMMA);
-  info->sig_bit.red    = 8;
-  info->sig_bit.green  = 8;
-  info->sig_bit.blue   = 8;
-  info->sig_bit.gray   = 8;
-  info->sig_bit.alpha  = 8;
-  info->interlace_type = pngvals.interlaced;
-  info->valid          |= PNG_INFO_gAMA;
-
   switch (type)
   {
     case RGB_IMAGE :
-        info->color_type = PNG_COLOR_TYPE_RGB;
+        color_type       = PNG_COLOR_TYPE_RGB;
         bpp              = 3;
         break;
     case RGBA_IMAGE :
-        info->color_type = PNG_COLOR_TYPE_RGB_ALPHA;
+        color_type       = PNG_COLOR_TYPE_RGB_ALPHA;
         bpp              = 4;
         break;
     case GRAY_IMAGE :
-        info->color_type = PNG_COLOR_TYPE_GRAY;
+        color_type       = PNG_COLOR_TYPE_GRAY;
         bpp              = 1;
         break;
     case GRAYA_IMAGE :
-        info->color_type = PNG_COLOR_TYPE_GRAY_ALPHA;
+        color_type       = PNG_COLOR_TYPE_GRAY_ALPHA;
         bpp              = 2;
         break;
     case INDEXED_IMAGE :
-	info->valid      |= PNG_INFO_PLTE;
-        info->color_type = PNG_COLOR_TYPE_PALETTE;
-        info->palette    = (png_colorp)gimp_image_get_cmap(image_ID, &num_colors);
-        info->num_palette= num_colors;
+        color_type       = PNG_COLOR_TYPE_PALETTE;
         bpp              = 1;
         break;
+    default :
+        g_message("PNG: can't save this image type");
+        png_destroy_write_struct(&pp, &info);
+        fclose(fp);
+        return (0);
   };
+
+  png_set_IHDR(pp, info, drawable->width, drawable->height, 8, color_type,
+               pngvals.interlaced ? PNG_INTERLACE_ADAM7 : PNG_INTERLACE_NONE,
+               PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+
+  png_set_gAMA(pp, info, 1.0 / (gamma != 1.00 ? gamma : DEFAULT_GAMMA));
+
+  sig_bit.red   = 8;
+  sig_bit.green = 8;
+  sig_bit.blue  = 8;
+  sig_bit.gray  = 8;
+  sig_bit.alpha = 8;
+  png_set_sBIT(pp, info, &sig_bit);
+
+  if (type == INDEXED_IMAGE)
+  {
+    cmap = gimp_image_get_cmap(image_ID, &num_colors);
+    png_set_PLTE(pp, info, (png_colorp)cmap, num_colors);
+  }
 
   png_write_info(pp, info);
 
@@ -785,23 +806,21 @@ save_image(char   *filename,	/* I - File to save to */
 
       png_write_rows(pp, pixels, num);
 
-      gimp_progress_update(((double)pass + (double)end / (double)info->height) /
+      gimp_progress_update(((double)pass + (double)end / (double)drawable->height) /
                            (double)num_passes);
     };
   };
 
   png_write_end(pp, info);
-  png_write_destroy(pp);
+  png_destroy_write_struct(&pp, &info);
 
-  free(pixel);
-  free(pixels);
+  g_free(pixel);
+  g_free(pixels);
+  g_free(cmap);
 
  /*
   * Done with the file...
   */
-
-  free(pp);
-  free(info);
 
   fclose(fp);
 
@@ -817,7 +836,7 @@ static void
 save_close_callback(GtkWidget *widget,	/* I - Close button */
                     gpointer  data)	/* I - Callback data */
 {
-  gtk_main_quit();
+  gimp_main_loop_quit ();
 }
 
 
@@ -831,7 +850,7 @@ save_ok_callback(GtkWidget *widget,	/* I - OK button */
 {
   runme = TRUE;
 
-  gtk_widget_destroy(GTK_WIDGET(data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 
@@ -843,7 +862,7 @@ static void
 save_compression_update(GtkAdjustment *adjustment,	/* I - Scale adjustment */
                         gpointer      data)		/* I - Callback data */
 {
-  pngvals.compression_level = (gint32)adjustment->value;
+  pngvals.compression_level = (gint32)gtk_adjustment_get_value (adjustment);
 }
 
 
@@ -855,7 +874,7 @@ static void
 save_interlace_update(GtkWidget *widget,	/* I - Interlace toggle button */
                       gpointer  data)		/* I - Callback data  */
 {
-  pngvals.interlaced = GTK_TOGGLE_BUTTON(widget)->active;
+  pngvals.interlaced = gtk_check_button_get_active (GTK_CHECK_BUTTON (widget));
 }
 
 
@@ -873,93 +892,72 @@ save_dialog(void)
 		*toggle,	/* Interlace toggle button */
 		*label,		/* Label for controls */
 		*scale;		/* Compression level scale */
-  GtkObject	*scale_data;	/* Scale data */
-  gchar		**argv;		/* Fake command-line args */
-  gint		argc;		/* Number of fake command-line args */
+  GtkAdjustment	*scale_data;	/* Scale data */
 
 
  /*
   * Fake the command-line args and open a window...
   */
 
-  argc    = 1;
-  argv    = g_new (gchar *, 1);
-  argv[0] = g_strdup("png");
 
-  gtk_init(&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
+  gtk_init ();
 
  /*
   * Open a dialog window...
   */
 
-  dlg = gtk_dialog_new();
-  gtk_window_set_title(GTK_WINDOW(dlg), "PNG Options");
-  gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-                     (GtkSignalFunc)save_close_callback, NULL);
+  dlg = gimp_dialog_new ("PNG Options");
+  g_signal_connect (dlg, "destroy",
+                     G_CALLBACK (save_close_callback), NULL);
 
  /*
   * OK/cancel buttons...
   */
 
   button = gtk_button_new_with_label("OK");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect(GTK_OBJECT (button), "clicked",
-                     (GtkSignalFunc)save_ok_callback,
+  g_signal_connect (button, "clicked",
+                     G_CALLBACK (save_ok_callback),
                      dlg);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default(button);
-  gtk_widget_show(button);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
+  gtk_window_set_default_widget (GTK_WINDOW (dlg), button);
 
   button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-                            (GtkSignalFunc)gtk_widget_destroy, GTK_OBJECT(dlg));
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show(button);
+  g_signal_connect_swapped (button, "clicked", G_CALLBACK (gtk_window_destroy), dlg);
+  gimp_box_pack_start (gimp_dialog_get_action_area (dlg), button, TRUE, TRUE, 0);
 
  /*
   * Compression level, interlacing controls...
   */
 
   frame = gtk_frame_new("Parameter Settings");
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width(GTK_CONTAINER(frame), 10);
-  gtk_box_pack_start(GTK_BOX (GTK_DIALOG(dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
 
-  table = gtk_table_new(2, 2, FALSE);
-  gtk_container_border_width(GTK_CONTAINER(table), 10);
-  gtk_container_add(GTK_CONTAINER(frame), table);
+  table = gimp_table_new(2, 2, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (frame, table);
 
   toggle = gtk_check_button_new_with_label("Interlace");
-  gtk_table_attach(GTK_TABLE(table), toggle, 0, 2, 0, 1, GTK_FILL, 0, 0, 0);
-  gtk_signal_connect(GTK_OBJECT(toggle), "toggled",
-                     (GtkSignalFunc)save_interlace_update, NULL);
-  gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(toggle), pngvals.interlaced);
-  gtk_widget_show(toggle);
+  gimp_table_attach (table, toggle, 0, 2, 0, 1, GIMP_FILL, 0, 0, 0);
+  g_signal_connect (toggle, "toggled",
+                     G_CALLBACK (save_interlace_update), NULL);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), pngvals.interlaced);
 
   label = gtk_label_new("Compression level");
-  gtk_misc_set_alignment(GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach(GTK_TABLE(table), label, 0, 1, 1, 2, GTK_FILL, 0, 5, 0);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 1, 2, GIMP_FILL, 0, 5, 0);
 
   scale_data = gtk_adjustment_new(pngvals.compression_level, 1.0, 9.0, 1.0, 1.0, 0.0);
-  scale      = gtk_hscale_new(GTK_ADJUSTMENT(scale_data));
-  gtk_widget_set_usize(scale, SCALE_WIDTH, 0);
-  gtk_table_attach(GTK_TABLE(table), scale, 1, 2, 1, 2, GTK_FILL, 0, 0, 0);
+  scale      = gimp_hscale_new (GTK_ADJUSTMENT(scale_data), 1);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+  gimp_table_attach (table, scale, 1, 2, 1, 2, GIMP_FILL, 0, 0, 0);
   gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
   gtk_scale_set_digits(GTK_SCALE (scale), 1);
-  gtk_range_set_update_policy(GTK_RANGE(scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect(GTK_OBJECT(scale_data), "value_changed",
-                     (GtkSignalFunc)save_compression_update, NULL);
-  gtk_widget_show(label);
-  gtk_widget_show(scale);
-  gtk_widget_show(table);
-  gtk_widget_show(frame);
-  gtk_widget_show(dlg);
+  g_signal_connect (scale_data, "value-changed",
+                     G_CALLBACK (save_compression_update), NULL);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  gtk_main();
-  gdk_flush();
+  gimp_main_loop_run ();
 
   return (runme);
 }

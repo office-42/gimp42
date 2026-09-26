@@ -52,6 +52,7 @@ InfoDialog *       transform_info = NULL;
 /*  forward function declarations  */
 static int         transform_core_bounds  (Tool *, void *);
 static void *      transform_core_recalc  (Tool *, void *);
+static void        transform_core_screen_coords (Tool *, GDisplay *);
 static double      cubic                  (double, int, int, int, int);
 
 
@@ -68,7 +69,7 @@ static double      cubic                  (double, int, int, int, int);
 void
 transform_core_button_press (tool, bevent, gdisp_ptr)
      Tool *tool;
-     GdkEventButton *bevent;
+     GimpButtonEvent *bevent;
      gpointer gdisp_ptr;
 {
   TransformCore * transform_core;
@@ -101,6 +102,8 @@ transform_core_button_press (tool, bevent, gdisp_ptr)
       x = bevent->x;
       y = bevent->y;
 
+      transform_core_screen_coords (tool, gdisp);
+
       closest_dist = SQR (x - transform_core->sx1) + SQR (y - transform_core->sy1);
       transform_core->function = HANDLE_1;
 
@@ -131,10 +134,6 @@ transform_core_button_press (tool, bevent, gdisp_ptr)
 				   &transform_core->starty, TRUE, 0);
       transform_core->lastx = transform_core->startx;
       transform_core->lasty = transform_core->starty;
-
-      gdk_pointer_grab (gdisp->canvas->window, FALSE,
-			GDK_POINTER_MOTION_HINT_MASK | GDK_BUTTON1_MOTION_MASK | GDK_BUTTON_RELEASE_MASK,
-			NULL, NULL, bevent->time);
 
       tool->state = ACTIVE;
       return;
@@ -168,14 +167,6 @@ transform_core_button_press (tool, bevent, gdisp_ptr)
 	    tool->gdisp_ptr = gdisp_ptr;
 	    tool->state = ACTIVE;
 	    
-	    /*  Grab the pointer if we're in non-interactive mode  */
-	    if (!transform_core->interactive)
-	      gdk_pointer_grab (gdisp->canvas->window, FALSE,
-				(GDK_POINTER_MOTION_HINT_MASK |
-				 GDK_BUTTON1_MOTION_MASK |
-				 GDK_BUTTON_RELEASE_MASK),
-				NULL, NULL, bevent->time);
-	    
 	    /*  Find the transform bounds for some tools (like scale, perspective)
 	     *  that actually need the bounds for initializing
 	     */
@@ -188,7 +179,7 @@ transform_core_button_press (tool, bevent, gdisp_ptr)
 	    transform_core_recalc (tool, gdisp_ptr);
 	    
 	    /*  start drawing the bounding box and handles...  */
-	    draw_core_start (transform_core->core, gdisp->canvas->window, tool);
+	    draw_core_start (transform_core->core, gdisp->canvas, tool);
 	    
 	    /*  recall this function to find which handle we're dragging  */
 	    if (transform_core->interactive)
@@ -200,7 +191,7 @@ transform_core_button_press (tool, bevent, gdisp_ptr)
 void
 transform_core_button_release (tool, bevent, gdisp_ptr)
      Tool *tool;
-     GdkEventButton *bevent;
+     GimpButtonEvent *bevent;
      gpointer gdisp_ptr;
 {
   GDisplay *gdisp;
@@ -219,10 +210,6 @@ transform_core_button_release (tool, bevent, gdisp_ptr)
   /*  if we are creating, there is nothing to be done...exit  */
   if (transform_core->function == CREATING && transform_core->interactive)
     return;
-
-  /*  release of the pointer grab  */
-  gdk_pointer_ungrab (bevent->time);
-  gdk_flush ();
 
   /*  if the 3rd button isn't pressed, transform the selected mask  */
   if (! (bevent->state & GDK_BUTTON3_MASK))
@@ -292,7 +279,8 @@ transform_core_button_release (tool, bevent, gdisp_ptr)
       /*  Flush the gdisplays  */
       if (gdisp->disp_xoffset || gdisp->disp_yoffset)
 	{
-	  gdk_window_get_size (gdisp->canvas->window, &x, &y);
+	  x = gtk_widget_get_width (gdisp->canvas);
+	  y = gtk_widget_get_height (gdisp->canvas);
 	  if (gdisp->disp_yoffset)
 	    {
 	      gdisplay_expose_area (gdisp, 0, 0, gdisp->disp_width,
@@ -334,7 +322,7 @@ transform_core_button_release (tool, bevent, gdisp_ptr)
 void
 transform_core_motion (tool, mevent, gdisp_ptr)
      Tool *tool;
-     GdkEventMotion *mevent;
+     GimpMotionEvent *mevent;
      gpointer gdisp_ptr;
 {
   GDisplay *gdisp;
@@ -379,14 +367,14 @@ transform_core_motion (tool, mevent, gdisp_ptr)
 void
 transform_core_cursor_update (tool, mevent, gdisp_ptr)
      Tool *tool;
-     GdkEventMotion *mevent;
+     GimpMotionEvent *mevent;
      gpointer gdisp_ptr;
 {
   GDisplay *gdisp;
   TransformCore *transform_core;
   Layer *layer;
   int use_transform_cursor = FALSE;
-  GdkCursorType ctype = GDK_TOP_LEFT_ARROW;
+  GimpCursorType ctype = GIMP_CURSOR_TOP_LEFT_ARROW;
   int x, y;
 
   gdisp = (GDisplay *) gdisp_ptr;
@@ -407,12 +395,12 @@ transform_core_cursor_update (tool, mevent, gdisp_ptr)
     /*  ctype based on transform tool type  */
     switch (tool->type)
       {
-      case ROTATE: ctype = GDK_EXCHANGE; break;
-      case SCALE: ctype = GDK_SIZING; break;
-      case SHEAR: ctype = GDK_TCROSS; break;
-      case PERSPECTIVE: ctype = GDK_TCROSS; break;
-      case FLIP_HORZ: ctype = GDK_SB_H_DOUBLE_ARROW; break;
-      case FLIP_VERT: ctype = GDK_SB_V_DOUBLE_ARROW; break;
+      case ROTATE: ctype = GIMP_CURSOR_EXCHANGE; break;
+      case SCALE: ctype = GIMP_CURSOR_SIZING; break;
+      case SHEAR: ctype = GIMP_CURSOR_TCROSS; break;
+      case PERSPECTIVE: ctype = GIMP_CURSOR_TCROSS; break;
+      case FLIP_HORZ: ctype = GIMP_CURSOR_SB_H_DOUBLE_ARROW; break;
+      case FLIP_VERT: ctype = GIMP_CURSOR_SB_V_DOUBLE_ARROW; break;
       default: break;
       }
 
@@ -457,6 +445,29 @@ transform_core_no_draw (tool)
   return;
 }
 
+/*  The handles' positions on the display, for the button press to
+ *  find the handle closest to the pointer.  (Under X the draw function
+ *  kept these up to date; draw functions must not change tool state
+ *  any more.)
+ */
+static void
+transform_core_screen_coords (Tool     *tool,
+			      GDisplay *gdisp)
+{
+  TransformCore * transform_core;
+
+  transform_core = (TransformCore *) tool->private;
+
+  gdisplay_transform_coords (gdisp, transform_core->tx1, transform_core->ty1,
+			     &transform_core->sx1, &transform_core->sy1, 0);
+  gdisplay_transform_coords (gdisp, transform_core->tx2, transform_core->ty2,
+			     &transform_core->sx2, &transform_core->sy2, 0);
+  gdisplay_transform_coords (gdisp, transform_core->tx3, transform_core->ty3,
+			     &transform_core->sx3, &transform_core->sy3, 0);
+  gdisplay_transform_coords (gdisp, transform_core->tx4, transform_core->ty4,
+			     &transform_core->sx4, &transform_core->sy4, 0);
+}
+
 void
 transform_core_draw (tool)
      Tool * tool;
@@ -469,43 +480,37 @@ transform_core_draw (tool)
   gdisp = tool->gdisp_ptr;
   transform_core = (TransformCore *) tool->private;
 
+  /*  only draw: the handle positions the button press tests against
+   *  (sx1, sy1, ...) are updated by transform_core_screen_coords ()
+   */
   gdisplay_transform_coords (gdisp, transform_core->tx1, transform_core->ty1,
-			     &transform_core->sx1, &transform_core->sy1, 0);
+			     &x1, &y1, 0);
   gdisplay_transform_coords (gdisp, transform_core->tx2, transform_core->ty2,
-			     &transform_core->sx2, &transform_core->sy2, 0);
+			     &x2, &y2, 0);
   gdisplay_transform_coords (gdisp, transform_core->tx3, transform_core->ty3,
-			     &transform_core->sx3, &transform_core->sy3, 0);
+			     &x3, &y3, 0);
   gdisplay_transform_coords (gdisp, transform_core->tx4, transform_core->ty4,
-			     &transform_core->sx4, &transform_core->sy4, 0);
-
-  x1 = transform_core->sx1;  y1 = transform_core->sy1;
-  x2 = transform_core->sx2;  y2 = transform_core->sy2;
-  x3 = transform_core->sx3;  y3 = transform_core->sy3;
-  x4 = transform_core->sx4;  y4 = transform_core->sy4;
+			     &x4, &y4, 0);
 
   /*  find the handles' width and height  */
   srw = 10;
   srh = 10;
 
   /*  draw the bounding box  */
-  gdk_draw_line (transform_core->core->win, transform_core->core->gc,
-		 x1, y1, x2, y2);
-  gdk_draw_line (transform_core->core->win, transform_core->core->gc,
-		 x2, y2, x4, y4);
-  gdk_draw_line (transform_core->core->win, transform_core->core->gc,
-		 x3, y3, x4, y4);
-  gdk_draw_line (transform_core->core->win, transform_core->core->gc,
-		 x3, y3, x1, y1);
+  draw_core_line (transform_core->core, x1, y1, x2, y2);
+  draw_core_line (transform_core->core, x2, y2, x4, y4);
+  draw_core_line (transform_core->core, x3, y3, x4, y4);
+  draw_core_line (transform_core->core, x3, y3, x1, y1);
 
   /*  draw the tool handles  */
-  gdk_draw_rectangle (transform_core->core->win, transform_core->core->gc, 0,
-		      x1 - (srw >> 1), y1 - (srh >> 1), srw, srh);
-  gdk_draw_rectangle (transform_core->core->win, transform_core->core->gc, 0,
-		      x2 - (srw >> 1), y2 - (srh >> 1), srw, srh);
-  gdk_draw_rectangle (transform_core->core->win, transform_core->core->gc, 0,
-		      x3 - (srw >> 1), y3 - (srh >> 1), srw, srh);
-  gdk_draw_rectangle (transform_core->core->win, transform_core->core->gc, 0,
-		      x4 - (srw >> 1), y4 - (srh >> 1), srw, srh);
+  draw_core_rectangle (transform_core->core, FALSE,
+		       x1 - (srw >> 1), y1 - (srh >> 1), srw, srh);
+  draw_core_rectangle (transform_core->core, FALSE,
+		       x2 - (srw >> 1), y2 - (srh >> 1), srw, srh);
+  draw_core_rectangle (transform_core->core, FALSE,
+		       x3 - (srw >> 1), y3 - (srh >> 1), srw, srh);
+  draw_core_rectangle (transform_core->core, FALSE,
+		       x4 - (srw >> 1), y4 - (srh >> 1), srw, srh);
 }
 
 Tool *
@@ -1051,25 +1056,25 @@ transform_core_do (gimage, drawable, float_tiles, interpolation, matrix)
 		      REF_TILE (14, sx + plus_x, sy + plus2_y);
 		      REF_TILE (15, sx + plus2_x, sy + plus2_y);
 
-		      a[0] = (minus_y * minus_x) ? src[0][alpha] : 0;
+		      a[0] = (minus_y && minus_x) ? src[0][alpha] : 0;
 		      a[1] = (minus_y) ? src[1][alpha] : 0;
-		      a[2] = (minus_y * plus_x) ? src[2][alpha] : 0;
-		      a[3] = (minus_y * plus2_x) ? src[3][alpha] : 0;
+		      a[2] = (minus_y && plus_x) ? src[2][alpha] : 0;
+		      a[3] = (minus_y && plus2_x) ? src[3][alpha] : 0;
 
 		      a[4] = (minus_x) ? src[4][alpha] : 0;
 		      a[5] = src[5][alpha];
 		      a[6] = (plus_x) ? src[6][alpha] : 0;
 		      a[7] = (plus2_x) ? src[7][alpha] : 0;
 
-		      a[8] = (plus_y * minus_x) ? src[8][alpha] : 0;
+		      a[8] = (plus_y && minus_x) ? src[8][alpha] : 0;
 		      a[9] = (plus_y) ? src[9][alpha] : 0;
-		      a[10] = (plus_y * plus_x) ? src[10][alpha] : 0;
-		      a[11] = (plus_y * plus2_x) ? src[11][alpha] : 0;
+		      a[10] = (plus_y && plus_x) ? src[10][alpha] : 0;
+		      a[11] = (plus_y && plus2_x) ? src[11][alpha] : 0;
 
-		      a[12] = (plus2_y * minus_x) ? src[12][alpha] : 0;
+		      a[12] = (plus2_y && minus_x) ? src[12][alpha] : 0;
 		      a[13] = (plus2_y) ? src[13][alpha] : 0;
-		      a[14] = (plus2_y * plus_x) ? src[14][alpha] : 0;
-		      a[15] = (plus2_y * plus2_x) ? src[15][alpha] : 0;
+		      a[14] = (plus2_y && plus_x) ? src[14][alpha] : 0;
+		      a[15] = (plus2_y && plus2_x) ? src[15][alpha] : 0;
 
 		      a_val = cubic (dy,
 				    cubic (dx, a[0], a[1], a[2], a[3]),

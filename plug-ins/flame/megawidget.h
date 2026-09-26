@@ -31,6 +31,7 @@
  */
 
 #ifndef MEGAWIDGET_H
+#define MEGAWIDGET_H
 
 #define NO_PREVIEW 1
 
@@ -109,7 +110,7 @@ struct mwPreview *mw_preview_build(GDrawable *drw);
 struct mwPreview *mw_preview_build_virgin(GDrawable *drw);
 
 typedef void (*mw_callback) (gpointer);
-mw_callback mw_update_cb;
+extern mw_callback mw_update_cb;
 
 
 #endif /* MEGAWIDGET_H */

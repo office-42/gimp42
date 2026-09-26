@@ -25,11 +25,11 @@
 #include <math.h>
 #include <signal.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <sys/types.h>
 
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 
 /***** Magic numbers *****/
@@ -91,7 +91,7 @@ static double diff_intensity(double x, double y, double lam);
 
 static gint diffraction_dialog(void);
 static void dialog_update_preview(void);
-static void dialog_create_value(char *title, GtkTable *table, int row, gdouble *value, double left, double right);
+static void dialog_create_value(char *title, GtkWidget *table, int row, gdouble *value, double left, double right);
 static void dialog_update_callback(GtkWidget *widget, gpointer data);
 static void dialog_scale_update(GtkAdjustment *adjustment, gdouble *value);
 static void dialog_close_callback(GtkWidget *widget, gpointer data);
@@ -516,189 +516,152 @@ diffraction_dialog(void)
 	GtkWidget  *table;
 	GtkWidget  *label;
 	GtkWidget  *button;
-	gint        argc;
-	gchar     **argv;
-	guchar     *color_cube;
 
 #if 0
 	printf("Waiting... (pid %d)\n", getpid());
 	kill(getpid(), SIGSTOP);
 #endif
 
-	argc    = 1;
-	argv    = g_new(gchar *, 1);
-	argv[0] = g_strdup("diffraction");
 
-	gtk_init(&argc, &argv);
-	gtk_rc_parse (gimp_gtkrc ());
+	gtk_init ();
 
-	gdk_set_use_xshm (gimp_use_xshm ());
 
-	gtk_preview_set_gamma(gimp_gamma());
-	gtk_preview_set_install_cmap(gimp_install_cmap());
-	color_cube = gimp_color_cube();
-	gtk_preview_set_color_cube(color_cube[0], color_cube[1], color_cube[2], color_cube[3]);
 
-	gtk_widget_set_default_visual(gtk_preview_get_visual());
-	gtk_widget_set_default_colormap(gtk_preview_get_cmap());
 
-	dialog = gtk_dialog_new();
-	gtk_window_set_title(GTK_WINDOW(dialog), "Diffraction patterns");
-	gtk_window_position(GTK_WINDOW(dialog), GTK_WIN_POS_MOUSE);
-	gtk_container_border_width(GTK_CONTAINER(dialog), 0);
-	gtk_signal_connect(GTK_OBJECT(dialog), "destroy",
-			   (GtkSignalFunc) dialog_close_callback,
+	dialog = gimp_dialog_new ("Diffraction patterns");
+	gimp_container_set_border_width (dialog, 0);
+	g_signal_connect (dialog, "destroy",
+			   G_CALLBACK (dialog_close_callback),
 			   NULL);
 
-	top_table = gtk_table_new(2, 2, FALSE);
-	gtk_container_border_width(GTK_CONTAINER(top_table), 6);
-	gtk_table_set_row_spacings(GTK_TABLE(top_table), 4);
-	gtk_table_set_col_spacings(GTK_TABLE(top_table), 4);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->vbox), top_table, FALSE, FALSE, 0);
-	gtk_widget_show(top_table);
+	top_table = gimp_table_new(2, 2, FALSE);
+	gimp_container_set_border_width (top_table, 6);
+	gtk_grid_set_row_spacing (GTK_GRID (top_table), 4);
+	gtk_grid_set_column_spacing (GTK_GRID (top_table), 4);
+	gimp_box_pack_start (gimp_dialog_get_vbox (dialog), top_table, FALSE, FALSE, 0);
 
 	/* Preview */
 
-	vbox = gtk_vbox_new(FALSE, 0);
-	gtk_container_border_width(GTK_CONTAINER(vbox), 0);
-	gtk_table_attach(GTK_TABLE(top_table), vbox, 0, 1, 0, 1,
-			 GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_show(vbox);
+	vbox = gimp_vbox_new(FALSE, 0);
+	gimp_container_set_border_width (vbox, 0);
+	gimp_table_attach (top_table, vbox, 0, 1, 0, 1,
+			 GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
 	frame = gtk_frame_new(NULL);
-	gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_IN);
-	gtk_box_pack_start(GTK_BOX(vbox), frame, FALSE, FALSE, 0);
-	gtk_widget_show(frame);
+	gimp_box_pack_start (vbox, frame, FALSE, FALSE, 0);
 
-	dint.preview = gtk_preview_new(GTK_PREVIEW_COLOR);
-	gtk_preview_size(GTK_PREVIEW(dint.preview), PREVIEW_WIDTH, PREVIEW_HEIGHT);
-	gtk_container_add(GTK_CONTAINER(frame), dint.preview);
-	gtk_widget_show(dint.preview);
+	dint.preview = gimp_preview_new (GIMP_PREVIEW_COLOR);
+	gimp_preview_size (GIMP_PREVIEW (dint.preview), PREVIEW_WIDTH, PREVIEW_HEIGHT);
+	gimp_container_add (frame, dint.preview);
 
 	dint.progress = gtk_progress_bar_new();
-	gtk_widget_set_usize(dint.progress, PROGRESS_WIDTH, PROGRESS_HEIGHT);
-	gtk_box_pack_start(GTK_BOX(vbox), dint.progress, TRUE, FALSE, 0);
-	gtk_widget_show(dint.progress);
+	gtk_widget_set_size_request (dint.progress, PROGRESS_WIDTH, PROGRESS_HEIGHT);
+	gimp_box_pack_start (vbox, dint.progress, TRUE, FALSE, 0);
 
 	button = gtk_button_new_with_label("Preview!");
-	gtk_signal_connect(GTK_OBJECT(button), "clicked",
-			   (GtkSignalFunc) dialog_update_callback,
+	g_signal_connect (button, "clicked",
+			   G_CALLBACK (dialog_update_callback),
 			   NULL);
-	gtk_table_attach(GTK_TABLE(top_table), button, 0, 1, 1, 2,
-			 GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-	gtk_widget_show(button);
+	gimp_table_attach (top_table, button, 0, 1, 1, 2,
+			 GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
 	/* Notebook */
 
 	notebook = gtk_notebook_new();
 	gtk_notebook_set_tab_pos(GTK_NOTEBOOK(notebook), GTK_POS_TOP);
-	gtk_table_attach(GTK_TABLE(top_table), notebook, 1, 2, 0, 2, GTK_EXPAND | GTK_FILL, 0, 0, 0);
-	gtk_widget_show(notebook);
+	gimp_table_attach (top_table, notebook, 1, 2, 0, 2, GIMP_EXPAND | GIMP_FILL, 0, 0, 0);
 
 	/* Frequencies tab */
 
-	vbox = gtk_vbox_new(FALSE, 0);
-	gtk_container_border_width(GTK_CONTAINER(vbox), 4);
+	vbox = gimp_vbox_new(FALSE, 0);
+	gimp_container_set_border_width (vbox, 4);
 
-	table = gtk_table_new(3, 2, FALSE);
-	gtk_container_border_width(GTK_CONTAINER(table), 0);
-	gtk_box_pack_start(GTK_BOX(vbox), table, TRUE, TRUE, 0);
-	gtk_widget_show(table);
+	table = gimp_table_new(3, 2, FALSE);
+	gimp_container_set_border_width (table, 0);
+	gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
-	dialog_create_value("Red",   GTK_TABLE(table), 0, &dvals.lam_r, 0.0, 20.0);
-	dialog_create_value("Green", GTK_TABLE(table), 1, &dvals.lam_g, 0.0, 20.0);
-	dialog_create_value("Blue",  GTK_TABLE(table), 2, &dvals.lam_b, 0.0, 20.0);
+	dialog_create_value("Red",   table, 0, &dvals.lam_r, 0.0, 20.0);
+	dialog_create_value("Green", table, 1, &dvals.lam_g, 0.0, 20.0);
+	dialog_create_value("Blue",  table, 2, &dvals.lam_b, 0.0, 20.0);
 
 	label = gtk_label_new("Frequencies");
-	gtk_misc_set_alignment(GTK_MISC(label), 0.5, 0.5);
+	gimp_misc_set_alignment (label, 0.5, 0.5);
 	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), vbox, label);
-	gtk_widget_show(vbox);
 
 	/* Contours tab */
 
-	vbox = gtk_vbox_new(FALSE, 0);
-	gtk_container_border_width(GTK_CONTAINER(vbox), 4);
+	vbox = gimp_vbox_new(FALSE, 0);
+	gimp_container_set_border_width (vbox, 4);
 
-	table = gtk_table_new(3, 2, FALSE);
-	gtk_container_border_width(GTK_CONTAINER(table), 0);
-	gtk_box_pack_start(GTK_BOX(vbox), table, TRUE, TRUE, 0);
-	gtk_widget_show(table);
+	table = gimp_table_new(3, 2, FALSE);
+	gimp_container_set_border_width (table, 0);
+	gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
-	dialog_create_value("Red",   GTK_TABLE(table), 0, &dvals.contour_r, 0.0, 10.0);
-	dialog_create_value("Green", GTK_TABLE(table), 1, &dvals.contour_g, 0.0, 10.0);
-	dialog_create_value("Blue",  GTK_TABLE(table), 2, &dvals.contour_b, 0.0, 10.0);
+	dialog_create_value("Red",   table, 0, &dvals.contour_r, 0.0, 10.0);
+	dialog_create_value("Green", table, 1, &dvals.contour_g, 0.0, 10.0);
+	dialog_create_value("Blue",  table, 2, &dvals.contour_b, 0.0, 10.0);
 
 	label = gtk_label_new("Contours");
-	gtk_misc_set_alignment(GTK_MISC(label), 0.5, 0.5);
+	gimp_misc_set_alignment (label, 0.5, 0.5);
 	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), vbox, label);
-	gtk_widget_show(vbox);
 
 	/* Sharp edges tab */
 
-	vbox = gtk_vbox_new(FALSE, 0);
-	gtk_container_border_width(GTK_CONTAINER(vbox), 4);
+	vbox = gimp_vbox_new(FALSE, 0);
+	gimp_container_set_border_width (vbox, 4);
 
-	table = gtk_table_new(3, 2, FALSE);
-	gtk_container_border_width(GTK_CONTAINER(table), 0);
-	gtk_box_pack_start(GTK_BOX(vbox), table, TRUE, TRUE, 0);
-	gtk_widget_show(table);
+	table = gimp_table_new(3, 2, FALSE);
+	gimp_container_set_border_width (table, 0);
+	gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
-	dialog_create_value("Red",   GTK_TABLE(table), 0, &dvals.edges_r, 0.0, 1.0);
-	dialog_create_value("Green", GTK_TABLE(table), 1, &dvals.edges_g, 0.0, 1.0);
-	dialog_create_value("Blue",  GTK_TABLE(table), 2, &dvals.edges_b, 0.0, 1.0);
+	dialog_create_value("Red",   table, 0, &dvals.edges_r, 0.0, 1.0);
+	dialog_create_value("Green", table, 1, &dvals.edges_g, 0.0, 1.0);
+	dialog_create_value("Blue",  table, 2, &dvals.edges_b, 0.0, 1.0);
 
 	label = gtk_label_new("Sharp edges");
-	gtk_misc_set_alignment(GTK_MISC(label), 0.5, 0.5);
+	gimp_misc_set_alignment (label, 0.5, 0.5);
 	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), vbox, label);
-	gtk_widget_show(vbox);
 
 	/* Other options tab */
 
-	vbox = gtk_vbox_new(FALSE, 0);
-	gtk_container_border_width(GTK_CONTAINER(vbox), 4);
+	vbox = gimp_vbox_new(FALSE, 0);
+	gimp_container_set_border_width (vbox, 4);
 
-	table = gtk_table_new(3, 2, FALSE);
-	gtk_container_border_width(GTK_CONTAINER(table), 0);
-	gtk_box_pack_start(GTK_BOX(vbox), table, TRUE, TRUE, 0);
-	gtk_widget_show(table);
+	table = gimp_table_new(3, 2, FALSE);
+	gimp_container_set_border_width (table, 0);
+	gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
-	dialog_create_value("Brightness",   GTK_TABLE(table), 0, &dvals.brightness, 0.0, 1.0);
-	dialog_create_value("Scattering",   GTK_TABLE(table), 1, &dvals.scattering, 0.0, 100.0);
-	dialog_create_value("Polarization", GTK_TABLE(table), 2, &dvals.polarization, -1.0, 1.0);
+	dialog_create_value("Brightness",   table, 0, &dvals.brightness, 0.0, 1.0);
+	dialog_create_value("Scattering",   table, 1, &dvals.scattering, 0.0, 100.0);
+	dialog_create_value("Polarization", table, 2, &dvals.polarization, -1.0, 1.0);
 
 	label = gtk_label_new("Other options");
-	gtk_misc_set_alignment(GTK_MISC(label), 0.5, 0.5);
+	gimp_misc_set_alignment (label, 0.5, 0.5);
 	gtk_notebook_append_page(GTK_NOTEBOOK(notebook), vbox, label);
-	gtk_widget_show(vbox);
 
 	/* Buttons */
 
-	gtk_container_border_width(GTK_CONTAINER(GTK_DIALOG(dialog)->action_area), 6);
+	gimp_container_set_border_width (gimp_dialog_get_action_area (dialog), 6);
 
 	button = gtk_button_new_with_label("OK");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect(GTK_OBJECT(button), "clicked",
-			   (GtkSignalFunc) dialog_ok_callback,
+	g_signal_connect (button, "clicked",
+			   G_CALLBACK (dialog_ok_callback),
 			   dialog);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_grab_default(button);
-	gtk_widget_show(button);
+	gimp_box_pack_start (gimp_dialog_get_action_area (dialog), button, TRUE, TRUE, 0);
+	gtk_window_set_default_widget (GTK_WINDOW (dialog), button);
 
 	button = gtk_button_new_with_label("Cancel");
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_signal_connect(GTK_OBJECT(button), "clicked",
-			   (GtkSignalFunc) dialog_cancel_callback,
+	g_signal_connect (button, "clicked",
+			   G_CALLBACK (dialog_cancel_callback),
 			   dialog);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_show(button);
+	gimp_box_pack_start (gimp_dialog_get_action_area (dialog), button, TRUE, TRUE, 0);
 
 	/* Done */
 
-	gtk_widget_show(dialog);
+	gtk_window_present (GTK_WINDOW (dialog));
 	dialog_update_preview();
 
-	gtk_main();
-	gdk_flush();
+	gimp_main_loop_run ();
 
 	return dint.run;
 } /* diffraction_dialog */
@@ -740,49 +703,45 @@ dialog_update_preview(void)
 			px += dx;
 		} /* for */
 
-		gtk_preview_draw_row(GTK_PREVIEW(dint.preview), dint.preview_row, 0, y, PREVIEW_WIDTH);
+		gimp_preview_draw_row (GIMP_PREVIEW (dint.preview), dint.preview_row, 0, y, PREVIEW_WIDTH);
 
-		gtk_progress_bar_update(GTK_PROGRESS_BAR(dint.progress), (double) y / (PREVIEW_HEIGHT - 1));
+		gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR(dint.progress), (double) y / (PREVIEW_HEIGHT - 1));
 
 		py += dy;
 	} /* for */
 
-	gtk_widget_draw(dint.preview, NULL);
-	gtk_progress_bar_update(GTK_PROGRESS_BAR(dint.progress), 0.0);
-	gdk_flush();
+	gtk_widget_queue_draw (dint.preview);
+	gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR(dint.progress), 0.0);
 } /* dialog_update_preview */
 
 
 /*****/
 
 static void
-dialog_create_value(char *title, GtkTable *table, int row, gdouble *value, double left, double right)
+dialog_create_value(char *title, GtkWidget *table, int row, gdouble *value, double left, double right)
 {
 	GtkWidget *label;
 	GtkWidget *scale;
-	GtkObject *scale_data;
+	GtkAdjustment *scale_data;
 
 	label = gtk_label_new(title);
-	gtk_misc_set_alignment(GTK_MISC(label), 0.0, 1.0);
-	gtk_table_attach(table, label, 0, 1, row, row + 1, GTK_FILL, GTK_FILL, 4, 0);
-	gtk_widget_show(label);
+	gimp_misc_set_alignment (label, 0.0, 1.0);
+	gimp_table_attach (table, label, 0, 1, row, row + 1, GIMP_FILL, GIMP_FILL, 4, 0);
 
 	scale_data = gtk_adjustment_new(*value, left, right,
 					(right - left) / 50.0,
 					(right - left) / 100.0,
 					0.0);
 
-	scale = gtk_hscale_new(GTK_ADJUSTMENT(scale_data));
-	gtk_widget_set_usize(scale, SCALE_WIDTH, 0);
-	gtk_table_attach(table, scale, 1, 2, row, row + 1, GTK_EXPAND | GTK_FILL, 0, 0, 0);
+	scale = gimp_hscale_new (GTK_ADJUSTMENT(scale_data), 1);
+	gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+	gimp_table_attach (table, scale, 1, 2, row, row + 1, GIMP_EXPAND | GIMP_FILL, 0, 0, 0);
 	gtk_scale_set_value_pos(GTK_SCALE(scale), GTK_POS_TOP);
 	gtk_scale_set_digits(GTK_SCALE(scale), 3);
-	gtk_range_set_update_policy(GTK_RANGE(scale), GTK_UPDATE_CONTINUOUS);
-	gtk_signal_connect(GTK_OBJECT(scale_data), "value_changed",
-			   (GtkSignalFunc) dialog_scale_update,
+	g_signal_connect (scale_data, "value-changed",
+			   G_CALLBACK (dialog_scale_update),
 			   value);
 
-	gtk_widget_show(scale);
 } /* dialog_create_value */
 
 
@@ -800,7 +759,7 @@ dialog_update_callback(GtkWidget *widget, gpointer data)
 static void
 dialog_scale_update(GtkAdjustment *adjustment, gdouble *value)
 {
-	*value = adjustment->value;
+	*value = gtk_adjustment_get_value (adjustment);
 } /* dialog_scale_update */
 
 
@@ -809,7 +768,7 @@ dialog_scale_update(GtkAdjustment *adjustment, gdouble *value)
 static void
 dialog_close_callback(GtkWidget *widget, gpointer data)
 {
-	gtk_main_quit();
+	gimp_main_loop_quit ();
 } /* dialog_close_callback */
 
 
@@ -819,7 +778,7 @@ static void
 dialog_ok_callback(GtkWidget *widget, gpointer data)
 {
 	dint.run = TRUE;
-	gtk_widget_destroy(GTK_WIDGET(data));
+	gtk_window_destroy (GTK_WINDOW (data));
 } /* dialog_ok_callback */
 
 
@@ -828,5 +787,5 @@ dialog_ok_callback(GtkWidget *widget, gpointer data)
 static void
 dialog_cancel_callback(GtkWidget *widget, gpointer data)
 {
-	gtk_widget_destroy(GTK_WIDGET(data));
+	gtk_window_destroy (GTK_WINDOW (data));
 } /* dialog_cancel_callback */

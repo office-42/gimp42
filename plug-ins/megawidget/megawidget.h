@@ -27,6 +27,10 @@
  */
 
 #ifndef MEGAWIDGET_H
+#define MEGAWIDGET_H
+
+#include <gtk/gtk.h>
+#include <libgimp/gimp.h>
 
 struct mwRadioGroup {
    gchar *name;

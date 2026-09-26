@@ -54,6 +54,7 @@
 #include "layers_dialog.h"
 #include "layer_select.h"
 #include "levels.h"
+#include "menus.h"
 #include "palette.h"
 #include "patterns.h"
 #include "plug_in.h"
@@ -88,7 +89,7 @@ typedef struct
 /*  new image local functions  */
 static void file_new_ok_callback (GtkWidget *, gpointer);
 static void file_new_cancel_callback (GtkWidget *, gpointer);
-static gint file_new_delete_callback (GtkWidget *, GdkEvent *, gpointer);
+static gboolean file_new_delete_callback (GtkWindow *, gpointer);
 static void file_new_toggle_callback (GtkWidget *, gpointer);
 
 /*  static variables  */
@@ -101,7 +102,7 @@ static   int          last_fill_type = BACKGROUND_FILL;
 static void file_prefs_ok_callback (GtkWidget *, GtkWidget *);
 static void file_prefs_save_callback (GtkWidget *, GtkWidget *);
 static void file_prefs_cancel_callback (GtkWidget *, GtkWidget *);
-static gint file_prefs_delete_callback (GtkWidget *, GdkEvent *, GtkWidget *);
+static gboolean file_prefs_delete_callback (GtkWindow *, gpointer);
 static void file_prefs_toggle_callback (GtkWidget *, gpointer);
 static void file_prefs_text_callback (GtkWidget *, gpointer);
 static void file_prefs_preview_size_callback (GtkWidget *, gpointer);
@@ -152,7 +153,7 @@ static   int          edit_cycled_marching_ants;
 static void   image_resize_callback (GtkWidget *, gpointer);
 static void   image_scale_callback (GtkWidget *, gpointer);
 static void   image_cancel_callback (GtkWidget *, gpointer);
-static gint   image_delete_callback (GtkWidget *, GdkEvent *, gpointer);
+static gboolean image_delete_callback (GtkWindow *, gpointer);
 static void   gimage_mask_feather_callback (GtkWidget *, gpointer, gpointer);
 static void   gimage_mask_border_callback (GtkWidget *, gpointer, gpointer);
 static void   gimage_mask_grow_callback (GtkWidget *, gpointer, gpointer);
@@ -179,10 +180,10 @@ file_new_ok_callback (GtkWidget *widget,
 
   vals = data;
 
-  vals->width = atoi (gtk_entry_get_text (GTK_ENTRY (vals->width_entry)));
-  vals->height = atoi (gtk_entry_get_text (GTK_ENTRY (vals->height_entry)));
+  vals->width = atoi (gtk_editable_get_text (GTK_EDITABLE (vals->width_entry)));
+  vals->height = atoi (gtk_editable_get_text (GTK_EDITABLE (vals->height_entry)));
 
-  gtk_widget_destroy (vals->dlg);
+  gtk_window_destroy (GTK_WINDOW (vals->dlg));
 
   last_width = vals->width;
   last_height = vals->height;
@@ -221,17 +222,17 @@ file_new_ok_callback (GtkWidget *widget,
     gimage_clean_all (gimage);
 
     gdisplay = gdisplay_new (gimage, 0x0101);
+    (void) gdisplay;
   }
 
   g_free (vals);
 }
 
-static gint
-file_new_delete_callback (GtkWidget *widget,
-			  GdkEvent *event,
-			  gpointer data)
+static gboolean
+file_new_delete_callback (GtkWindow *window,
+			  gpointer   data)
 {
-  file_new_cancel_callback (widget, data);
+  file_new_cancel_callback (GTK_WIDGET (window), data);
 
   return TRUE;
 }
@@ -245,7 +246,7 @@ file_new_cancel_callback (GtkWidget *widget,
 
   vals = data;
 
-  gtk_widget_destroy (vals->dlg);
+  gtk_window_destroy (GTK_WINDOW (vals->dlg));
   g_free (vals);
 }
 
@@ -255,11 +256,33 @@ file_new_toggle_callback (GtkWidget *widget,
 {
   int *val;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
     {
       val = data;
-      *val = (long) gtk_object_get_user_data (GTK_OBJECT (widget));
+      *val = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (widget), "user_data"));
     }
+}
+
+/*  A radio button in box for one value of *val, active when it is the
+ *  current one.
+ */
+static GtkWidget *
+radio_button_new (GtkWidget  *box,
+		  GtkWidget  *group,
+		  const char *label,
+		  int         value,
+		  int        *val,
+		  GCallback   callback)
+{
+  GtkWidget *button;
+
+  button = gimp_radio_button_new (group, label);
+  gimp_box_pack_start (box, button, TRUE, TRUE, 0);
+  g_object_set_data (G_OBJECT (button), "user_data", GINT_TO_POINTER (value));
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (button), *val == value);
+  g_signal_connect (button, "toggled", callback, val);
+
+  return button;
 }
 
 void
@@ -275,7 +298,6 @@ file_new_cmd_callback (GtkWidget           *widget,
   GtkWidget *table;
   GtkWidget *frame;
   GtkWidget *radio_box;
-  GSList *group;
   char buffer[32];
 
   if(!new_dialog_run)
@@ -289,7 +311,7 @@ file_new_cmd_callback (GtkWidget           *widget,
   /*  Before we try to determine the responsible gdisplay,
    *  make sure this wasn't called from the toolbox
    */
-  if ((long) callback_action)
+  if (callback_action)
     gdisp = gdisplay_active ();
   else
     gdisp = NULL;
@@ -313,165 +335,85 @@ file_new_cmd_callback (GtkWidget           *widget,
   if (vals->type == INDEXED)
     vals->type = RGB;    /* no indexed images */
 
-  vals->dlg = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (vals->dlg), "new_image", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (vals->dlg), "New Image");
-  gtk_window_position (GTK_WINDOW (vals->dlg), GTK_WIN_POS_MOUSE);
+  vals->dlg = gimp_dialog_new ("New Image");
 
   /* handle the wm close signal */
-  gtk_signal_connect (GTK_OBJECT (vals->dlg), "delete_event",
-		      GTK_SIGNAL_FUNC (file_new_delete_callback),
-		      vals);
+  g_signal_connect (vals->dlg, "close-request",
+		    G_CALLBACK (file_new_delete_callback),
+		    vals);
 
-  gtk_container_border_width (GTK_CONTAINER (GTK_DIALOG (vals->dlg)->action_area), 2);
+  gimp_dialog_add_button (vals->dlg, "OK",
+			  G_CALLBACK (file_new_ok_callback), vals, TRUE);
+  gimp_dialog_add_button (vals->dlg, "Cancel",
+			  G_CALLBACK (file_new_cancel_callback), vals, FALSE);
 
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) file_new_ok_callback,
-                      vals);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dlg)->action_area),
-		      button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
+  vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (vbox, 2);
+  gimp_box_pack_start (gimp_dialog_get_vbox (vals->dlg), vbox, TRUE, TRUE, 0);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) file_new_cancel_callback,
-                      vals);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dlg)->action_area),
-		      button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
-
-
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 2);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (vals->dlg)->vbox),
-		      vbox, TRUE, TRUE, 0);
-  gtk_widget_show (vbox);
-
-  table = gtk_table_new (2, 2, FALSE);
-  gtk_table_set_row_spacings (GTK_TABLE (table), 2);
-  gtk_table_set_col_spacings (GTK_TABLE (table), 2);
-  gtk_box_pack_start (GTK_BOX (vbox), table, TRUE, TRUE, 0);
-  gtk_widget_show (table);
+  table = gimp_table_new (2, 2, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 2);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 2);
+  gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
 
   label = gtk_label_new ("Width:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1,
-		    GTK_FILL, GTK_FILL, 0, 0);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 0, 1,
+		     GIMP_FILL, GIMP_FILL, 0, 0);
 
   label = gtk_label_new ("Height:");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2,
-		    GTK_FILL, GTK_FILL, 0, 0);
-  gtk_widget_show (label);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 1, 2,
+		     GIMP_FILL, GIMP_FILL, 0, 0);
 
   vals->width_entry = gtk_entry_new ();
-  gtk_widget_set_usize (vals->width_entry, 75, 0);
-  sprintf (buffer, "%d", vals->width);
-  gtk_entry_set_text (GTK_ENTRY (vals->width_entry), buffer);
-  gtk_table_attach (GTK_TABLE (table), vals->width_entry, 1, 2, 0, 1,
-		    GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_show (vals->width_entry);
+  gtk_widget_set_size_request (vals->width_entry, 75, -1);
+  g_snprintf (buffer, sizeof (buffer), "%d", vals->width);
+  gtk_editable_set_text (GTK_EDITABLE (vals->width_entry), buffer);
+  gimp_table_attach (table, vals->width_entry, 1, 2, 0, 1,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
   vals->height_entry = gtk_entry_new ();
-  gtk_widget_set_usize (vals->height_entry, 75, 0);
-  sprintf (buffer, "%d", vals->height);
-  gtk_entry_set_text (GTK_ENTRY (vals->height_entry), buffer);
-  gtk_table_attach (GTK_TABLE (table), vals->height_entry, 1, 2, 1, 2,
-		    GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-  gtk_widget_show (vals->height_entry);
+  gtk_widget_set_size_request (vals->height_entry, 75, -1);
+  g_snprintf (buffer, sizeof (buffer), "%d", vals->height);
+  gtk_editable_set_text (GTK_EDITABLE (vals->height_entry), buffer);
+  gimp_table_attach (table, vals->height_entry, 1, 2, 1, 2,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
 
+  /*  Enter in an entry means OK  */
+  gtk_entry_set_activates_default (GTK_ENTRY (vals->width_entry), TRUE);
+  gtk_entry_set_activates_default (GTK_ENTRY (vals->height_entry), TRUE);
 
   frame = gtk_frame_new ("Image Type");
-  gtk_box_pack_start (GTK_BOX (vbox), frame, TRUE, TRUE, 0);
-  gtk_widget_show (frame);
+  gimp_box_pack_start (vbox, frame, TRUE, TRUE, 0);
 
-  radio_box = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (radio_box), 2);
-  gtk_container_add (GTK_CONTAINER (frame), radio_box);
-  gtk_widget_show (radio_box);
+  radio_box = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (radio_box, 2);
+  gtk_frame_set_child (GTK_FRAME (frame), radio_box);
 
-  button = gtk_radio_button_new_with_label (NULL, "RGB");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-  gtk_box_pack_start (GTK_BOX (radio_box), button, TRUE, TRUE, 0);
-  gtk_object_set_user_data (GTK_OBJECT (button), (gpointer) RGB);
-  gtk_signal_connect (GTK_OBJECT (button), "toggled",
-		      (GtkSignalFunc) file_new_toggle_callback,
-		      &vals->type);
-  if (vals->type == RGB)
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), TRUE);
-  gtk_widget_show (button);
-
-  button = gtk_radio_button_new_with_label (group, "Grayscale");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-  gtk_box_pack_start (GTK_BOX (radio_box), button, TRUE, TRUE, 0);
-  gtk_object_set_user_data (GTK_OBJECT (button), (gpointer) GRAY);
-  gtk_signal_connect (GTK_OBJECT (button), "toggled",
-		      (GtkSignalFunc) file_new_toggle_callback,
-		      &vals->type);
-  if (vals->type == GRAY)
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), TRUE);
-  gtk_widget_show (button);
-
+  button = radio_button_new (radio_box, NULL, "RGB", RGB, &vals->type,
+			     G_CALLBACK (file_new_toggle_callback));
+  radio_button_new (radio_box, button, "Grayscale", GRAY, &vals->type,
+		    G_CALLBACK (file_new_toggle_callback));
 
   frame = gtk_frame_new ("Fill Type");
-  gtk_box_pack_start (GTK_BOX (vbox), frame, TRUE, TRUE, 0);
-  gtk_widget_show (frame);
+  gimp_box_pack_start (vbox, frame, TRUE, TRUE, 0);
 
-  radio_box = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (radio_box), 2);
-  gtk_container_add (GTK_CONTAINER (frame), radio_box);
-  gtk_widget_show (radio_box);
+  radio_box = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (radio_box, 2);
+  gtk_frame_set_child (GTK_FRAME (frame), radio_box);
 
-  button = gtk_radio_button_new_with_label (NULL, "Background");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-  gtk_box_pack_start (GTK_BOX (radio_box), button, TRUE, TRUE, 0);
-  gtk_object_set_user_data (GTK_OBJECT (button), (gpointer) BACKGROUND_FILL);
-  gtk_signal_connect (GTK_OBJECT (button), "toggled",
-		      (GtkSignalFunc) file_new_toggle_callback,
-		      &vals->fill_type);
-  if (vals->fill_type == BACKGROUND_FILL)
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), TRUE);
-  gtk_widget_show (button);
+  button = radio_button_new (radio_box, NULL, "Background", BACKGROUND_FILL,
+			     &vals->fill_type,
+			     G_CALLBACK (file_new_toggle_callback));
+  radio_button_new (radio_box, button, "White", WHITE_FILL,
+		    &vals->fill_type, G_CALLBACK (file_new_toggle_callback));
+  radio_button_new (radio_box, button, "Transparent", TRANSPARENT_FILL,
+		    &vals->fill_type, G_CALLBACK (file_new_toggle_callback));
+  radio_button_new (radio_box, button, "Foreground", FOREGROUND_FILL,
+		    &vals->fill_type, G_CALLBACK (file_new_toggle_callback));
 
-  button = gtk_radio_button_new_with_label (group, "White");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-  gtk_box_pack_start (GTK_BOX (radio_box), button, TRUE, TRUE, 0);
-  gtk_object_set_user_data (GTK_OBJECT (button), (gpointer) WHITE_FILL);
-  gtk_signal_connect (GTK_OBJECT (button), "toggled",
-		      (GtkSignalFunc) file_new_toggle_callback,
-		      &vals->fill_type);
-  if (vals->fill_type == WHITE_FILL)
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), TRUE);
-  gtk_widget_show (button);
-
-  button = gtk_radio_button_new_with_label (group, "Transparent");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-  gtk_box_pack_start (GTK_BOX (radio_box), button, TRUE, TRUE, 0);
-  gtk_object_set_user_data (GTK_OBJECT (button), (gpointer) TRANSPARENT_FILL);
-  gtk_signal_connect (GTK_OBJECT (button), "toggled",
-		      (GtkSignalFunc) file_new_toggle_callback,
-		      &vals->fill_type);
-  if (vals->fill_type == TRANSPARENT_FILL)
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), TRUE);
-  gtk_widget_show (button);
-
-  button = gtk_radio_button_new_with_label (group, "Foreground");
-  group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-  gtk_box_pack_start (GTK_BOX (radio_box), button, TRUE, TRUE, 0);
-  gtk_object_set_user_data (GTK_OBJECT (button), (gpointer) FOREGROUND_FILL);
-  gtk_signal_connect (GTK_OBJECT (button), "toggled",
-		      (GtkSignalFunc) file_new_toggle_callback,
-		      &vals->fill_type);
-  if (vals->fill_type == FOREGROUND_FILL)
-    gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), TRUE);
-  gtk_widget_show (button);
-
-  gtk_widget_show (vals->dlg);
+  gtk_window_present (GTK_WINDOW (vals->dlg));
 }
 
 void
@@ -600,13 +542,12 @@ file_prefs_ok_callback (GtkWidget *widget,
       return;
     }
 
-  gtk_widget_destroy (dlg);
+  gtk_window_destroy (GTK_WINDOW (dlg));
   prefs_dlg = NULL;
 
-  if (show_tool_tips)
-    gtk_tooltips_enable (tool_tips);
-  else
-    gtk_tooltips_disable (tool_tips);
+  /*  GTK 4 has no global switch for tool tips: show_tool_tips is saved
+   *  in gimprc, but tool tips stay enabled.
+   */
 }
 
 static void
@@ -767,12 +708,11 @@ file_prefs_save_callback (GtkWidget *widget,
   g_list_free (remove);
 }
 
-static int
-file_prefs_delete_callback (GtkWidget *widget,
-			    GdkEvent *event,
-			    GtkWidget *dlg)
+static gboolean
+file_prefs_delete_callback (GtkWindow *window,
+			    gpointer   dlg)
 {
-  file_prefs_cancel_callback (widget, dlg);
+  file_prefs_cancel_callback (GTK_WIDGET (window), dlg);
 
   /* the widget is already destroyed here no need to try again */
   return TRUE;
@@ -782,7 +722,7 @@ static void
 file_prefs_cancel_callback (GtkWidget *widget,
 			    GtkWidget *dlg)
 {
-  gtk_widget_destroy (dlg);
+  gtk_window_destroy (GTK_WINDOW (dlg));
   prefs_dlg = NULL;
 
   levels_of_undo = old_levels_of_undo;
@@ -833,33 +773,38 @@ file_prefs_toggle_callback (GtkWidget *widget,
 			    gpointer   data)
 {
   int *val;
+  int active;
+
+  active = gtk_check_button_get_active (GTK_CHECK_BUTTON (widget));
 
   if (data==&allow_resize_windows)
-    allow_resize_windows = GTK_TOGGLE_BUTTON (widget)->active;
+    allow_resize_windows = active;
   else if (data==&auto_save)
-    auto_save = GTK_TOGGLE_BUTTON (widget)->active;
+    auto_save = active;
   else if (data==&no_cursor_updating)
-    no_cursor_updating = GTK_TOGGLE_BUTTON (widget)->active;
+    no_cursor_updating = active;
   else if (data==&show_tool_tips)
-    show_tool_tips = GTK_TOGGLE_BUTTON (widget)->active;
+    show_tool_tips = active;
   else if (data==&cubic_interpolation)
-    cubic_interpolation = GTK_TOGGLE_BUTTON (widget)->active;
+    cubic_interpolation = active;
   else if (data==&confirm_on_close)
-    confirm_on_close = GTK_TOGGLE_BUTTON (widget)->active;
+    confirm_on_close = active;
   else if (data==&edit_stingy_memory_use)
-    edit_stingy_memory_use = GTK_TOGGLE_BUTTON (widget)->active;
+    edit_stingy_memory_use = active;
   else if (data==&edit_install_cmap)
-    edit_install_cmap = GTK_TOGGLE_BUTTON (widget)->active;
+    edit_install_cmap = active;
   else if (data==&edit_cycled_marching_ants)
-    edit_cycled_marching_ants = GTK_TOGGLE_BUTTON (widget)->active;
+    edit_cycled_marching_ants = active;
   else if (data==&default_type)
     {
-      default_type = (long) gtk_object_get_user_data (GTK_OBJECT (widget));
+      if (active)
+	default_type = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (widget),
+							   "user_data"));
     }
-  else if (GTK_TOGGLE_BUTTON (widget)->active)
+  else if (active)
     {
       val = data;
-      *val = (long) gtk_object_get_user_data (GTK_OBJECT (widget));
+      *val = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (widget), "user_data"));
       render_setup (transparency_type, transparency_size);
       layer_invalidate_previews (-1);
       gimage_invalidate_previews ();
@@ -872,7 +817,7 @@ static void
 file_prefs_preview_size_callback (GtkWidget *widget,
                                   gpointer   data)
 {
-  lc_dialog_rebuild ((long)data);
+  lc_dialog_rebuild (GPOINTER_TO_INT (data));
   layer_select_update_preview_size ();
 }
 
@@ -883,7 +828,7 @@ file_prefs_text_callback (GtkWidget *widget,
   int *val;
 
   val = data;
-  *val = atoi (gtk_entry_get_text (GTK_ENTRY (widget)));
+  *val = atoi (gtk_editable_get_text (GTK_EDITABLE (widget)));
 }
 
 static void
@@ -893,7 +838,89 @@ file_prefs_string_callback (GtkWidget *widget,
   gchar **val;
 
   val = data;
-  file_prefs_strset (val, gtk_entry_get_text (GTK_ENTRY (widget)));
+  file_prefs_strset (val, (char *) gtk_editable_get_text (GTK_EDITABLE (widget)));
+}
+
+/*  A check button for a boolean preference, packed into box.  */
+static GtkWidget *
+file_prefs_check_new (GtkWidget  *box,
+		      const char *label,
+		      int         state,
+		      int        *val,
+		      gboolean    expand)
+{
+  GtkWidget *button;
+
+  button = gtk_check_button_new_with_label (label);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (button), state);
+  gimp_box_pack_start (box, button, expand, expand, 0);
+  g_signal_connect (button, "toggled",
+		    G_CALLBACK (file_prefs_toggle_callback),
+		    val);
+
+  return button;
+}
+
+/*  A labelled entry for an integer preference in a new row of box.  */
+static void
+file_prefs_int_entry_new (GtkWidget  *box,
+			  const char *label_text,
+			  int         value,
+			  int        *val)
+{
+  GtkWidget *hbox;
+  GtkWidget *label;
+  GtkWidget *entry;
+  char buffer[32];
+
+  hbox = gimp_hbox_new (FALSE, 2);
+  gimp_box_pack_start (box, hbox, FALSE, FALSE, 0);
+
+  label = gtk_label_new (label_text);
+  gimp_box_pack_start (hbox, label, FALSE, FALSE, 0);
+
+  entry = gtk_entry_new ();
+  gtk_widget_set_size_request (entry, 75, -1);
+  g_snprintf (buffer, sizeof (buffer), "%d", value);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  gimp_box_pack_start (hbox, entry, FALSE, FALSE, 0);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (file_prefs_text_callback),
+		    val);
+}
+
+/*  A radio button for one value of the preference *val.  */
+static GtkWidget *
+file_prefs_radio_new (GtkWidget  *box,
+		      GtkWidget  *group,
+		      const char *label,
+		      int         value,
+		      int        *val)
+{
+  return radio_button_new (box, group, label, value, val,
+			   G_CALLBACK (file_prefs_toggle_callback));
+}
+
+/*  An outer frame, one notebook page.  */
+static GtkWidget *
+file_prefs_page_new (GtkWidget  *notebook,
+		     const char *title,
+		     const char *tab)
+{
+  GtkWidget *out_frame;
+  GtkWidget *vbox;
+
+  out_frame = gtk_frame_new (title);
+  gimp_container_set_border_width (out_frame, 10);
+
+  vbox = gimp_vbox_new (FALSE, 2);
+  gimp_container_set_border_width (vbox, 1);
+  gtk_frame_set_child (GTK_FRAME (out_frame), vbox);
+
+  gtk_notebook_append_page (GTK_NOTEBOOK (notebook), out_frame,
+			    gtk_label_new (tab));
+
+  return vbox;
 }
 
 void
@@ -902,19 +929,16 @@ file_pref_cmd_callback (GtkWidget *widget,
 {
   GtkWidget *button;
   GtkWidget *frame;
-  GtkWidget *out_frame;
   GtkWidget *vbox;
   GtkWidget *hbox;
   GtkWidget *abox;
   GtkWidget *label;
   GtkWidget *radio_box;
   GtkWidget *entry;
-  GtkWidget *menu;
-  GtkWidget *menuitem;
   GtkWidget *optionmenu;
   GtkWidget *notebook;
   GtkWidget *table;
-  GSList *group;
+  GtkWidget *group;
   char buffer[32];
   char *transparencies[] =
   {
@@ -975,472 +999,259 @@ file_pref_cmd_callback (GtkWidget *widget,
   int npreview_sizes = sizeof(preview_sizes) / sizeof (preview_sizes[0]);
   int i;
 
-  if (!prefs_dlg)
+  if (prefs_dlg)
     {
-      if (edit_temp_path == NULL)
-	{
-	  /* first time dialog is opened - copy config vals to edit
-             variables. */
-	  edit_temp_path = file_prefs_strdup (temp_path);
-	  edit_swap_path = file_prefs_strdup (swap_path);
-	  edit_brush_path = file_prefs_strdup (brush_path);
-	  edit_pattern_path = file_prefs_strdup (pattern_path);
-	  edit_palette_path = file_prefs_strdup (palette_path);
-	  edit_plug_in_path = file_prefs_strdup (plug_in_path);
-	  edit_gradient_path = file_prefs_strdup (gradient_path);
-	  edit_stingy_memory_use = stingy_memory_use;
-	  edit_tile_cache_size = tile_cache_size;
-	  edit_install_cmap = install_cmap;
-	  edit_cycled_marching_ants = cycled_marching_ants;
-	}
-      old_transparency_type = transparency_type;
-      old_transparency_size = transparency_size;
-      old_levels_of_undo = levels_of_undo;
-      old_marching_speed = marching_speed;
-      old_allow_resize_windows = allow_resize_windows;
-      old_auto_save = auto_save;
-      old_preview_size = preview_size;
-      old_no_cursor_updating = no_cursor_updating;
-      old_show_tool_tips = show_tool_tips;
-      old_cubic_interpolation = cubic_interpolation;
-      old_confirm_on_close = confirm_on_close;
-      old_default_width = default_width;
-      old_default_height = default_height;
-      old_default_type = default_type;
-      old_stingy_memory_use = edit_stingy_memory_use;
-      old_tile_cache_size = edit_tile_cache_size;
-      old_install_cmap = edit_install_cmap;
-      old_cycled_marching_ants = edit_cycled_marching_ants;
-      file_prefs_strset (&old_temp_path, edit_temp_path);
-      file_prefs_strset (&old_swap_path, edit_swap_path);
-      file_prefs_strset (&old_brush_path, edit_brush_path);
-      file_prefs_strset (&old_pattern_path, edit_pattern_path);
-      file_prefs_strset (&old_palette_path, edit_palette_path);
-      file_prefs_strset (&old_plug_in_path, edit_plug_in_path);
-      file_prefs_strset (&old_gradient_path, edit_gradient_path);
-
-      prefs_dlg = gtk_dialog_new ();
-      gtk_window_set_wmclass (GTK_WINDOW (prefs_dlg), "preferences", "Gimp");
-      gtk_window_set_title (GTK_WINDOW (prefs_dlg), "Preferences");
-
-      /* handle the wm close signal */
-      gtk_signal_connect (GTK_OBJECT (prefs_dlg), "delete_event",
-			  GTK_SIGNAL_FUNC (file_prefs_delete_callback),
-			  prefs_dlg);
-
-      gtk_container_border_width (GTK_CONTAINER (GTK_DIALOG (prefs_dlg)->action_area), 2);
-
-      /* Action area */
-      button = gtk_button_new_with_label ("OK");
-      GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-      gtk_signal_connect (GTK_OBJECT (button), "clicked",
-			  (GtkSignalFunc) file_prefs_ok_callback,
-			  prefs_dlg);
-      gtk_box_pack_start (GTK_BOX (GTK_DIALOG (prefs_dlg)->action_area),
-			  button, TRUE, TRUE, 0);
-      gtk_widget_grab_default (button);
-      gtk_widget_show (button);
-
-      button = gtk_button_new_with_label ("Save");
-      GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-      gtk_signal_connect (GTK_OBJECT (button), "clicked",
-			  (GtkSignalFunc) file_prefs_save_callback,
-			  prefs_dlg);
-      gtk_box_pack_start (GTK_BOX (GTK_DIALOG (prefs_dlg)->action_area),
-			  button, TRUE, TRUE, 0);
-      gtk_widget_grab_default (button);
-      gtk_widget_show (button);
-
-      button = gtk_button_new_with_label ("Cancel");
-      GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-      gtk_signal_connect (GTK_OBJECT (button), "clicked",
-			  (GtkSignalFunc) file_prefs_cancel_callback,
-			  prefs_dlg);
-      gtk_box_pack_start (GTK_BOX (GTK_DIALOG (prefs_dlg)->action_area),
-			  button, TRUE, TRUE, 0);
-      gtk_widget_show (button);
-
-      notebook = gtk_notebook_new ();
-      gtk_box_pack_start (GTK_BOX (GTK_DIALOG (prefs_dlg)->vbox),
-			  notebook, TRUE, TRUE, 0);
-
-      /* Display page */
-      out_frame = gtk_frame_new ("Display settings");
-      gtk_container_border_width (GTK_CONTAINER (out_frame), 10);
-      gtk_widget_show (out_frame);
-
-      vbox = gtk_vbox_new (FALSE, 2);
-      gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-      gtk_container_add (GTK_CONTAINER (out_frame), vbox);
-      gtk_widget_show (vbox);
-
-      hbox = gtk_hbox_new (FALSE, 2);
-      gtk_box_pack_start (GTK_BOX (vbox), hbox, TRUE, TRUE, 0);
-      gtk_widget_show (hbox);
-
-      frame = gtk_frame_new ("Image size");
-      gtk_box_pack_start (GTK_BOX (hbox), frame, TRUE, TRUE, 0);
-      gtk_widget_show (frame);
-
-      abox = gtk_vbox_new (FALSE, 2);
-      gtk_container_border_width (GTK_CONTAINER (abox), 1);
-      gtk_container_add (GTK_CONTAINER (frame), abox);
-      gtk_widget_show (abox);
-
-      table = gtk_table_new (2, 2, FALSE);
-      gtk_table_set_row_spacings (GTK_TABLE (table), 2);
-      gtk_table_set_col_spacings (GTK_TABLE (table), 2);
-      gtk_box_pack_start (GTK_BOX (abox), table, TRUE, TRUE, 0);
-      gtk_widget_show (table);
-
-      label = gtk_label_new ("Width:");
-      gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-      gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1,
-			GTK_FILL, GTK_FILL, 0, 0);
-      gtk_widget_show (label);
-
-      label = gtk_label_new ("Height:");
-      gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-      gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2,
-			GTK_FILL, GTK_FILL, 0, 0);
-      gtk_widget_show (label);
-
-      entry = gtk_entry_new ();
-      gtk_widget_set_usize (entry, 25, 0);
-      sprintf (buffer, "%d", default_width);
-      gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-      gtk_table_attach (GTK_TABLE (table), entry, 1, 2, 0, 1,
-                       GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-      gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                          (GtkSignalFunc) file_prefs_text_callback,
-                          &default_width);
-      gtk_widget_show (entry);
-
-      entry = gtk_entry_new ();
-      gtk_widget_set_usize (entry, 25, 0);
-      sprintf (buffer, "%d", default_height);
-      gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-      gtk_table_attach (GTK_TABLE (table), entry, 1, 2, 1, 2,
-			GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0);
-      gtk_signal_connect (GTK_OBJECT (entry), "changed",
-			  (GtkSignalFunc) file_prefs_text_callback,
-                          &default_height);
-      gtk_widget_show (entry);
-
-      frame = gtk_frame_new ("Image type");
-      gtk_box_pack_start (GTK_BOX (hbox), frame, TRUE, TRUE, 0);
-      gtk_widget_show (frame);
-
-      radio_box = gtk_vbox_new (FALSE, 1);
-      gtk_container_border_width (GTK_CONTAINER (radio_box), 2);
-      gtk_container_add (GTK_CONTAINER (frame), radio_box);
-      gtk_widget_show (radio_box);
-
-      button = gtk_radio_button_new_with_label (NULL, "RGB");
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-      gtk_box_pack_start (GTK_BOX (radio_box), button, TRUE, TRUE, 0);
-      gtk_object_set_user_data (GTK_OBJECT (button), (gpointer) RGB);
-      if (default_type == RGB)
-	gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), TRUE);
-      gtk_signal_connect (GTK_OBJECT (button), "toggled",
-			  (GtkSignalFunc) file_prefs_toggle_callback,
-			  &default_type);
-      gtk_widget_show (button);
-      button = gtk_radio_button_new_with_label (group, "Grayscale");
-      group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-      gtk_box_pack_start (GTK_BOX (radio_box), button, TRUE, TRUE, 0);
-      gtk_object_set_user_data (GTK_OBJECT (button), (gpointer) GRAY);
-      if (last_type == GRAY)
-	  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), TRUE);
-      gtk_signal_connect (GTK_OBJECT (button), "toggled",
-                         (GtkSignalFunc) file_prefs_toggle_callback,
-			  &default_type);
-      gtk_widget_show (button);
-      hbox = gtk_hbox_new (FALSE, 2);
-      gtk_box_pack_start (GTK_BOX (vbox), hbox, TRUE, TRUE, 0);
-      gtk_widget_show (hbox);
-
-      label = gtk_label_new ("Preview size:");
-      gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-      gtk_widget_show (label);
-
-      menu = gtk_menu_new ();
-      for (i = 0; i < npreview_sizes; i++)
-        {
-          menuitem = gtk_menu_item_new_with_label (preview_sizes[i].label);
-	  gtk_menu_append (GTK_MENU (menu), menuitem);
-	  gtk_signal_connect (GTK_OBJECT (menuitem), "activate",
-			      (GtkSignalFunc) file_prefs_preview_size_callback,
-			      (gpointer)((long)preview_sizes[i].size));
-	  gtk_widget_show (menuitem);
-	}
-      optionmenu = gtk_option_menu_new ();
-      gtk_option_menu_set_menu (GTK_OPTION_MENU (optionmenu), menu);
-      gtk_box_pack_start (GTK_BOX (hbox), optionmenu, TRUE, TRUE, 0);
-      gtk_widget_show (optionmenu);
-      for (i = 0; i < npreview_sizes; i++)
-	if (preview_size==preview_sizes[i].size)
-	  gtk_option_menu_set_history(GTK_OPTION_MENU (optionmenu),i);
-
-      button = gtk_check_button_new_with_label("Cubic interpolation");
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button),
-                                   cubic_interpolation);
-      gtk_box_pack_start (GTK_BOX (vbox), button, TRUE, TRUE, 0);
-      gtk_signal_connect (GTK_OBJECT (button), "toggled",
-                          (GtkSignalFunc) file_prefs_toggle_callback,
-                          &cubic_interpolation);
-      gtk_widget_show (button);
-
-      hbox = gtk_hbox_new (FALSE, 2);
-      gtk_box_pack_start (GTK_BOX (vbox), hbox, TRUE, TRUE, 0);
-      gtk_widget_show (hbox);
-
-      frame = gtk_frame_new ("Transparency Type");
-      gtk_box_pack_start (GTK_BOX (hbox), frame, TRUE, TRUE, 0);
-      gtk_widget_show (frame);
-
-      radio_box = gtk_vbox_new (FALSE, 2);
-      gtk_container_border_width (GTK_CONTAINER (radio_box), 2);
-      gtk_container_add (GTK_CONTAINER (frame), radio_box);
-      gtk_widget_show (radio_box);
-
-      group = NULL;
-      for (i = 0; i < ntransparencies; i++)
-        {
-	  button = gtk_radio_button_new_with_label (group, transparencies[i]);
-          group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-          gtk_box_pack_start (GTK_BOX (radio_box), button, TRUE, TRUE, 0);
-          gtk_object_set_user_data (GTK_OBJECT (button),
-				    (gpointer) ((long) transparency_vals[i]));
-          if (transparency_vals[i] == transparency_type)
-            gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), TRUE);
-          gtk_signal_connect (GTK_OBJECT (button), "toggled",
-                              (GtkSignalFunc) file_prefs_toggle_callback,
-                              &transparency_type);
-          gtk_widget_show (button);
-        }
-      frame = gtk_frame_new ("Check Size");
-      gtk_box_pack_start (GTK_BOX (hbox), frame, TRUE, TRUE, 0);
-      gtk_widget_show (frame);
-
-      radio_box = gtk_vbox_new (FALSE, 2);
-      gtk_container_border_width (GTK_CONTAINER (radio_box), 2);
-      gtk_container_add (GTK_CONTAINER (frame), radio_box);
-      gtk_widget_show (radio_box);
-
-      group = NULL;
-      for (i = 0; i < nchecks; i++)
-        {
-          button = gtk_radio_button_new_with_label (group, checks[i]);
-          group = gtk_radio_button_group (GTK_RADIO_BUTTON (button));
-          gtk_box_pack_start (GTK_BOX (radio_box), button, TRUE, TRUE, 0);
-          gtk_object_set_user_data (GTK_OBJECT (button),
-				    (gpointer) ((long) check_vals[i]));
-          if (check_vals[i] == transparency_size)
-            gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button), TRUE);
-          gtk_signal_connect (GTK_OBJECT (button), "toggled",
-                              (GtkSignalFunc) file_prefs_toggle_callback,
-                              &transparency_size);
-          gtk_widget_show (button);
-        }
-
-
-      label = gtk_label_new ("Display");
-      gtk_notebook_append_page (GTK_NOTEBOOK(notebook), out_frame, label);
-
-      /* Interface */
-      out_frame = gtk_frame_new ("Interface settings");
-      gtk_container_border_width (GTK_CONTAINER (out_frame), 10);
-      gtk_widget_show (out_frame);
-
-      vbox = gtk_vbox_new (FALSE, 2);
-      gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-      gtk_container_add (GTK_CONTAINER (out_frame), vbox);
-      gtk_widget_show (vbox);
-
-      hbox = gtk_hbox_new (FALSE, 2);
-      gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-      gtk_widget_show (hbox);
-
-      label = gtk_label_new ("Levels of undo:");
-      gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-      gtk_widget_show (label);
-
-      entry = gtk_entry_new ();
-      gtk_widget_set_usize (entry, 75, 0);
-      sprintf (buffer, "%d", levels_of_undo);
-      gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-      gtk_box_pack_start (GTK_BOX (hbox), entry, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                          (GtkSignalFunc) file_prefs_text_callback,
-                          &levels_of_undo);
-      gtk_widget_show (entry);
-
-      button = gtk_check_button_new_with_label("Resize window on zoom");
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button),
-                                   allow_resize_windows);
-      gtk_box_pack_start (GTK_BOX (vbox), button, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (button), "toggled",
-                          (GtkSignalFunc) file_prefs_toggle_callback,
-                          &allow_resize_windows);
-      gtk_widget_show (button);
-
-      /* Don't show the Auto-save button until we really
-	 have auto-saving in the gimp.
-
-	 button = gtk_check_button_new_with_label("Auto save");
-	 gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button),
-                                   auto_save);
-	 gtk_box_pack_start (GTK_BOX (vbox), button, FALSE, FALSE, 0);
-	 gtk_signal_connect (GTK_OBJECT (button), "toggled",
-	                           (GtkSignalFunc) file_prefs_toggle_callback,
-                                   &auto_save);
-         gtk_widget_show (button);
-      */
-
-      button = gtk_check_button_new_with_label("Disable cursor updating");
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button),
-                                   no_cursor_updating);
-      gtk_box_pack_start (GTK_BOX (vbox), button, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (button), "toggled",
-                          (GtkSignalFunc) file_prefs_toggle_callback,
-                          &no_cursor_updating);
-      gtk_widget_show (button);
-
-      button = gtk_check_button_new_with_label("Show tool tips");
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button),
-                                   show_tool_tips);
-      gtk_box_pack_start (GTK_BOX (vbox), button, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (button), "toggled",
-                          (GtkSignalFunc) file_prefs_toggle_callback,
-                          &show_tool_tips);
-      gtk_widget_show (button);
-
-      hbox = gtk_hbox_new (FALSE, 2);
-      gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-      gtk_widget_show (hbox);
-
-      label = gtk_label_new ("Marching ants speed:");
-      gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-      gtk_widget_show (label);
-
-      entry = gtk_entry_new ();
-      gtk_widget_set_usize (entry, 75, 0);
-      sprintf (buffer, "%d", marching_speed);
-      gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-      gtk_box_pack_start (GTK_BOX (hbox), entry, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                          (GtkSignalFunc) file_prefs_text_callback,
-                          &marching_speed);
-      gtk_widget_show (entry);
-
-      label = gtk_label_new ("Interface");
-      gtk_notebook_append_page (GTK_NOTEBOOK(notebook), out_frame, label);
-
-      /* Environment */
-      out_frame = gtk_frame_new ("Environment settings");
-      gtk_container_border_width (GTK_CONTAINER (out_frame), 10);
-      gtk_widget_set_usize (out_frame, 320, 200);
-      gtk_widget_show (out_frame);
-
-      vbox = gtk_vbox_new (FALSE, 2);
-      gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-      gtk_container_add (GTK_CONTAINER (out_frame), vbox);
-      gtk_widget_show (vbox);
-
-      button = gtk_check_button_new_with_label("Conservative memory usage");
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button),
-                                   stingy_memory_use);
-      gtk_box_pack_start (GTK_BOX (vbox), button, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (button), "toggled",
-			  (GtkSignalFunc) file_prefs_toggle_callback,
-			  &edit_stingy_memory_use);
-      gtk_widget_show (button);
-
-      hbox = gtk_hbox_new (FALSE, 2);
-      gtk_box_pack_start (GTK_BOX (vbox), hbox, FALSE, FALSE, 0);
-      gtk_widget_show (hbox);
-
-      label = gtk_label_new ("Tile cache size (bytes):");
-      gtk_box_pack_start (GTK_BOX (hbox), label, FALSE, FALSE, 0);
-      gtk_widget_show (label);
-
-      entry = gtk_entry_new ();
-      gtk_widget_set_usize (entry, 75, 0);
-      sprintf (buffer, "%d", old_tile_cache_size);
-      gtk_entry_set_text (GTK_ENTRY (entry), buffer);
-      gtk_box_pack_start (GTK_BOX (hbox), entry, FALSE, FALSE, 0);
-      gtk_signal_connect (GTK_OBJECT (entry), "changed",
-                          (GtkSignalFunc) file_prefs_text_callback,
-                          &edit_tile_cache_size);
-      gtk_widget_show (entry);
-
-      button = gtk_check_button_new_with_label("Install colormap (8-bit only)");
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button),
-				   install_cmap);
-      gtk_signal_connect (GTK_OBJECT (button), "toggled",
-                          (GtkSignalFunc) file_prefs_toggle_callback,
-                          &edit_install_cmap);
-      gtk_box_pack_start (GTK_BOX (vbox), button, FALSE, FALSE, 0);
-      gtk_widget_show (button);
-
-      button = gtk_check_button_new_with_label("Colormap cycling (8-bit only)");
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button),
-                                   cycled_marching_ants);
-      gtk_signal_connect (GTK_OBJECT (button), "toggled",
-                          (GtkSignalFunc) file_prefs_toggle_callback,
-                          &edit_cycled_marching_ants);
-      gtk_box_pack_start (GTK_BOX (vbox), button, FALSE, FALSE, 0);
-      if (g_visual->depth != 8)
-	gtk_widget_set_sensitive (GTK_WIDGET(button), FALSE);
-      gtk_widget_show (button);
-
-      label = gtk_label_new ("Environment");
-      gtk_notebook_append_page (GTK_NOTEBOOK(notebook), out_frame, label);
-
-      /* Directories */
-      out_frame = gtk_frame_new ("Directories settings");
-      gtk_container_border_width (GTK_CONTAINER (out_frame), 10);
-      gtk_widget_set_usize (out_frame, 320, 200);
-      gtk_widget_show (out_frame);
-
-      vbox = gtk_vbox_new (FALSE, 2);
-      gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-      gtk_container_add (GTK_CONTAINER (out_frame), vbox);
-      gtk_widget_show (vbox);
-
-      table = gtk_table_new (ndirs+1, 2, FALSE);
-      gtk_table_set_row_spacings (GTK_TABLE (table), 2);
-      gtk_table_set_col_spacings (GTK_TABLE (table), 2);
-      gtk_box_pack_start (GTK_BOX (vbox), table, TRUE, TRUE, 0);
-      gtk_widget_show (table);
-
-      for (i = 0; i < ndirs; i++)
-	{
-	  label = gtk_label_new (dirs[i].label);
-	  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-	  gtk_table_attach (GTK_TABLE (table), label, 0, 1, i, i+1,
-                            GTK_FILL, GTK_FILL, 0, 0);
-	  gtk_widget_show (label);
-
-          entry = gtk_entry_new ();
-          gtk_widget_set_usize (entry, 25, 0);
-          gtk_entry_set_text (GTK_ENTRY (entry), *(dirs[i].mpath));
-	  gtk_signal_connect (GTK_OBJECT (entry), "changed",
-			      (GtkSignalFunc) file_prefs_string_callback,
-			      dirs[i].mpath);
-          gtk_table_attach (GTK_TABLE (table), entry, 1, 2, i, i+1,
-                            GTK_EXPAND | GTK_FILL, 0, 0, 0);
-          gtk_widget_show (entry);
-	}
-
-      label = gtk_label_new ("Directories");
-      gtk_notebook_append_page (GTK_NOTEBOOK(notebook), out_frame, label);
-
-      gtk_widget_show (notebook);
-
-      gtk_widget_show (prefs_dlg);
+      gtk_window_present (GTK_WINDOW (prefs_dlg));
+      return;
     }
+
+  if (edit_temp_path == NULL)
+    {
+      /* first time dialog is opened - copy config vals to edit
+	 variables. */
+      edit_temp_path = file_prefs_strdup (temp_path);
+      edit_swap_path = file_prefs_strdup (swap_path);
+      edit_brush_path = file_prefs_strdup (brush_path);
+      edit_pattern_path = file_prefs_strdup (pattern_path);
+      edit_palette_path = file_prefs_strdup (palette_path);
+      edit_plug_in_path = file_prefs_strdup (plug_in_path);
+      edit_gradient_path = file_prefs_strdup (gradient_path);
+      edit_stingy_memory_use = stingy_memory_use;
+      edit_tile_cache_size = tile_cache_size;
+      edit_install_cmap = install_cmap;
+      edit_cycled_marching_ants = cycled_marching_ants;
+    }
+  old_transparency_type = transparency_type;
+  old_transparency_size = transparency_size;
+  old_levels_of_undo = levels_of_undo;
+  old_marching_speed = marching_speed;
+  old_allow_resize_windows = allow_resize_windows;
+  old_auto_save = auto_save;
+  old_preview_size = preview_size;
+  old_no_cursor_updating = no_cursor_updating;
+  old_show_tool_tips = show_tool_tips;
+  old_cubic_interpolation = cubic_interpolation;
+  old_confirm_on_close = confirm_on_close;
+  old_default_width = default_width;
+  old_default_height = default_height;
+  old_default_type = default_type;
+  old_stingy_memory_use = edit_stingy_memory_use;
+  old_tile_cache_size = edit_tile_cache_size;
+  old_install_cmap = edit_install_cmap;
+  old_cycled_marching_ants = edit_cycled_marching_ants;
+  file_prefs_strset (&old_temp_path, edit_temp_path);
+  file_prefs_strset (&old_swap_path, edit_swap_path);
+  file_prefs_strset (&old_brush_path, edit_brush_path);
+  file_prefs_strset (&old_pattern_path, edit_pattern_path);
+  file_prefs_strset (&old_palette_path, edit_palette_path);
+  file_prefs_strset (&old_plug_in_path, edit_plug_in_path);
+  file_prefs_strset (&old_gradient_path, edit_gradient_path);
+
+  prefs_dlg = gimp_dialog_new ("Preferences");
+
+  /* handle the wm close signal */
+  g_signal_connect (prefs_dlg, "close-request",
+		    G_CALLBACK (file_prefs_delete_callback),
+		    prefs_dlg);
+
+  /* Action area */
+  gimp_dialog_add_button (prefs_dlg, "OK",
+			  G_CALLBACK (file_prefs_ok_callback), prefs_dlg,
+			  FALSE);
+  gimp_dialog_add_button (prefs_dlg, "Save",
+			  G_CALLBACK (file_prefs_save_callback), prefs_dlg,
+			  TRUE);
+  gimp_dialog_add_button (prefs_dlg, "Cancel",
+			  G_CALLBACK (file_prefs_cancel_callback), prefs_dlg,
+			  FALSE);
+
+  notebook = gtk_notebook_new ();
+  gimp_box_pack_start (gimp_dialog_get_vbox (prefs_dlg), notebook, TRUE, TRUE, 0);
+
+  /* Display page */
+  vbox = file_prefs_page_new (notebook, "Display settings", "Display");
+
+  hbox = gimp_hbox_new (FALSE, 2);
+  gimp_box_pack_start (vbox, hbox, TRUE, TRUE, 0);
+
+  frame = gtk_frame_new ("Image size");
+  gimp_box_pack_start (hbox, frame, TRUE, TRUE, 0);
+
+  abox = gimp_vbox_new (FALSE, 2);
+  gimp_container_set_border_width (abox, 1);
+  gtk_frame_set_child (GTK_FRAME (frame), abox);
+
+  table = gimp_table_new (2, 2, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 2);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 2);
+  gimp_box_pack_start (abox, table, TRUE, TRUE, 0);
+
+  label = gtk_label_new ("Width:");
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 0, 1,
+		     GIMP_FILL, GIMP_FILL, 0, 0);
+
+  label = gtk_label_new ("Height:");
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, 1, 2,
+		     GIMP_FILL, GIMP_FILL, 0, 0);
+
+  entry = gtk_entry_new ();
+  gtk_widget_set_size_request (entry, 25, -1);
+  gtk_editable_set_width_chars (GTK_EDITABLE (entry), 5);
+  g_snprintf (buffer, sizeof (buffer), "%d", default_width);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  gimp_table_attach (table, entry, 1, 2, 0, 1,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (file_prefs_text_callback),
+		    &default_width);
+
+  entry = gtk_entry_new ();
+  gtk_widget_set_size_request (entry, 25, -1);
+  gtk_editable_set_width_chars (GTK_EDITABLE (entry), 5);
+  g_snprintf (buffer, sizeof (buffer), "%d", default_height);
+  gtk_editable_set_text (GTK_EDITABLE (entry), buffer);
+  gimp_table_attach (table, entry, 1, 2, 1, 2,
+		     GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
+  g_signal_connect (entry, "changed",
+		    G_CALLBACK (file_prefs_text_callback),
+		    &default_height);
+
+  frame = gtk_frame_new ("Image type");
+  gimp_box_pack_start (hbox, frame, TRUE, TRUE, 0);
+
+  radio_box = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (radio_box, 2);
+  gtk_frame_set_child (GTK_FRAME (frame), radio_box);
+
+  button = file_prefs_radio_new (radio_box, NULL, "RGB", RGB, &default_type);
+  file_prefs_radio_new (radio_box, button, "Grayscale", GRAY, &default_type);
+
+  hbox = gimp_hbox_new (FALSE, 2);
+  gimp_box_pack_start (vbox, hbox, TRUE, TRUE, 0);
+
+  label = gtk_label_new ("Preview size:");
+  gimp_box_pack_start (hbox, label, FALSE, FALSE, 0);
+
+  optionmenu = gimp_option_menu_new ();
+  for (i = 0; i < npreview_sizes; i++)
+    gimp_option_menu_append (optionmenu, preview_sizes[i].label,
+			     G_CALLBACK (file_prefs_preview_size_callback),
+			     GINT_TO_POINTER (preview_sizes[i].size));
+  gimp_box_pack_start (hbox, optionmenu, TRUE, TRUE, 0);
+  for (i = 0; i < npreview_sizes; i++)
+    if (preview_size==preview_sizes[i].size)
+      gimp_option_menu_set_history (optionmenu, i);
+
+  file_prefs_check_new (vbox, "Cubic interpolation", cubic_interpolation,
+			&cubic_interpolation, TRUE);
+
+  hbox = gimp_hbox_new (FALSE, 2);
+  gimp_box_pack_start (vbox, hbox, TRUE, TRUE, 0);
+
+  frame = gtk_frame_new ("Transparency Type");
+  gimp_box_pack_start (hbox, frame, TRUE, TRUE, 0);
+
+  radio_box = gimp_vbox_new (FALSE, 2);
+  gimp_container_set_border_width (radio_box, 2);
+  gtk_frame_set_child (GTK_FRAME (frame), radio_box);
+
+  group = NULL;
+  for (i = 0; i < ntransparencies; i++)
+    {
+      button = file_prefs_radio_new (radio_box, group, transparencies[i],
+				     transparency_vals[i], &transparency_type);
+      if (!group)
+	group = button;
+    }
+
+  frame = gtk_frame_new ("Check Size");
+  gimp_box_pack_start (hbox, frame, TRUE, TRUE, 0);
+
+  radio_box = gimp_vbox_new (FALSE, 2);
+  gimp_container_set_border_width (radio_box, 2);
+  gtk_frame_set_child (GTK_FRAME (frame), radio_box);
+
+  group = NULL;
+  for (i = 0; i < nchecks; i++)
+    {
+      button = file_prefs_radio_new (radio_box, group, checks[i],
+				     check_vals[i], &transparency_size);
+      if (!group)
+	group = button;
+    }
+
+  /* Interface */
+  vbox = file_prefs_page_new (notebook, "Interface settings", "Interface");
+
+  file_prefs_int_entry_new (vbox, "Levels of undo:", levels_of_undo,
+			    &levels_of_undo);
+
+  file_prefs_check_new (vbox, "Resize window on zoom", allow_resize_windows,
+			&allow_resize_windows, FALSE);
+
+  /* Don't show the Auto-save button until we really
+     have auto-saving in the gimp.
+
+     file_prefs_check_new (vbox, "Auto save", auto_save, &auto_save, FALSE);
+  */
+
+  file_prefs_check_new (vbox, "Disable cursor updating", no_cursor_updating,
+			&no_cursor_updating, FALSE);
+
+  file_prefs_check_new (vbox, "Show tool tips", show_tool_tips,
+			&show_tool_tips, FALSE);
+
+  file_prefs_int_entry_new (vbox, "Marching ants speed:", marching_speed,
+			    &marching_speed);
+
+  /* Environment */
+  vbox = file_prefs_page_new (notebook, "Environment settings", "Environment");
+  gtk_widget_set_size_request (gtk_widget_get_parent (vbox), 320, 200);
+
+  file_prefs_check_new (vbox, "Conservative memory usage", stingy_memory_use,
+			&edit_stingy_memory_use, FALSE);
+
+  file_prefs_int_entry_new (vbox, "Tile cache size (bytes):",
+			    old_tile_cache_size, &edit_tile_cache_size);
+
+  file_prefs_check_new (vbox, "Install colormap (8-bit only)", install_cmap,
+			&edit_install_cmap, FALSE);
+
+  button = file_prefs_check_new (vbox, "Colormap cycling (8-bit only)",
+				 cycled_marching_ants,
+				 &edit_cycled_marching_ants, FALSE);
+  /*  there are no 8-bit visuals any more  */
+  gtk_widget_set_sensitive (button, FALSE);
+
+  /* Directories */
+  vbox = file_prefs_page_new (notebook, "Directories settings", "Directories");
+  gtk_widget_set_size_request (gtk_widget_get_parent (vbox), 320, 200);
+
+  table = gimp_table_new (ndirs+1, 2, FALSE);
+  gtk_grid_set_row_spacing (GTK_GRID (table), 2);
+  gtk_grid_set_column_spacing (GTK_GRID (table), 2);
+  gimp_box_pack_start (vbox, table, TRUE, TRUE, 0);
+
+  for (i = 0; i < ndirs; i++)
+    {
+      label = gtk_label_new (dirs[i].label);
+      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+      gimp_table_attach (table, label, 0, 1, i, i+1,
+			 GIMP_FILL, GIMP_FILL, 0, 0);
+
+      entry = gtk_entry_new ();
+      gtk_widget_set_size_request (entry, 25, -1);
+      gtk_editable_set_text (GTK_EDITABLE (entry), *(dirs[i].mpath));
+      g_signal_connect (entry, "changed",
+			G_CALLBACK (file_prefs_string_callback),
+			dirs[i].mpath);
+      gimp_table_attach (table, entry, 1, 2, i, i+1,
+			 GIMP_EXPAND | GIMP_FILL, 0, 0, 0);
+    }
+
+  gtk_window_present (GTK_WINDOW (prefs_dlg));
 }
 
 void
@@ -1680,9 +1491,9 @@ select_border_cmd_callback (GtkWidget *widget,
 
   gdisp = gdisplay_active ();
 
-  sprintf (initial, "%d", gimage_mask_border_radius);
+  g_snprintf (initial, sizeof (initial), "%d", gimage_mask_border_radius);
   query_string_box ("Border Selection", "Border selection by:", initial,
-		    gimage_mask_border_callback, (gpointer) gdisp->gimage->ID);
+		    gimage_mask_border_callback, GINT_TO_POINTER (gdisp->gimage->ID));
 }
 
 void
@@ -1694,9 +1505,9 @@ select_feather_cmd_callback (GtkWidget *widget,
 
   gdisp = gdisplay_active ();
 
-  sprintf (initial, "%f", gimage_mask_feather_radius);
+  g_snprintf (initial, sizeof (initial), "%f", gimage_mask_feather_radius);
   query_string_box ("Feather Selection", "Feather selection by:", initial,
-		    gimage_mask_feather_callback, (gpointer) gdisp->gimage->ID);
+		    gimage_mask_feather_callback, GINT_TO_POINTER (gdisp->gimage->ID));
 }
 
 void
@@ -1708,9 +1519,9 @@ select_grow_cmd_callback (GtkWidget *widget,
 
   gdisp = gdisplay_active ();
 
-  sprintf (initial, "%d", gimage_mask_grow_pixels);
+  g_snprintf (initial, sizeof (initial), "%d", gimage_mask_grow_pixels);
   query_string_box ("Grow Selection", "Grow selection by:", initial,
-		    gimage_mask_grow_callback, (gpointer) gdisp->gimage->ID);
+		    gimage_mask_grow_callback, GINT_TO_POINTER (gdisp->gimage->ID));
 }
 
 void
@@ -1722,9 +1533,9 @@ select_shrink_cmd_callback (GtkWidget *widget,
 
   gdisp = gdisplay_active ();
 
-  sprintf (initial, "%d", gimage_mask_shrink_pixels);
+  g_snprintf (initial, sizeof (initial), "%d", gimage_mask_shrink_pixels);
   query_string_box ("Shrink Selection", "Shrink selection by:", initial,
-		    gimage_mask_shrink_callback, (gpointer) gdisp->gimage->ID);
+		    gimage_mask_shrink_callback, GINT_TO_POINTER (gdisp->gimage->ID));
 }
 
 void
@@ -1734,7 +1545,7 @@ select_by_color_cmd_callback (GtkWidget *widget,
   GDisplay * gdisp;
 
   gdisp = gdisplay_active ();
-  gtk_widget_activate (tool_widgets[tool_info[(int) BY_COLOR_SELECT].toolbar_position]);
+  tools_select_widget (BY_COLOR_SELECT);
   by_color_select_initialize ((void *) gdisp->gimage);
 
   gdisp = gdisplay_active ();
@@ -1870,43 +1681,19 @@ view_toggle_rulers_cmd_callback (GtkWidget *widget,
 {
   GDisplay * gdisp;
 
+  int show;
+
   gdisp = gdisplay_active ();
+  if (!gdisp)
+    return;
 
-  /* This routine use promiscuous knowledge of gtk internals
-   *  in order to hide and show the rulers "smoothly". This
-   *  is kludgy and a hack and may break if gtk is changed
-   *  internally.
-   */
+  show = menus_get_state ("<Image>/View/Toggle Rulers");
 
-  if (!GTK_CHECK_MENU_ITEM (widget)->active)
+  if (show != gtk_widget_get_visible (gdisp->origin))
     {
-      if (GTK_WIDGET_VISIBLE (gdisp->origin))
-	{
-	  gtk_widget_unmap (gdisp->origin);
-	  gtk_widget_unmap (gdisp->hrule);
-	  gtk_widget_unmap (gdisp->vrule);
-
-	  GTK_WIDGET_UNSET_FLAGS (gdisp->origin, GTK_VISIBLE);
-	  GTK_WIDGET_UNSET_FLAGS (gdisp->hrule, GTK_VISIBLE);
-	  GTK_WIDGET_UNSET_FLAGS (gdisp->vrule, GTK_VISIBLE);
-
-	  gtk_widget_queue_resize (GTK_WIDGET (gdisp->origin->parent));
-	}
-    }
-  else
-    {
-      if (!GTK_WIDGET_VISIBLE (gdisp->origin))
-	{
-	  gtk_widget_map (gdisp->origin);
-	  gtk_widget_map (gdisp->hrule);
-	  gtk_widget_map (gdisp->vrule);
-
-	  GTK_WIDGET_SET_FLAGS (gdisp->origin, GTK_VISIBLE);
-	  GTK_WIDGET_SET_FLAGS (gdisp->hrule, GTK_VISIBLE);
-	  GTK_WIDGET_SET_FLAGS (gdisp->vrule, GTK_VISIBLE);
-
-	  gtk_widget_queue_resize (GTK_WIDGET (gdisp->origin->parent));
-	}
+      gtk_widget_set_visible (gdisp->origin, show);
+      gtk_widget_set_visible (gdisp->hrule, show);
+      gtk_widget_set_visible (gdisp->vrule, show);
     }
 }
 
@@ -1918,9 +1705,11 @@ view_toggle_guides_cmd_callback (GtkWidget *widget,
   int old_val;
 
   gdisp = gdisplay_active ();
+  if (!gdisp)
+    return;
 
   old_val = gdisp->draw_guides;
-  gdisp->draw_guides = GTK_CHECK_MENU_ITEM (widget)->active;
+  gdisp->draw_guides = menus_get_state ("<Image>/View/Toggle Guides");
 
   if ((old_val != gdisp->draw_guides) && gdisp->gimage->guides)
     {
@@ -1937,7 +1726,10 @@ view_snap_to_guides_cmd_callback (GtkWidget *widget,
 
   gdisp = gdisplay_active ();
 
-  gdisp->snap_to_guides = GTK_CHECK_MENU_ITEM (widget)->active;
+  if (!gdisp)
+    return;
+
+  gdisp->snap_to_guides = menus_get_state ("<Image>/View/Snap To Guides");
 }
 
 void
@@ -1992,7 +1784,7 @@ image_posterize_cmd_callback (GtkWidget *widget,
   GDisplay * gdisp;
 
   gdisp = gdisplay_active ();
-  gtk_widget_activate (tool_widgets[tool_info[(int) POSTERIZE].toolbar_position]);
+  tools_select_widget (POSTERIZE);
   posterize_initialize ((void *) gdisp);
 
   gdisp = gdisplay_active ();
@@ -2007,7 +1799,7 @@ image_threshold_cmd_callback (GtkWidget *widget,
   GDisplay * gdisp;
 
   gdisp = gdisplay_active ();
-  gtk_widget_activate (tool_widgets[tool_info[(int) THRESHOLD].toolbar_position]);
+  tools_select_widget (THRESHOLD);
   threshold_initialize ((void *) gdisp);
 
   gdisp = gdisplay_active ();
@@ -2022,7 +1814,7 @@ image_color_balance_cmd_callback (GtkWidget *widget,
   GDisplay * gdisp;
 
   gdisp = gdisplay_active ();
-  gtk_widget_activate (tool_widgets[tool_info[(int) COLOR_BALANCE].toolbar_position]);
+  tools_select_widget (COLOR_BALANCE);
   color_balance_initialize ((void *) gdisp);
 
   gdisp = gdisplay_active ();
@@ -2038,7 +1830,7 @@ image_brightness_contrast_cmd_callback (GtkWidget *widget,
   GDisplay * gdisp;
 
   gdisp = gdisplay_active ();
-  gtk_widget_activate (tool_widgets[tool_info[(int) BRIGHTNESS_CONTRAST].toolbar_position]);
+  tools_select_widget (BRIGHTNESS_CONTRAST);
   brightness_contrast_initialize ((void *) gdisp);
 
   gdisp = gdisplay_active ();
@@ -2053,7 +1845,7 @@ image_hue_saturation_cmd_callback (GtkWidget *widget,
   GDisplay * gdisp;
 
   gdisp = gdisplay_active ();
-  gtk_widget_activate (tool_widgets[tool_info[(int) HUE_SATURATION].toolbar_position]);
+  tools_select_widget (HUE_SATURATION);
   hue_saturation_initialize ((void *) gdisp);
 
   gdisp = gdisplay_active ();
@@ -2068,7 +1860,7 @@ image_curves_cmd_callback (GtkWidget *widget,
   GDisplay * gdisp;
 
   gdisp = gdisplay_active ();
-  gtk_widget_activate (tool_widgets[tool_info[(int) CURVES].toolbar_position]);
+  tools_select_widget (CURVES);
   curves_initialize ((void *) gdisp);
 
   gdisp = gdisplay_active ();
@@ -2083,7 +1875,7 @@ image_levels_cmd_callback (GtkWidget *widget,
   GDisplay * gdisp;
 
   gdisp = gdisplay_active ();
-  gtk_widget_activate (tool_widgets[tool_info[(int) LEVELS].toolbar_position]);
+  tools_select_widget (LEVELS);
   levels_initialize ((void *) gdisp);
 
   gdisp = gdisplay_active ();
@@ -2173,30 +1965,25 @@ image_resize_cmd_callback (GtkWidget *widget,
   image_resize->resize = resize_widget_new (ResizeWidget, gdisp->gimage->width, gdisp->gimage->height);
 
   /*  the dialog  */
-  image_resize->shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (image_resize->shell), "image_resize", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (image_resize->shell), "Image Resize");
-  gtk_window_set_policy (GTK_WINDOW (image_resize->shell), FALSE, FALSE, TRUE);
-  gtk_window_position (GTK_WINDOW (image_resize->shell), GTK_WIN_POS_MOUSE);
+  image_resize->shell = gimp_dialog_new ("Image Resize");
+  gtk_window_set_resizable (GTK_WINDOW (image_resize->shell), FALSE);
 
   /* handle the wm close signal */
-  gtk_signal_connect (GTK_OBJECT (image_resize->shell), "delete_event",
-		      GTK_SIGNAL_FUNC (image_delete_callback),
-		      image_resize);
+  g_signal_connect (image_resize->shell, "close-request",
+		    G_CALLBACK (image_delete_callback),
+		    image_resize);
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (image_resize->shell)->vbox), vbox, TRUE, TRUE, 0);
-  gtk_box_pack_start (GTK_BOX (vbox), image_resize->resize->resize_widget, FALSE, FALSE, 0);
+  vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (vbox, 1);
+  gimp_box_pack_start (gimp_dialog_get_vbox (image_resize->shell), vbox, TRUE, TRUE, 0);
+  gimp_box_pack_start (vbox, image_resize->resize->resize_widget, FALSE, FALSE, 0);
 
   action_items[0].user_data = image_resize;
   action_items[1].user_data = image_resize;
-  build_action_area (GTK_DIALOG (image_resize->shell), action_items, 2, 0);
+  build_action_area (image_resize->shell, action_items, 2, 0);
 
-  gtk_widget_show (image_resize->resize->resize_widget);
-  gtk_widget_show (vbox);
-  gtk_widget_show (image_resize->shell);
+  gtk_window_present (GTK_WINDOW (image_resize->shell));
 }
 
 void
@@ -2220,30 +2007,25 @@ image_scale_cmd_callback (GtkWidget *widget,
   image_scale->resize = resize_widget_new (ScaleWidget, gdisp->gimage->width, gdisp->gimage->height);
 
   /*  the dialog  */
-  image_scale->shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (image_scale->shell), "image_scale", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (image_scale->shell), "Image Scale");
-  gtk_window_set_policy (GTK_WINDOW (image_scale->shell), FALSE, FALSE, TRUE);
-  gtk_window_position (GTK_WINDOW (image_scale->shell), GTK_WIN_POS_MOUSE);
+  image_scale->shell = gimp_dialog_new ("Image Scale");
+  gtk_window_set_resizable (GTK_WINDOW (image_scale->shell), FALSE);
 
   /* handle the wm close signal */
-  gtk_signal_connect (GTK_OBJECT (image_scale->shell), "delete_event",
-		      GTK_SIGNAL_FUNC (image_delete_callback),
-		      image_scale);
+  g_signal_connect (image_scale->shell, "close-request",
+		    G_CALLBACK (image_delete_callback),
+		    image_scale);
 
   /*  the main vbox  */
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (image_scale->shell)->vbox), vbox, TRUE, TRUE, 0);
-  gtk_box_pack_start (GTK_BOX (vbox), image_scale->resize->resize_widget, FALSE, FALSE, 0);
+  vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (vbox, 1);
+  gimp_box_pack_start (gimp_dialog_get_vbox (image_scale->shell), vbox, TRUE, TRUE, 0);
+  gimp_box_pack_start (vbox, image_scale->resize->resize_widget, FALSE, FALSE, 0);
 
   action_items[0].user_data = image_scale;
   action_items[1].user_data = image_scale;
-  build_action_area (GTK_DIALOG (image_scale->shell), action_items, 2, 0);
+  build_action_area (image_scale->shell, action_items, 2, 0);
 
-  gtk_widget_show (image_scale->resize->resize_widget);
-  gtk_widget_show (vbox);
-  gtk_widget_show (image_scale->shell);
+  gtk_window_present (GTK_WINDOW (image_scale->shell));
 }
 
 void
@@ -2253,7 +2035,7 @@ image_histogram_cmd_callback (GtkWidget *widget,
   GDisplay * gdisp;
 
   gdisp = gdisplay_active ();
-  gtk_widget_activate (tool_widgets[tool_info[(int) HISTOGRAM].toolbar_position]);
+  tools_select_widget (HISTOGRAM);
   histogram_tool_initialize ((void *) gdisp);
 
   gdisp = gdisplay_active ();
@@ -2284,7 +2066,6 @@ layers_lower_cmd_callback (GtkWidget *widget,
   gimage_lower_layer (gdisp->gimage, gdisp->gimage->active_layer);
   gdisplays_flush ();
 }
-  int value;
 
 void
 layers_anchor_cmd_callback (GtkWidget *widget,
@@ -2379,7 +2160,7 @@ tools_select_cmd_callback (GtkWidget           *widget,
   GDisplay * gdisp;
 
   /*  Activate the approriate widget  */
-  gtk_widget_activate (tool_widgets[tool_info[(long) callback_action].toolbar_position]);
+  tools_select_widget (callback_action);
 
   gdisp = gdisplay_active ();
 
@@ -2502,7 +2283,7 @@ image_resize_callback (GtkWidget *w,
 	}
     }
 
-  gtk_widget_destroy (image_resize->shell);
+  gtk_window_destroy (GTK_WINDOW (image_resize->shell));
   resize_widget_free (image_resize->resize);
   g_free (image_resize);
 }
@@ -2532,17 +2313,16 @@ image_scale_callback (GtkWidget *w,
 	}
     }
 
-  gtk_widget_destroy (image_scale->shell);
+  gtk_window_destroy (GTK_WINDOW (image_scale->shell));
   resize_widget_free (image_scale->resize);
   g_free (image_scale);
 }
 
-static gint
-image_delete_callback (GtkWidget *w,
-		       GdkEvent *e,
+static gboolean
+image_delete_callback (GtkWindow *w,
 		       gpointer client_data)
 {
-  image_cancel_callback (w, client_data);
+  image_cancel_callback (GTK_WIDGET (w), client_data);
 
   return TRUE;
 }
@@ -2556,7 +2336,7 @@ image_cancel_callback (GtkWidget *w,
 
   image_resize = (ImageResize *) client_data;
 
-  gtk_widget_destroy (image_resize->shell);
+  gtk_window_destroy (GTK_WINDOW (image_resize->shell));
   resize_widget_free (image_resize->resize);
   g_free (image_resize);
 }
@@ -2569,7 +2349,7 @@ gimage_mask_feather_callback (GtkWidget *w,
   GImage *gimage;
   double feather_radius;
 
-  if (!(gimage = gimage_get_ID ((int)client_data)))
+  if (!(gimage = gimage_get_ID (GPOINTER_TO_INT (client_data))))
     return;
 
   feather_radius = atof (call_data);
@@ -2587,7 +2367,7 @@ gimage_mask_border_callback (GtkWidget *w,
   GImage *gimage;
   int border_radius;
 
-  if (!(gimage = gimage_get_ID ((int)client_data)))
+  if (!(gimage = gimage_get_ID (GPOINTER_TO_INT (client_data))))
     return;
 
   border_radius = atoi (call_data);
@@ -2605,7 +2385,7 @@ gimage_mask_grow_callback (GtkWidget *w,
   GImage *gimage;
   int grow_pixels;
 
-  if (!(gimage = gimage_get_ID ((int)client_data)))
+  if (!(gimage = gimage_get_ID (GPOINTER_TO_INT (client_data))))
     return;
 
   grow_pixels = atoi (call_data);
@@ -2623,7 +2403,7 @@ gimage_mask_shrink_callback (GtkWidget *w,
   GImage *gimage;
   int shrink_pixels;
 
-  if (!(gimage = gimage_get_ID ((int)client_data)))
+  if (!(gimage = gimage_get_ID (GPOINTER_TO_INT (client_data))))
     return;
 
   shrink_pixels = atoi (call_data);

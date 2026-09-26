@@ -52,8 +52,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #ifndef M_PI
 #define M_PI    3.14159265358979323846
@@ -289,7 +290,7 @@ run    (gchar    *name,
 
 /* Build the dialog up. This was the hard part! */
 static gint
-blinds_dialog ()
+blinds_dialog (void)
 {
   GtkWidget *dlg;
   GtkWidget *button;
@@ -299,216 +300,166 @@ blinds_dialog ()
   GtkWidget *label;
   GtkWidget *entry;
   GtkWidget *slider;
-  GtkObject *size_data;
+  GtkAdjustment *size_data;
   GtkWidget *toggle_vbox;
   GtkWidget *toggle;
-  GSList *orientation_group = NULL;
-  guchar     *color_cube;
-  gchar **argv;
-  gint argc;
+  GtkWidget *orientation_group = NULL;
   char buf[256];
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("blinds");
 
   do_horizontal = (bvals.orientation == HORIZONTAL);
   do_vertical = (bvals.orientation == VERTICAL);
   do_trans = (bvals.bg_trans == TRUE);
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
+  gtk_init ();
 
   /* Get the stuff for the preview window...*/
-  gtk_preview_set_gamma(gimp_gamma());
-  gtk_preview_set_install_cmap(gimp_install_cmap());
-  color_cube = gimp_color_cube();
-  gtk_preview_set_color_cube(color_cube[0], color_cube[1], color_cube[2], color_cube[3]);
   
-  gtk_widget_set_default_visual(gtk_preview_get_visual());
-  gtk_widget_set_default_colormap(gtk_preview_get_cmap());
 
   cache_preview(); /* Get the preview image and store it also set has_alpha */
 
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Blinds");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) blinds_close_callback,
+  dlg = gimp_dialog_new ("Blinds");
+  g_signal_connect (dlg, "destroy",
+		      G_CALLBACK (blinds_close_callback),
 		      NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) blinds_ok_callback,
+  button = gimp_dialog_add_button (dlg, "OK", NULL, NULL, TRUE);
+  g_signal_connect (button, "clicked",
+                      G_CALLBACK (blinds_ok_callback),
                       dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			     G_CALLBACK (gtk_window_destroy), dlg);
 
 
   /* Start building the frame for the preview area */
 
   frame = gtk_frame_new ("preview");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  table = gtk_table_new (5, 5, FALSE); 
-  gtk_container_border_width (GTK_CONTAINER (table), 10); 
-  gtk_container_add (GTK_CONTAINER (frame), table); 
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  bint.preview = gtk_preview_new(GTK_PREVIEW_COLOR);
-  gtk_preview_size(GTK_PREVIEW(bint.preview), preview_width, preview_height);
+  gimp_container_set_border_width (frame, 10);
+  table = gimp_table_new (5, 5, FALSE); 
+  gimp_container_set_border_width (table, 10); 
+  gimp_container_add (frame, table); 
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  bint.preview = gimp_preview_new (GIMP_PREVIEW_COLOR);
+  gimp_preview_size (GIMP_PREVIEW (bint.preview), preview_width, preview_height);
   xframe = gtk_frame_new(NULL);
-  gtk_frame_set_shadow_type (GTK_FRAME (xframe), GTK_SHADOW_IN);
-  gtk_container_add(GTK_CONTAINER(xframe), bint.preview);
-  gtk_widget_show(xframe);
-  gtk_table_attach(GTK_TABLE(table), xframe, 0, 1, 0, 2, GTK_EXPAND , GTK_EXPAND, 0, 0);
-  gtk_widget_show(frame); /* ALT-I */
+  gimp_container_add (xframe, bint.preview);
+  gimp_table_attach (table, xframe, 0, 1, 0, 2, GIMP_EXPAND , GIMP_EXPAND, 0, 0);
 
-  gtk_widget_show(table); 
-  gtk_widget_show(bint.preview);
 
   frame = gtk_frame_new ("Orientation");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_table_attach (GTK_TABLE (table), frame, 1, 2, 0, 1,
-		    GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 5, 5);
-  toggle_vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (toggle_vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), toggle_vbox);
+  gimp_table_attach (table, frame, 1, 2, 0, 1,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 5, 5);
+  toggle_vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (toggle_vbox, 5);
+  gimp_container_add (frame, toggle_vbox);
   
-  toggle = gtk_radio_button_new_with_label (orientation_group, "Horizontal");
-  orientation_group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) blinds_toggle_update,
+  toggle = gimp_radio_button_new (orientation_group, "Horizontal");
+  orientation_group = toggle;
+  gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (blinds_toggle_update),
 		      &do_horizontal);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), do_horizontal);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), do_horizontal);
 
-  toggle = gtk_radio_button_new_with_label (orientation_group, "Vertical");
-  orientation_group = gtk_radio_button_group (GTK_RADIO_BUTTON (toggle));
-  gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) blinds_toggle_update,
+  toggle = gimp_radio_button_new (orientation_group, "Vertical");
+  orientation_group = toggle;
+  gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (blinds_toggle_update),
 		      &do_vertical);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), do_vertical);
-  gtk_widget_show (toggle);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), do_vertical);
 
-  gtk_widget_show (toggle_vbox);
-  gtk_widget_show(frame);
   
   frame = gtk_frame_new ("Background");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_table_attach (GTK_TABLE (table), frame, 1, 2, 1, 2,
-		    GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 5, 5);
-  toggle_vbox = gtk_vbox_new (FALSE, 5);
-  gtk_container_border_width (GTK_CONTAINER (toggle_vbox), 5);
-  gtk_container_add (GTK_CONTAINER (frame), toggle_vbox);
+  gimp_table_attach (table, frame, 1, 2, 1, 2,
+		    GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 5, 5);
+  toggle_vbox = gimp_vbox_new (FALSE, 5);
+  gimp_container_set_border_width (toggle_vbox, 5);
+  gimp_container_add (frame, toggle_vbox);
   
   toggle = gtk_check_button_new_with_label ("Transparent");
-  gtk_box_pack_start (GTK_BOX (toggle_vbox), toggle, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (toggle), "toggled",
-		      (GtkSignalFunc) blinds_button_update,
+  gimp_box_pack_start (toggle_vbox, toggle, FALSE, FALSE, 0);
+  g_signal_connect (toggle, "toggled",
+		      G_CALLBACK (blinds_button_update),
 		      &do_trans);
-  gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), do_trans);
+  gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), do_trans);
 
   if(!has_alpha)
     {
       gtk_widget_set_sensitive(toggle,FALSE);
-      gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (toggle), FALSE);
+      gtk_check_button_set_active (GTK_CHECK_BUTTON (toggle), FALSE);
     }
 
-  gtk_widget_show (toggle);
 
-  gtk_widget_show (toggle_vbox);
-  gtk_widget_show(frame);
 
   frame = gtk_frame_new ("Parameter Settings");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  table = gtk_table_new (5, 5, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width (frame, 10);
+  table = gimp_table_new (5, 5, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gimp_container_add (frame, table);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
 
   label = gtk_label_new ("Displacement ");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2, GTK_FILL | GTK_EXPAND, GTK_FILL, 4, 0);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 1, 2, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 4, 0);
 
 
   size_data = gtk_adjustment_new (bvals.angledsp, 1, 90, 1, 1, 0);
-  slider = gtk_hscale_new (GTK_ADJUSTMENT (size_data));
-  gtk_widget_set_usize (slider, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), slider, 2,3 , 1, 2, GTK_FILL | GTK_EXPAND, GTK_FILL, 0, 0);
+  slider = gimp_hscale_new (size_data, 1);
+  gtk_widget_set_size_request (slider, SCALE_WIDTH, -1);
+  gimp_table_attach (table, slider, 2,3 , 1, 2, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 0, 0);
   gtk_scale_set_value_pos (GTK_SCALE (slider), GTK_POS_LEFT);
   gtk_scale_set_digits (GTK_SCALE (slider), 0);
-  gtk_range_set_update_policy (GTK_RANGE (slider),GTK_UPDATE_CONTINUOUS );
-  gtk_signal_connect (GTK_OBJECT (size_data), "value_changed",
-		      (GtkSignalFunc) blinds_scale_update,
+  g_signal_connect (size_data, "value-changed",
+		      G_CALLBACK (blinds_scale_update),
 		      &bvals.angledsp);
-  gtk_widget_show (slider);
 
 
   entry = gtk_entry_new();
-  gtk_object_set_user_data(GTK_OBJECT(entry), size_data);
-  gtk_object_set_user_data(size_data, entry);
-  gtk_widget_set_usize(entry, ENTRY_WIDTH, 0);
+  g_object_set_data (G_OBJECT (entry), "user_data", size_data);
+  g_object_set_data (G_OBJECT (size_data), "user_data", entry);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
   sprintf(buf, "%.2d", bvals.angledsp);
-  gtk_entry_set_text(GTK_ENTRY(entry), buf);
-  gtk_signal_connect(GTK_OBJECT(entry), "changed",
-		     (GtkSignalFunc) blinds_entry_update,
+  gtk_editable_set_text (GTK_EDITABLE (entry), buf);
+  g_signal_connect (entry, "changed",
+		     G_CALLBACK (blinds_entry_update),
 		     &bvals.angledsp);
-  gtk_table_attach(GTK_TABLE(table), entry, 3, 4, 1, 2, GTK_FILL, GTK_FILL, 4, 0);
-  gtk_widget_show(entry);
+  gimp_table_attach (table, entry, 3, 4, 1, 2, GIMP_FILL, GIMP_FILL, 4, 0);
 
 
   label = gtk_label_new ("Num Segments ");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 2, 3, GTK_FILL | GTK_EXPAND, GTK_FILL, 0, 0);
-  gtk_widget_show (label);
+  gimp_misc_set_alignment (label, 0.0, 0.5);
+  gimp_table_attach (table, label, 0, 1, 2, 3, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 0, 0);
 
   size_data = gtk_adjustment_new (bvals.numsegs, 1, MAX_FANS, 2, 1, 0);
-  slider = gtk_hscale_new (GTK_ADJUSTMENT (size_data));
-  gtk_widget_set_usize (slider, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), slider, 2, 3, 2, 3, GTK_FILL | GTK_EXPAND, GTK_FILL, 0, 0);
+  slider = gimp_hscale_new (size_data, 1);
+  gtk_widget_set_size_request (slider, SCALE_WIDTH, -1);
+  gimp_table_attach (table, slider, 2, 3, 2, 3, GIMP_FILL | GIMP_EXPAND, GIMP_FILL, 0, 0);
   gtk_scale_set_value_pos (GTK_SCALE (slider), GTK_POS_LEFT);
   gtk_scale_set_digits (GTK_SCALE (slider), 0);
-  gtk_range_set_update_policy (GTK_RANGE (slider), GTK_UPDATE_CONTINUOUS);
-  gtk_signal_connect (GTK_OBJECT (size_data), "value_changed",
-		      (GtkSignalFunc) blinds_scale_update,
+  g_signal_connect (size_data, "value-changed",
+		      G_CALLBACK (blinds_scale_update),
 		      &bvals.numsegs);
-  gtk_widget_show (slider);
 
   entry = gtk_entry_new();
-  gtk_object_set_user_data(GTK_OBJECT(entry), size_data);
-  gtk_object_set_user_data(size_data, entry);
-  gtk_widget_set_usize(entry, ENTRY_WIDTH, 0);
+  g_object_set_data (G_OBJECT (entry), "user_data", size_data);
+  g_object_set_data (G_OBJECT (size_data), "user_data", entry);
+  gtk_widget_set_size_request (entry, ENTRY_WIDTH, -1);
   sprintf(buf, "%d", bvals.numsegs);
-  gtk_entry_set_text(GTK_ENTRY(entry), buf);
-  gtk_signal_connect(GTK_OBJECT(entry), "changed",
-		     (GtkSignalFunc) blinds_entry_update,
+  gtk_editable_set_text (GTK_EDITABLE (entry), buf);
+  g_signal_connect (entry, "changed",
+		     G_CALLBACK (blinds_entry_update),
 		     &bvals.numsegs);
-  gtk_table_attach(GTK_TABLE(table), entry, 3, 4, 2, 3, GTK_FILL, GTK_FILL, 4, 0);
-  gtk_widget_show(entry);
+  gimp_table_attach (table, entry, 3, 4, 2, 3, GIMP_FILL, GIMP_FILL, 4, 0);
 
-  gtk_widget_show (frame);
-  gtk_widget_show (table);
 
-  gtk_widget_show (dlg);
+  gtk_window_present (GTK_WINDOW (dlg));
   dialog_update_preview();
 
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   /*  determine orientation  */
   if (do_horizontal)
@@ -526,7 +477,7 @@ static void
 blinds_close_callback (GtkWidget *widget,
 			 gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -534,7 +485,7 @@ blinds_ok_callback (GtkWidget *widget,
 		      gpointer   data)
 {
   bint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 
@@ -546,7 +497,7 @@ blinds_toggle_update(GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
   {
     /* Only do for event that sets a toggle button to true */
     /* This will break if any more toggles are added? */
@@ -565,7 +516,7 @@ blinds_button_update(GtkWidget *widget,
 
   toggle_val = (int *) data;
 
-  if (GTK_TOGGLE_BUTTON (widget)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)))
   {
     /* Only do for event that sets a toggle button to true */
     /* This will break if any more toggles are added? */
@@ -585,15 +536,15 @@ blinds_scale_update(GtkAdjustment *adjustment, gint *value)
 	GtkWidget *entry;
 	char       buf[256];
 	
-	if (*value != adjustment->value) {
-		*value = adjustment->value;
+	if (*value != gtk_adjustment_get_value (adjustment)) {
+		*value = gtk_adjustment_get_value (adjustment);
 		
-		entry = gtk_object_get_user_data(GTK_OBJECT(adjustment));
+		entry = g_object_get_data (G_OBJECT (adjustment), "user_data");
 		sprintf(buf,"%d",*value);
 		
-		gtk_signal_handler_block_by_data(GTK_OBJECT(entry), value);
-		gtk_entry_set_text(GTK_ENTRY(entry), buf);
-		gtk_signal_handler_unblock_by_data(GTK_OBJECT(entry), value);
+		g_signal_handlers_block_matched (entry, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, value);
+		gtk_editable_set_text (GTK_EDITABLE (entry), buf);
+		g_signal_handlers_unblock_matched (entry, G_SIGNAL_MATCH_DATA, 0, 0, NULL, NULL, value);
 		
 		dialog_update_preview();
 	}
@@ -605,17 +556,15 @@ blinds_entry_update(GtkWidget *widget, gint *value)
 	GtkAdjustment *adjustment;
 	gdouble        new_value;
 
-	new_value = atoi(gtk_entry_get_text(GTK_ENTRY(widget)));
+	new_value = atoi(gtk_editable_get_text (GTK_EDITABLE (widget)));
 
 	if (*value != new_value) {
-		adjustment = gtk_object_get_user_data(GTK_OBJECT(widget));
+		adjustment = g_object_get_data (G_OBJECT (widget), "user_data");
 
-		if ((new_value >= adjustment->lower) &&
-		    (new_value <= adjustment->upper)) {
+		if ((new_value >= gtk_adjustment_get_lower (adjustment)) &&
+		    (new_value <= gtk_adjustment_get_upper (adjustment))) {
 			*value            = new_value;
-			adjustment->value = new_value;
-
-			gtk_signal_emit_by_name(GTK_OBJECT(adjustment), "value_changed");
+			gtk_adjustment_set_value (adjustment, new_value);
 
 			dialog_update_preview();
 		} 
@@ -627,7 +576,7 @@ blinds_entry_update(GtkWidget *widget, gint *value)
 /* The preview_cache will contain the small image */
 
 static void
-cache_preview()
+cache_preview (void)
 {
   GPixelRgn src_rgn;
   int y,x;
@@ -886,7 +835,7 @@ dialog_update_preview(void)
 	      }
 	  }
 	
-	gtk_preview_draw_row(GTK_PREVIEW(bint.preview), bint.preview_row, 0, y, preview_width);
+	gimp_preview_draw_row (GIMP_PREVIEW (bint.preview), bint.preview_row, 0, y, preview_width);
 	
 	p += preview_width*bint.img_bpp;
       } 
@@ -979,14 +928,13 @@ dialog_update_preview(void)
 	      }
 	    p = &copy_row[0];
 	  }
-	gtk_preview_draw_row(GTK_PREVIEW(bint.preview), p, 0, y, preview_width);
+	gimp_preview_draw_row (GIMP_PREVIEW (bint.preview), p, 0, y, preview_width);
       } 
       g_free(sr);
       g_free(dr);
     }
   
-  gtk_widget_draw(bint.preview, NULL);
-  gdk_flush();
+  gtk_widget_queue_draw (bint.preview);
 }
 
 /* STEP tells us how many rows/columns to gulp down in one go... */

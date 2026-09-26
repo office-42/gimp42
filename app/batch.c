@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "appenv.h"
 #include "app_procs.h"
@@ -12,9 +11,9 @@
 
 
 static void batch_run_cmd  (char              *cmd);
-static void batch_read     (gpointer           data,
-			    gint               source,
-			    GdkInputCondition  condition);
+static gboolean batch_read (GIOChannel        *channel,
+			    GIOCondition       condition,
+			    gpointer           data);
 
 
 static ProcRecord *eval_proc;
@@ -43,7 +42,16 @@ batch_init ()
 	  if (!read_from_stdin)
 	    {
 	      g_print ("reading batch commands from stdin\n");
-	      gdk_input_add (STDIN_FILENO, GDK_INPUT_READ, batch_read, NULL);
+	      {
+		GIOChannel *channel;
+
+#ifdef G_OS_WIN32
+		channel = g_io_channel_win32_new_fd (0);
+#else
+		channel = g_io_channel_unix_new (0);
+#endif
+		g_io_add_watch (channel, G_IO_IN | G_IO_HUP, batch_read, NULL);
+	      }
 	      read_from_stdin = TRUE;
 	    }
 	}
@@ -98,23 +106,30 @@ batch_run_cmd (char *cmd)
 }
 
 
-static void
-batch_read (gpointer          data,
-	    gint              source,
-	    GdkInputCondition condition)
+static gboolean
+batch_read (GIOChannel   *channel,
+	    GIOCondition  condition,
+	    gpointer      data)
 {
   static GString *string;
   char buf[32], *t;
-  int nread, done;
+  gsize nread = 0;
+  int done;
 
-  if (condition & GDK_INPUT_READ)
+  if (condition & (G_IO_IN | G_IO_HUP))
     {
+      GIOStatus status;
+
       do {
-	nread = read (source, &buf, sizeof (char) * 31);
-      } while ((nread == -1) && ((errno == EAGAIN) || (errno == EINTR)));
+	status = g_io_channel_read_chars (channel, buf, sizeof (char) * 31,
+					  &nread, NULL);
+      } while (status == G_IO_STATUS_AGAIN);
 
       if ((nread == 0) && (!string || (string->len == 0)))
-	app_exit (FALSE);
+	{
+	  app_exit (FALSE);
+	  return G_SOURCE_REMOVE;
+	}
 
       buf[nread] = '\0';
 
@@ -141,7 +156,7 @@ batch_read (gpointer          data,
 	{
 	  if ((*t == '\n') || (*t == '\r'))
 	    {
-              t = '\0';
+	      *t = '\0';
 	      done = TRUE;
 	    }
 	  t++;
@@ -153,4 +168,6 @@ batch_read (gpointer          data,
 	  g_string_truncate (string, 0);
 	}
     }
+
+  return G_SOURCE_CONTINUE;
 }

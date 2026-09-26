@@ -25,7 +25,8 @@ typedef struct _BrushSelect _BrushSelect, *BrushSelectP;
 struct _BrushSelect {
   GtkWidget *shell;
   GtkWidget *frame;
-  GtkWidget *preview;
+  GtkWidget *preview;                  /*  the grid: a GtkDrawingArea  */
+  cairo_surface_t *grid_surface;       /*  what the grid shows        */
   GtkWidget *brush_name;
   GtkWidget *brush_size;
   GtkWidget *options_box;
@@ -37,8 +38,8 @@ struct _BrushSelect {
   int scroll_offset;
   int redraw;
   /*  Brush preview  */
-  GtkWidget *brush_popup;
-  GtkWidget *brush_preview;
+  GtkWidget *brush_popup;              /*  a GtkPopover on the grid    */
+  GtkWidget *brush_preview;            /*  a GimpPreview in it         */
 };
 
 BrushSelectP  brush_select_new     (void);

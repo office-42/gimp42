@@ -22,10 +22,10 @@
 /*
  *  Functions
  */
-GtkWidget * color_area_create (int        width,
-			       int        height,
-			       GdkPixmap *default_pixmap,
-			       GdkPixmap *swap_pixmap);
+GtkWidget * color_area_create (int         width,
+			       int         height,
+			       GdkTexture *default_texture,
+			       GdkTexture *swap_texture);
 void        color_area_update (void);
 
 /*

@@ -36,16 +36,17 @@
 
 /* structure declarations */
 
-#define GIMP_CHANNEL(obj)        GTK_CHECK_CAST (obj, gimp_channel_get_type (), GimpChannel)
-#define GIMP_CHANNEL_CLASS(klass) GTK_CHECK_CLASS_CAST (klass, gimp_channel_get_type(), GimpChannelClass)
-#define GIMP_IS_CHANNEL(obj)     GTK_CHECK_TYPE (obj, gimp_channel_get_type())
+#define GIMP_TYPE_CHANNEL        (gimp_channel_get_type ())
+#define GIMP_CHANNEL(obj)        G_TYPE_CHECK_INSTANCE_CAST (obj, gimp_channel_get_type (), GimpChannel)
+#define GIMP_CHANNEL_CLASS(klass) G_TYPE_CHECK_CLASS_CAST (klass, gimp_channel_get_type (), GimpChannelClass)
+#define GIMP_IS_CHANNEL(obj)     G_TYPE_CHECK_INSTANCE_TYPE (obj, gimp_channel_get_type ())
 
 typedef struct _GimpChannel      GimpChannel;
 typedef struct _GimpChannelClass GimpChannelClass;
 
 typedef GimpChannel Channel;		/* convenience */
 
-guint gimp_channel_get_type (void);
+GType gimp_channel_get_type (void);
 
 /*  Special undo type  */
 typedef struct _channel_undo ChannelUndo;

@@ -52,9 +52,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 
 #include <gtk/gtk.h>
-#include <gdk/gdk.h>
 #include "curl0.xpm"
 #include "curl1.xpm"
 #include "curl2.xpm"
@@ -64,6 +64,7 @@
 #include "curl6.xpm"
 #include "curl7.xpm"
 #include <libgimp/gimp.h>
+#include <libgimp/gimpui.h>
 
 #ifndef M_PI
 #define M_PI    3.14159265358979323846
@@ -109,7 +110,7 @@ static void set_default_params (void);
 static void dialog_close_callback (GtkWidget *, gpointer);
 static void dialog_ok_callback (GtkWidget *, gpointer);
 static void dialog_cancel_callback (GtkWidget *, gpointer);
-static void dialog_toggle_update (GtkWidget *, gint);
+static void dialog_toggle_update (GtkWidget *, gpointer);
 static void dialog_scale_update (GtkAdjustment *, double *);
 
 static void query (void);
@@ -158,11 +159,8 @@ GDrawable *curl_layer;
 GDrawable *drawable;
 GDrawable *layer_mask;
 
-typedef GdkPixmap *GdkPmP;
-GdkPmP gdk_curl_pixmaps[8];
+GdkTexture *curl_textures[8];
 
-typedef GdkBitmap *GdkBmP;
-GdkBmP gdk_curl_masks[8];
 
 GtkWidget *curl_pixmap_widget;
 
@@ -438,51 +436,53 @@ static void set_default_params (void) {
 /********************************************************************/
 
 static void dialog_close_callback (GtkWidget * widget, gpointer data) {
-   gtk_main_quit ();
+   gimp_main_loop_quit ();
 }
 
 static void dialog_ok_callback (GtkWidget * widget, gpointer data) {
    curl_run = TRUE;
-   gtk_widget_destroy (GTK_WIDGET (data));
+   gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void dialog_cancel_callback (GtkWidget * widget, gpointer data) {
-   gtk_widget_destroy (GTK_WIDGET (data));
+   gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void dialog_scale_update (GtkAdjustment * adjustment, double *value) {
-   *value = ((double) adjustment->value) / 100.0;
+   *value = ((double) gtk_adjustment_get_value (adjustment)) / 100.0;
 }
 
-static void dialog_toggle_update (GtkWidget * widget, gint32 value) {
+static void dialog_toggle_update (GtkWidget * widget, gpointer data) {
+   gint32 value = GPOINTER_TO_INT (data);
+   gint active = gtk_check_button_get_active (GTK_CHECK_BUTTON (widget)) ? 1 : 0;
    gint pixmapindex = 0;
 
    switch (value) {
    case 0:
-      curl.do_upper_left = (GTK_TOGGLE_BUTTON (widget)->active) ? 1 : 0;
+      curl.do_upper_left = active;
       break;
    case 1:
-      curl.do_upper_right = (GTK_TOGGLE_BUTTON (widget)->active) ? 1 : 0;
+      curl.do_upper_right = active;
       break;
    case 2:
-      curl.do_lower_left = (GTK_TOGGLE_BUTTON (widget)->active) ? 1 : 0;
+      curl.do_lower_left = active;
       break;
    case 3:
-      curl.do_lower_right = (GTK_TOGGLE_BUTTON (widget)->active) ? 1 : 0;
+      curl.do_lower_right = active;
       break;
    case 5:
-      curl.do_horizontal = (GTK_TOGGLE_BUTTON (widget)->active) ? 1 : 0;
+      curl.do_horizontal = active;
       break;
    case 6:
-      curl.do_vertical = (GTK_TOGGLE_BUTTON (widget)->active) ? 1 : 0;
+      curl.do_vertical = active;
       break;
    case 8:
-      curl.do_shade_under = (GTK_TOGGLE_BUTTON (widget)->active) ? 1 : 0;
+      curl.do_shade_under = active;
       return;
       break;
    case 9:
-      curl.do_curl_gradient = (GTK_TOGGLE_BUTTON (widget)->active) ? 1 : 0;
-      curl.do_curl_shade = (GTK_TOGGLE_BUTTON (widget)->active) ? 0 : 1;
+      curl.do_curl_gradient = active;
+      curl.do_curl_shade = active ? 0 : 1;
       return;
       break;
    default:
@@ -495,10 +495,70 @@ static void dialog_toggle_update (GtkWidget * widget, gint32 value) {
 	 curl.do_upper_left * 3 + curl.do_horizontal * 4;
       if (pixmapindex < 0 || pixmapindex > 7)
 	 pixmapindex = 0;
-      gtk_pixmap_set (GTK_PIXMAP (curl_pixmap_widget),
-		      gdk_curl_pixmaps[pixmapindex],
-		      gdk_curl_masks[pixmapindex]);
+      if (curl_pixmap_widget)
+	 gtk_picture_set_paintable (GTK_PICTURE (curl_pixmap_widget),
+				    GDK_PAINTABLE (curl_textures[pixmapindex]));
    }
+}
+
+/*  Turns one of the curl XPMs (one character per pixel, colours given
+ *  as "None" or "#rrggbb") into a texture.  gdk-pixbuf's XPM support
+ *  is deprecated, and these images need nothing more.
+ */
+static GdkTexture *curl_texture_from_xpm (char **xpm) {
+   gint width, height, ncolors, cpp;
+   guint32 colors[256];
+   gboolean transparent[256];
+   guchar *pixels;
+   GBytes *bytes;
+   GdkTexture *texture;
+   gint i, x, y;
+
+   width = height = ncolors = cpp = 0;
+   sscanf (xpm[0], "%d %d %d %d", &width, &height, &ncolors, &cpp);
+   g_return_val_if_fail (width > 0 && height > 0 && cpp == 1, NULL);
+
+   for (i = 0; i < 256; i++) {
+      colors[i] = 0;
+      transparent[i] = TRUE;
+   }
+   for (i = 0; i < ncolors; i++) {
+      const char *line = xpm[1 + i];
+      guchar key = (guchar) line[0];
+      const char *spec = strstr (line + 1, "c ");
+
+      if (spec == NULL)
+	 continue;
+      spec += 2;
+      while (*spec == ' ')
+	 spec++;
+      if (spec[0] == '#') {
+	 colors[key] = (guint32) strtoul (spec + 1, NULL, 16);
+	 transparent[key] = FALSE;
+      }
+   }
+
+   pixels = g_malloc (width * height * 4);
+   for (y = 0; y < height; y++) {
+      const char *row = xpm[1 + ncolors + y];
+
+      for (x = 0; x < width; x++) {
+	 guchar key = (guchar) row[x];
+	 guchar *p = pixels + (y * width + x) * 4;
+
+	 p[0] = (colors[key] >> 16) & 0xff;
+	 p[1] = (colors[key] >> 8) & 0xff;
+	 p[2] = colors[key] & 0xff;
+	 p[3] = transparent[key] ? 0 : 255;
+      }
+   }
+
+   bytes = g_bytes_new_take (pixels, width * height * 4);
+   texture = gdk_memory_texture_new (width, height, GDK_MEMORY_R8G8B8A8,
+				     bytes, width * 4);
+   g_bytes_unref (bytes);
+
+   return texture;
 }
 
 /*********/
@@ -511,93 +571,57 @@ static int do_dialog (void) {
    GtkWidget *dialog;
    GtkWidget *orhbox1, *orhbox2, *vbox, *ivbox, *corner_frame, *orient_frame;
    GtkWidget *shade_button, *gradient_button, *button, *label, *scale;
-   GtkStyle *style;
-   GtkObject *adjustment;
+   GtkAdjustment *adjustment;
    gint pixmapindex;
 
-   gint argc;
-   gchar **argv;
+   gtk_init ();
 
-   argc = 1;
-   argv = g_new (gchar *, 1);
-   argv[0] = g_strdup ("pagecurl");
+   dialog = gimp_dialog_new ("Pagecurl effect");
+   g_signal_connect (dialog, "destroy",
+		     G_CALLBACK (dialog_close_callback),
+		     NULL);
 
-   gtk_init (&argc, &argv);
-   gtk_rc_parse (gimp_gtkrc ());
-   gdk_set_use_xshm (gimp_use_xshm ());
+   gimp_dialog_add_button (dialog, "OK", G_CALLBACK (dialog_ok_callback),
+			   dialog, TRUE);
+   gimp_dialog_add_button (dialog, "Cancel", G_CALLBACK (dialog_cancel_callback),
+			   dialog, FALSE);
 
-   dialog = gtk_dialog_new ();
-   gtk_window_set_title (GTK_WINDOW (dialog), "Pagecurl effect");
-   gtk_container_border_width (GTK_CONTAINER (dialog), 0);
-   gtk_widget_realize (dialog);
-   gtk_signal_connect (GTK_OBJECT (dialog), "destroy",
-		       (GtkSignalFunc) dialog_close_callback,
-		       NULL);
-
-   button = gtk_button_new_with_label ("OK");
-   GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-   gtk_signal_connect (GTK_OBJECT (button), "clicked",
-		       (GtkSignalFunc) dialog_ok_callback,
-		       dialog);
-   gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog)->action_area), button, TRUE, TRUE, 0);
-   gtk_widget_grab_default (button);
-   gtk_widget_show (button);
-
-   button = gtk_button_new_with_label ("Cancel");
-   GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-   gtk_signal_connect (GTK_OBJECT (button), "clicked",
-		       (GtkSignalFunc) dialog_cancel_callback,
-		       dialog);
-   gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog)->action_area), button, TRUE, TRUE, 0);
-   gtk_widget_show (button);
-
-   vbox = gtk_vbox_new (FALSE, 5);
-   gtk_container_border_width (GTK_CONTAINER (vbox), 5);
-   gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dialog)->vbox),
-		       vbox, FALSE, FALSE, 0);
+   vbox = gimp_vbox_new (FALSE, 5);
+   gimp_container_set_border_width (vbox, 5);
+   gimp_box_pack_start (gimp_dialog_get_vbox (dialog),
+			vbox, FALSE, FALSE, 0);
 
 /*****/
 
-   orhbox1 = gtk_hbox_new (FALSE, 5);
-   gtk_container_border_width (GTK_CONTAINER (orhbox1), 0);
-   gtk_container_add (GTK_CONTAINER (vbox), orhbox1);
+   orhbox1 = gimp_hbox_new (FALSE, 5);
+   gimp_container_add (vbox, orhbox1);
 
-   style = gtk_widget_get_style (dialog);
-   gdk_curl_pixmaps[0] = gdk_pixmap_create_from_xpm_d (dialog->window,
-	     &(gdk_curl_masks[0]), &style->bg[GTK_STATE_NORMAL], curl0_xpm);
-   gdk_curl_pixmaps[1] = gdk_pixmap_create_from_xpm_d (dialog->window,
-	     &(gdk_curl_masks[1]), &style->bg[GTK_STATE_NORMAL], curl1_xpm);
-   gdk_curl_pixmaps[2] = gdk_pixmap_create_from_xpm_d (dialog->window,
-	     &(gdk_curl_masks[2]), &style->bg[GTK_STATE_NORMAL], curl2_xpm);
-   gdk_curl_pixmaps[3] = gdk_pixmap_create_from_xpm_d (dialog->window,
-	     &(gdk_curl_masks[3]), &style->bg[GTK_STATE_NORMAL], curl3_xpm);
-   gdk_curl_pixmaps[4] = gdk_pixmap_create_from_xpm_d (dialog->window,
-	     &(gdk_curl_masks[4]), &style->bg[GTK_STATE_NORMAL], curl4_xpm);
-   gdk_curl_pixmaps[5] = gdk_pixmap_create_from_xpm_d (dialog->window,
-	     &(gdk_curl_masks[5]), &style->bg[GTK_STATE_NORMAL], curl5_xpm);
-   gdk_curl_pixmaps[6] = gdk_pixmap_create_from_xpm_d (dialog->window,
-	     &(gdk_curl_masks[6]), &style->bg[GTK_STATE_NORMAL], curl6_xpm);
-   gdk_curl_pixmaps[7] = gdk_pixmap_create_from_xpm_d (dialog->window,
-	     &(gdk_curl_masks[7]), &style->bg[GTK_STATE_NORMAL], curl7_xpm);
+   curl_textures[0] = curl_texture_from_xpm (curl0_xpm);
+   curl_textures[1] = curl_texture_from_xpm (curl1_xpm);
+   curl_textures[2] = curl_texture_from_xpm (curl2_xpm);
+   curl_textures[3] = curl_texture_from_xpm (curl3_xpm);
+   curl_textures[4] = curl_texture_from_xpm (curl4_xpm);
+   curl_textures[5] = curl_texture_from_xpm (curl5_xpm);
+   curl_textures[6] = curl_texture_from_xpm (curl6_xpm);
+   curl_textures[7] = curl_texture_from_xpm (curl7_xpm);
 
    pixmapindex = curl.do_lower_left + curl.do_upper_right * 2 +
       curl.do_upper_left * 3 + curl.do_horizontal * 4;
    if (pixmapindex < 0 || pixmapindex > 7)
       pixmapindex = 0;
-   curl_pixmap_widget = gtk_pixmap_new (gdk_curl_pixmaps[pixmapindex],
-					gdk_curl_masks[pixmapindex]);
-   gtk_box_pack_start (GTK_BOX (orhbox1),
-		       curl_pixmap_widget, TRUE, TRUE, 0);
-   gtk_widget_show (curl_pixmap_widget);
+   curl_pixmap_widget =
+      gtk_picture_new_for_paintable (GDK_PAINTABLE (curl_textures[pixmapindex]));
+   gtk_picture_set_can_shrink (GTK_PICTURE (curl_pixmap_widget), FALSE);
+   gimp_box_pack_start (orhbox1,
+			curl_pixmap_widget, TRUE, TRUE, 0);
 
    corner_frame = gtk_frame_new ("Curl location");
-   gtk_frame_set_shadow_type (GTK_FRAME (corner_frame), GTK_SHADOW_ETCHED_IN);
-   gtk_box_pack_start (GTK_BOX (orhbox1),
-		       corner_frame, TRUE, TRUE, 0);
+   gimp_box_pack_start (orhbox1,
+			corner_frame, TRUE, TRUE, 0);
 
-   ivbox = gtk_vbox_new (FALSE, 0);
-   gtk_container_border_width (GTK_CONTAINER (ivbox), 5);
-   gtk_container_add (GTK_CONTAINER (corner_frame), ivbox);
+   ivbox = gimp_vbox_new (FALSE, 0);
+   gimp_container_set_border_width (ivbox, 5);
+   gtk_frame_set_child (GTK_FRAME (corner_frame), ivbox);
 
    {
       int i;
@@ -606,36 +630,28 @@ static int do_dialog (void) {
 
       button = NULL;
       for (i = 0; i < 4; i++) {
-	 button = gtk_radio_button_new_with_label (
-		     (button == NULL) ? NULL : gtk_radio_button_group (GTK_RADIO_BUTTON (button)),
-		     name[i]);
-	 gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button),
+	 button = gimp_radio_button_new (button, name[i]);
+	 gtk_check_button_set_active (GTK_CHECK_BUTTON (button),
 	       (i == 0 ? curl.do_upper_left : i == 1 ? curl.do_upper_right :
 		i == 2 ? curl.do_lower_left : curl.do_lower_right));
 
-	 gtk_signal_connect (GTK_OBJECT (button), "toggled",
-			     (GtkSignalFunc) dialog_toggle_update,
-			     (gpointer) i);
+	 g_signal_connect (button, "toggled",
+			   G_CALLBACK (dialog_toggle_update),
+			   GINT_TO_POINTER (i));
 
-	 gtk_box_pack_start (GTK_BOX (ivbox), button, FALSE, FALSE, 0);
-	 gtk_widget_show (button);
+	 gimp_box_pack_start (ivbox, button, FALSE, FALSE, 0);
       }
    }
-
-   gtk_widget_show (ivbox);
-   gtk_widget_show (corner_frame);
-   gtk_widget_show (orhbox1);
 
 /*****/
 
    orient_frame = gtk_frame_new ("Curl orientation");
-   gtk_frame_set_shadow_type (GTK_FRAME (orient_frame), GTK_SHADOW_ETCHED_IN);
-   gtk_box_pack_start (GTK_BOX (vbox),
-		       orient_frame, FALSE, FALSE, 0);
+   gimp_box_pack_start (vbox,
+			orient_frame, FALSE, FALSE, 0);
 
-   orhbox2 = gtk_hbox_new (FALSE, 5);
-   gtk_container_border_width (GTK_CONTAINER (orhbox2), 5);
-   gtk_container_add (GTK_CONTAINER (orient_frame), orhbox2);
+   orhbox2 = gimp_hbox_new (FALSE, 5);
+   gimp_container_set_border_width (orhbox2, 5);
+   gtk_frame_set_child (GTK_FRAME (orient_frame), orhbox2);
 
    {
       int i;
@@ -644,68 +660,56 @@ static int do_dialog (void) {
 
       button = NULL;
       for (i = 0; i < 2; i++) {
-	 button = gtk_radio_button_new_with_label (
-		     (button == NULL) ? NULL : gtk_radio_button_group (GTK_RADIO_BUTTON (button)),
-		     name[i]);
-	 gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (button),
+	 button = gimp_radio_button_new (button, name[i]);
+	 gtk_check_button_set_active (GTK_CHECK_BUTTON (button),
 			  (i == 0 ? curl.do_horizontal : curl.do_vertical));
 
-	 gtk_signal_connect (GTK_OBJECT (button), "toggled",
-			     (GtkSignalFunc) dialog_toggle_update,
-			     (gpointer) (i + 5));
+	 g_signal_connect (button, "toggled",
+			   G_CALLBACK (dialog_toggle_update),
+			   GINT_TO_POINTER (i + 5));
 
-	 gtk_box_pack_start (GTK_BOX (orhbox2), button, TRUE, FALSE, 0);
-	 gtk_widget_show (button);
+	 gimp_box_pack_start (orhbox2, button, TRUE, FALSE, 0);
       }
    }
 
-   gtk_widget_show (orhbox2);
-   gtk_widget_show (orient_frame);
-
    shade_button = gtk_check_button_new_with_label ("Shade under curl");
-   gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (shade_button),
+   gtk_check_button_set_active (GTK_CHECK_BUTTON (shade_button),
 				curl.do_shade_under ? TRUE : FALSE);
-   gtk_signal_connect (GTK_OBJECT (shade_button), "toggled",
-		       (GtkSignalFunc) dialog_toggle_update, (gpointer) 8);
-   gtk_box_pack_start (GTK_BOX (vbox), shade_button, TRUE, FALSE, 0);
-   gtk_widget_show (shade_button);
+   g_signal_connect (shade_button, "toggled",
+		     G_CALLBACK (dialog_toggle_update), GINT_TO_POINTER (8));
+   gimp_box_pack_start (vbox, shade_button, TRUE, FALSE, 0);
 
    gradient_button = gtk_check_button_new_with_label ("Use current Gradient\n instead of FG/BG-Color");
-   gtk_toggle_button_set_state (GTK_TOGGLE_BUTTON (gradient_button),
+   gtk_check_button_set_active (GTK_CHECK_BUTTON (gradient_button),
 				curl.do_curl_gradient ? TRUE : FALSE);
-   gtk_signal_connect (GTK_OBJECT (gradient_button), "toggled",
-		       (GtkSignalFunc) dialog_toggle_update, (gpointer) 9);
-   gtk_box_pack_start (GTK_BOX (vbox), gradient_button, TRUE, FALSE, 0);
-   gtk_widget_show (gradient_button);
+   g_signal_connect (gradient_button, "toggled",
+		     G_CALLBACK (dialog_toggle_update), GINT_TO_POINTER (9));
+   gimp_box_pack_start (vbox, gradient_button, TRUE, FALSE, 0);
 
 
    label = gtk_label_new ("Curl opacity");
-   gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-   gtk_box_pack_start (GTK_BOX (vbox), label, TRUE, FALSE, 0);
-   gtk_widget_show (label);
+   gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+   gimp_box_pack_start (vbox, label, TRUE, FALSE, 0);
 
    adjustment = gtk_adjustment_new (curl.do_curl_opacity * 100, 0.0, 100.0,
 				    1.0, 1.0, 1.0);
-   gtk_signal_connect (adjustment, "value_changed",
-		       (GtkSignalFunc) dialog_scale_update,
-		       &(curl.do_curl_opacity));
+   g_signal_connect (adjustment, "value-changed",
+		     G_CALLBACK (dialog_scale_update),
+		     &(curl.do_curl_opacity));
 
-   scale = gtk_hscale_new (GTK_ADJUSTMENT (adjustment));
-   gtk_widget_set_usize (GTK_WIDGET (scale), 150, 30);
-   gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-   gtk_scale_set_digits (GTK_SCALE (scale), 0);
-   gtk_scale_set_draw_value (GTK_SCALE (scale), TRUE);
-   gtk_box_pack_start (GTK_BOX (vbox), scale, TRUE, FALSE, 0);
-   gtk_widget_show (scale);
+   scale = gimp_hscale_new (adjustment, 0);
+   gtk_widget_set_size_request (scale, 150, 30);
+   gimp_box_pack_start (vbox, scale, TRUE, FALSE, 0);
 
 /*****/
 
-   gtk_widget_show (vbox);
+   gtk_window_present (GTK_WINDOW (dialog));
 
-   gtk_widget_show (dialog);
+   gimp_main_loop_run ();
 
-   gtk_main ();
-   gdk_flush ();
+   curl_pixmap_widget = NULL;
+   for (pixmapindex = 0; pixmapindex < 8; pixmapindex++)
+      g_clear_object (&curl_textures[pixmapindex]);
 
    return curl_run;
 }				/* do_dialog */

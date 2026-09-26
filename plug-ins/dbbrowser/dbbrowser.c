@@ -43,9 +43,9 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <X11/Xlib.h>
 
 #include "dbbrowser.h"
+#include "libgimp/gimpui.h"
 
 static void   query      (void);
 static void   run        (char    *name,
@@ -66,7 +66,7 @@ GPlugInInfo PLUG_IN_INFO =
 MAIN ()
 
 static void
-query ()
+query (void)
 {
   static GParamDef args[] =
   {
@@ -109,19 +109,13 @@ run (char    *name,
     {
     case RUN_INTERACTIVE: 
       {
-	gchar **argv;
-	gint  argc;  
 
-	argc = 1;
-	argv = g_new (gchar *, 1);
-	argv[0] = g_strdup ("dbbrowser");
-	gtk_init (&argc, &argv);
-	gtk_rc_parse (gimp_gtkrc ());
+	gtk_init ();
 	
-	gtk_quit_add_destroy (1, (GtkObject*) gimp_db_browser (NULL));
+	/* the browser quits the main loop when it is closed */
+	gimp_db_browser (NULL);
 
-	gtk_main ();
-	gdk_flush ();
+	gimp_main_loop_run ();
       }
       break;
       

@@ -229,6 +229,7 @@ void render_rectangle(spec, out, out_width, field, nchan, progress)
 	case field_both: shift =  0.0; break;
 	case field_even: shift = -0.5; break;
 	case field_odd:  shift =  0.5; break;
+	default:         shift =  0.0; break;
 	}
 	shift = shift / ppux;
 	t0 = (double) gutter_width / (oversample * ppux);

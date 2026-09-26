@@ -27,8 +27,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "gtk/gtk.h"
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 #ifndef M_PI
 #define M_PI    3.14159265358979323846
@@ -65,6 +66,15 @@ static void      run    (char      *name,
 			 GParam   **return_vals);
 
 static gint      sparkle_dialog        (void);
+static void      sparkle_add_scale     (GtkWidget   *table,
+					gint         row,
+					const gchar *text,
+					gdouble     *value,
+					gdouble      lower,
+					gdouble      upper,
+					gdouble      step,
+					gdouble      page,
+					gint         digits);
 
 static gint      compute_luminosity    (guchar *   pixel,
 					gint       gray,
@@ -274,145 +284,77 @@ run (char    *name,
 }
 
 static gint
-sparkle_dialog ()
+sparkle_dialog (void)
 {
   GtkWidget *dlg;
-  GtkWidget *label;
   GtkWidget *button;
-  GtkWidget *scale;
   GtkWidget *frame;
   GtkWidget *table;
-  GtkObject *scale_data;
-  gchar **argv;
-  gint argc;
 
-  argc = 1;
-  argv = g_new (gchar *, 1);
-  argv[0] = g_strdup ("sparkle");
+  gtk_init ();
 
-  gtk_init (&argc, &argv);
-  gtk_rc_parse (gimp_gtkrc ());
-
-  dlg = gtk_dialog_new ();
-  gtk_window_set_title (GTK_WINDOW (dlg), "Sparkle");
-  gtk_window_position (GTK_WINDOW (dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect (GTK_OBJECT (dlg), "destroy",
-		      (GtkSignalFunc) sparkle_close_callback,
-		      NULL);
+  dlg = gimp_dialog_new ("Sparkle");
+  g_signal_connect (dlg, "destroy",
+		    G_CALLBACK (sparkle_close_callback), NULL);
 
   /*  Action area  */
-  button = gtk_button_new_with_label ("OK");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect (GTK_OBJECT (button), "clicked",
-                      (GtkSignalFunc) sparkle_ok_callback,
-                      dlg);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default (button);
-  gtk_widget_show (button);
-
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object (GTK_OBJECT (button), "clicked",
-			     (GtkSignalFunc) gtk_widget_destroy,
-			     GTK_OBJECT (dlg));
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show (button);
+  gimp_dialog_add_button (dlg, "OK", G_CALLBACK (sparkle_ok_callback),
+			  dlg, TRUE);
+  button = gimp_dialog_add_button (dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped (button, "clicked",
+			    G_CALLBACK (gtk_window_destroy), dlg);
 
   /*  parameter settings  */
   frame = gtk_frame_new ("Parameter Settings");
-  gtk_frame_set_shadow_type (GTK_FRAME (frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width (GTK_CONTAINER (frame), 10);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (dlg)->vbox), frame, TRUE, TRUE, 0);
-  table = gtk_table_new (5, 2, FALSE);
-  gtk_container_border_width (GTK_CONTAINER (table), 10);
-  gtk_container_add (GTK_CONTAINER (frame), table);
+  gimp_container_set_border_width (frame, 10);
+  gimp_box_pack_start (gimp_dialog_get_vbox (dlg), frame, TRUE, TRUE, 0);
+  table = gimp_table_new (5, 2, FALSE);
+  gimp_container_set_border_width (table, 10);
+  gtk_frame_set_child (GTK_FRAME (frame), table);
 
-  label = gtk_label_new ("Luminosity Threshold");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 0, 1, GTK_FILL, 0, 5, 0);
-  scale_data = gtk_adjustment_new (svals.lum_threshold, 0.0, 0.1, 0.001, 0.001, 0.0);
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 0, 1, GTK_FILL, 0, 0, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_scale_set_digits (GTK_SCALE (scale), 3);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) sparkle_scale_update,
-		      &svals.lum_threshold);
-  gtk_widget_show (label);
-  gtk_widget_show (scale);
+  sparkle_add_scale (table, 0, "Luminosity Threshold", &svals.lum_threshold,
+		     0.0, 0.1, 0.001, 0.001, 3);
+  sparkle_add_scale (table, 1, "Flare Intensity", &svals.flare_inten,
+		     0.0, 1.0, 0.01, 0.01, 2);
+  sparkle_add_scale (table, 2, "Spike Length", &svals.spike_len,
+		     1.0, 100.0, 1.0, 1.0, 1);
+  sparkle_add_scale (table, 3, "Spike Points", &svals.spike_pts,
+		     0.0, 16.0, 1.0, 1.0, 0);
+  sparkle_add_scale (table, 4, "Spike Angle", &svals.spike_angle,
+		     0.0, 360.0, 5.0, 5.0, 1);
 
-  label = gtk_label_new ("Flare Intensity");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 1, 2, GTK_FILL, 0, 5, 0);
-  scale_data = gtk_adjustment_new (svals.flare_inten, 0.0, 1.0, 0.01, 0.01, 0.0);
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 1, 2, GTK_FILL, 0, 0, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_scale_set_digits (GTK_SCALE (scale), 2);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) sparkle_scale_update,
-		      &svals.flare_inten);
-  gtk_widget_show (label);
-  gtk_widget_show (scale);
+  gtk_window_present (GTK_WINDOW (dlg));
 
-  label = gtk_label_new ("Spike Length");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 2, 3, GTK_FILL, 0, 5, 0);
-  scale_data = gtk_adjustment_new (svals.spike_len, 1.0, 100.0, 1.0, 1.0, 0.0);
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 2, 3, GTK_FILL, 0, 0, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) sparkle_scale_update,
-		      &svals.spike_len);
-  gtk_widget_show (label);
-  gtk_widget_show (scale);
-
-  label = gtk_label_new ("Spike Points");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 3, 4, GTK_FILL, 0, 5, 0);
-  scale_data = gtk_adjustment_new (svals.spike_pts, 0.0, 16.0, 1.0, 1.0, 0.0);
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 3, 4, GTK_FILL, 0, 0, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_scale_set_digits (GTK_SCALE (scale), 0);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) sparkle_scale_update,
-		      &svals.spike_pts);
-  gtk_widget_show (label);
-  gtk_widget_show (scale);
-
-  label = gtk_label_new ("Spike Angle");
-  gtk_misc_set_alignment (GTK_MISC (label), 0.0, 0.5);
-  gtk_table_attach (GTK_TABLE (table), label, 0, 1, 4, 5, GTK_FILL, 0, 5, 0);
-  scale_data = gtk_adjustment_new (svals.spike_angle, 0.0, 360.0, 5.0, 5.0, 0.0);
-  scale = gtk_hscale_new (GTK_ADJUSTMENT (scale_data));
-  gtk_widget_set_usize (scale, SCALE_WIDTH, 0);
-  gtk_table_attach (GTK_TABLE (table), scale, 1, 2, 4, 5, GTK_FILL, 0, 0, 0);
-  gtk_scale_set_value_pos (GTK_SCALE (scale), GTK_POS_TOP);
-  gtk_range_set_update_policy (GTK_RANGE (scale), GTK_UPDATE_DELAYED);
-  gtk_signal_connect (GTK_OBJECT (scale_data), "value_changed",
-		      (GtkSignalFunc) sparkle_scale_update,
-		      &svals.spike_angle);
-  gtk_widget_show (label);
-  gtk_widget_show (scale);
-
-  gtk_widget_show (frame);
-  gtk_widget_show (table);
-  gtk_widget_show (dlg);
-
-  gtk_main ();
-  gdk_flush ();
+  gimp_main_loop_run ();
 
   return sint.run;
+}
+
+static void
+sparkle_add_scale (GtkWidget   *table,
+		   gint         row,
+		   const gchar *text,
+		   gdouble     *value,
+		   gdouble      lower,
+		   gdouble      upper,
+		   gdouble      step,
+		   gdouble      page,
+		   gint         digits)
+{
+  GtkWidget     *label;
+  GtkWidget     *scale;
+  GtkAdjustment *scale_data;
+
+  label = gtk_label_new (text);
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gimp_table_attach (table, label, 0, 1, row, row + 1, GIMP_FILL, 0, 5, 0);
+
+  scale_data = gtk_adjustment_new (*value, lower, upper, step, page, 0.0);
+  scale = gimp_hscale_new (scale_data, digits);
+  gtk_widget_set_size_request (scale, SCALE_WIDTH, -1);
+  gimp_table_attach (table, scale, 1, 2, row, row + 1, GIMP_FILL, 0, 0, 0);
+  g_signal_connect (scale_data, "value-changed",
+		    G_CALLBACK (sparkle_scale_update), value);
 }
 
 static gint
@@ -855,7 +797,7 @@ static void
 sparkle_close_callback (GtkWidget *widget,
 			gpointer   data)
 {
-  gtk_main_quit ();
+  gimp_main_loop_quit ();
 }
 
 static void
@@ -863,12 +805,12 @@ sparkle_ok_callback (GtkWidget *widget,
 		     gpointer   data)
 {
   sint.run = TRUE;
-  gtk_widget_destroy (GTK_WIDGET (data));
+  gtk_window_destroy (GTK_WINDOW (data));
 }
 
 static void
 sparkle_scale_update (GtkAdjustment *adjustment,
 		     double        *scale_val)
 {
-  *scale_val = adjustment->value;
+  *scale_val = gtk_adjustment_get_value (adjustment);
 }

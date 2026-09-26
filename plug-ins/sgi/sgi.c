@@ -74,6 +74,7 @@
 
 #include <gtk/gtk.h>
 #include <libgimp/gimp.h>
+#include <libgimp/gimpui.h>
 
 
 /*
@@ -615,7 +616,7 @@ static void
 save_close_callback(GtkWidget *w,	/* I - Close button */
                     gpointer  data)	/* I - Callback data */
 {
-  gtk_main_quit();
+  gimp_main_loop_quit();
 }
 
 
@@ -629,7 +630,7 @@ save_ok_callback(GtkWidget *w,		/* I - OK button */
 {
   runme = TRUE;
 
-  gtk_widget_destroy(GTK_WIDGET(data));
+  gtk_window_destroy(GTK_WINDOW(data));
 }
 
 
@@ -641,8 +642,8 @@ static void
 save_compression_callback(GtkWidget *w,		/* I - Compression button */
                           gpointer  data)	/* I - Callback data */
 {
-  if (GTK_TOGGLE_BUTTON(w)->active)
-    compression = (long)data;
+  if (gtk_check_button_get_active(GTK_CHECK_BUTTON(w)))
+    compression = GPOINTER_TO_INT(data);
 }
 
 
@@ -658,9 +659,7 @@ save_dialog(void)
 		*button,	/* OK/cancel/compression buttons */
 		*frame,		/* Frame for dialog */
 		*vbox;		/* Box for compression types */
-  GSList	*group;		/* Button grouping for compression */
-  gchar		**argv;		/* Fake command-line args */
-  gint		argc;		/* Number of fake command-line args */
+  GtkWidget	*group;		/* Button grouping for compression */
   static char	*types[] =	/* Compression types... */
 		{
 		  "No Compression",
@@ -669,87 +668,60 @@ save_dialog(void)
 		};
 
 
- /*
-  * Fake the command-line args and open a window...
-  */
-
-  argc    = 1;
-  argv    = g_new (gchar *, 1);
-  argv[0] = g_strdup("sgi");
-
-  gtk_init(&argc, &argv);
-  gtk_rc_parse(gimp_gtkrc());
+  gtk_init();
 
  /*
   * Open a dialog window...
   */
 
-  dlg = gtk_dialog_new();
-  gtk_window_set_title(GTK_WINDOW(dlg), "SGI - " PLUG_IN_VERSION);
-  gtk_window_set_wmclass(GTK_WINDOW(dlg), "sgi", "Gimp");
-  gtk_window_position(GTK_WINDOW(dlg), GTK_WIN_POS_MOUSE);
-  gtk_signal_connect(GTK_OBJECT(dlg), "destroy",
-                     (GtkSignalFunc)save_close_callback, NULL);
+  dlg = gimp_dialog_new("SGI - " PLUG_IN_VERSION);
+  g_signal_connect(dlg, "destroy",
+                   G_CALLBACK(save_close_callback), NULL);
 
  /*
   * OK/cancel buttons...
   */
 
-  button = gtk_button_new_with_label("OK");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect(GTK_OBJECT (button), "clicked",
-                     (GtkSignalFunc)save_ok_callback,
-                     dlg);
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_grab_default(button);
-  gtk_widget_show(button);
+  gimp_dialog_add_button(dlg, "OK", G_CALLBACK(save_ok_callback), dlg, TRUE);
 
-  button = gtk_button_new_with_label ("Cancel");
-  GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-  gtk_signal_connect_object(GTK_OBJECT(button), "clicked",
-                            (GtkSignalFunc)gtk_widget_destroy, GTK_OBJECT(dlg));
-  gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dlg)->action_area), button, TRUE, TRUE, 0);
-  gtk_widget_show(button);
+  button = gimp_dialog_add_button(dlg, "Cancel", NULL, NULL, FALSE);
+  g_signal_connect_swapped(button, "clicked",
+                           G_CALLBACK(gtk_window_destroy), dlg);
 
  /*
   * Compression type...
   */
 
   frame = gtk_frame_new("Parameter Settings");
-  gtk_frame_set_shadow_type(GTK_FRAME(frame), GTK_SHADOW_ETCHED_IN);
-  gtk_container_border_width(GTK_CONTAINER(frame), 10);
-  gtk_box_pack_start(GTK_BOX (GTK_DIALOG(dlg)->vbox), frame, TRUE, TRUE, 0);
+  gimp_container_set_border_width(frame, 10);
+  gimp_box_pack_start(gimp_dialog_get_vbox(dlg), frame, TRUE, TRUE, 0);
 
-  vbox = gtk_vbox_new(FALSE, 0);
-  gtk_container_border_width(GTK_CONTAINER(vbox), 4);
-  gtk_container_add(GTK_CONTAINER(frame), vbox);
-  gtk_widget_show(vbox);
+  vbox = gimp_vbox_new(FALSE, 0);
+  gimp_container_set_border_width(vbox, 4);
+  gtk_frame_set_child(GTK_FRAME(frame), vbox);
 
   group = NULL;
 
-  for (i = 0; i < (sizeof(types) / sizeof(types[0])); i ++)
+  for (i = 0; i < (int)(sizeof(types) / sizeof(types[0])); i ++)
   {
-    button = gtk_radio_button_new_with_label(group, types[i]);
-    group  = gtk_radio_button_group(GTK_RADIO_BUTTON(button));
+    button = gimp_radio_button_new(group, types[i]);
+    group  = button;
     if (i == compression)
-      gtk_toggle_button_set_state(GTK_TOGGLE_BUTTON(button), TRUE);
+      gtk_check_button_set_active(GTK_CHECK_BUTTON(button), TRUE);
 
-    gtk_signal_connect(GTK_OBJECT(button), "toggled",
-  		       (GtkSignalFunc)save_compression_callback,
-		       (gpointer)((long)i));
-    gtk_box_pack_start(GTK_BOX(vbox), button, FALSE, FALSE, 0);
-    gtk_widget_show(button);
+    g_signal_connect(button, "toggled",
+		     G_CALLBACK(save_compression_callback),
+		     GINT_TO_POINTER(i));
+    gtk_box_append(GTK_BOX(vbox), button);
   };
 
  /*
   * Show everything and go...
   */
 
-  gtk_widget_show(frame);
-  gtk_widget_show(dlg);
+  gtk_window_present(GTK_WINDOW(dlg));
 
-  gtk_main();
-  gdk_flush();
+  gimp_main_loop_run();
 
   return (runme);
 }

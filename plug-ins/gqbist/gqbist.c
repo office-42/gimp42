@@ -1,10 +1,10 @@
 /*
  * Written 1997 Jens Ch. Restemeier <jchrr@hrz.uni-bielefeld.de>
  * This program is based on an algorithm / article by
- * Jörn Loviscach.
+ * Jï¿½rn Loviscach.
  *
  * It appeared in c't 10/95, page 326 and is called 
- * "Ausgewürfelt - Moderne Kunst algorithmisch erzeugen".
+ * "Ausgewï¿½rfelt - Moderne Kunst algorithmisch erzeugen".
  * (~modern art created with algorithms)
  * 
  * It generates one main formula (the middle button) and 8 variations of it.
@@ -44,10 +44,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 #include <time.h>
 
-#include "gtk/gtk.h"
+#include <glib/gstdio.h>
+#include <gtk/gtk.h>
 #include "libgimp/gimp.h"
+#include "libgimp/gimpui.h"
 
 /** qbist renderer ***********************************************************/
 
@@ -85,11 +88,11 @@ typedef struct _info {
 void query(void);
 void run(char *name, int nparams, GParam *param, int *nreturn_vals, GParam **return_vals);
 
-void dialog_cancel();
+void dialog_cancel(GtkWidget *widget, gpointer data);
 void dialog_new_variations(GtkWidget *widget, gpointer data);
 void dialog_update_previews(GtkWidget *widget, gpointer data);
 void dialog_select_preview (GtkWidget *widget, s_info *n_info);
-int dialog_create();
+int dialog_create(void);
 
 s_info qbist_info;
 
@@ -285,10 +288,10 @@ void query(void)
         gimp_install_procedure(PLUG_IN_NAME, 
                                "Create images based on a random genetic formula", 
                                "This Plug-in is based on an article by "
-                               "Jörn Loviscach (appeared in c't 10/95, page 326). It generates modern art "
+                               "Jï¿½rn Loviscach (appeared in c't 10/95, page 326). It generates modern art "
                                "pictures from a random genetic formula.", 
-                               "Jörn Loviscach, Jens Ch. Restemeier", 
-                               "Jörn Loviscach, Jens Ch. Restemeier", 
+                               "Jï¿½rn Loviscach, Jens Ch. Restemeier", 
+                               "Jï¿½rn Loviscach, Jens Ch. Restemeier", 
                                PLUG_IN_VERSION, 
                                "<Image>/Filters/Render/Qbist", 
                                "RGB*", 
@@ -402,18 +405,18 @@ gint result;
 
 void dialog_close(GtkWidget *widget, gpointer data)
 {
-	gtk_main_quit();
+	gimp_main_loop_quit();
 }
 
 void dialog_cancel(GtkWidget *widget, gpointer data)
 {
-	gtk_widget_destroy(GTK_WIDGET(data));
+	gtk_window_destroy(GTK_WINDOW(data));
 }
 
 void dialog_ok(GtkWidget *widget, gpointer data)
 {
 	result=TRUE;
-	gtk_widget_destroy(GTK_WIDGET(data));
+	gtk_window_destroy(GTK_WINDOW(data));
 }
 
 void dialog_new_variations(GtkWidget *widget, gpointer data)
@@ -431,9 +434,8 @@ void dialog_update_previews(GtkWidget *widget, gpointer data)
 		optimize(info[(j+5) % 9]);
 		for (i = 0; i < PREVIEW_SIZE; i++) {
 			qbist(info[(j+5) % 9], (gchar *)buf, 0, i, PREVIEW_SIZE, PREVIEW_SIZE, PREVIEW_SIZE, 3);
-			gtk_preview_draw_row (GTK_PREVIEW (preview[j]), buf, 0, i, PREVIEW_SIZE);
+			gimp_preview_draw_row (GIMP_PREVIEW (preview[j]), buf, 0, i, PREVIEW_SIZE);
 		}
-		gtk_widget_draw(preview[j], NULL);
 	}
 }
 
@@ -448,30 +450,41 @@ void dialog_select_preview (GtkWidget *widget, s_info *n_info)
 
 #define LOBITE(x) ((x)&0xff)
 #define HIBITE(x) ((x)>>8)
-#define MACBITES(x) (HIBITE(x)+LOBITE(x)<<8)
-#define GETMACUSHORT(f) ((fgetc(f)<<8)+(fgetc(f)))
 #define PUTMACUSHORT(u, f) fprintf(f, "%c%c", HIBITE(u), LOBITE(u));
 
-int load_data(char *name)
+/* Big-endian 16 bit value.  The two reads have to be sequenced: the
+ * order of evaluation of the operands of + is unspecified.
+ */
+static int getmacushort(FILE *f)
+{
+	int hi, lo;
+
+	hi=fgetc(f);
+	lo=fgetc(f);
+	return (hi<<8)+lo;
+}
+
+int load_data(const char *name)
 {
 	int i;
 	FILE *f;
-	f=fopen(name, "rb"); 
+	f=g_fopen(name, "rb");
 	if(f==NULL) return(0);
-	for(i=0;i<MAX_TRANSFORMS;i++) info[0].transformSequence[i]=GETMACUSHORT(f);
-	for(i=0;i<MAX_TRANSFORMS;i++) info[0].source[i]=GETMACUSHORT(f);
-	for(i=0;i<MAX_TRANSFORMS;i++) info[0].control[i]=GETMACUSHORT(f);
-	for(i=0;i<MAX_TRANSFORMS;i++) info[0].dest[i]=GETMACUSHORT(f);
+	for(i=0;i<MAX_TRANSFORMS;i++) info[0].transformSequence[i]=getmacushort(f);
+	for(i=0;i<MAX_TRANSFORMS;i++) info[0].source[i]=getmacushort(f);
+	for(i=0;i<MAX_TRANSFORMS;i++) info[0].control[i]=getmacushort(f);
+	for(i=0;i<MAX_TRANSFORMS;i++) info[0].dest[i]=getmacushort(f);
 	fclose(f);
 	return(1);
 }
 
-void save_data(char *name)
+void save_data(const char *name)
 {
 	int i=0;
 	FILE *f;
 
-	f=fopen(name, "wb");
+	f=g_fopen(name, "wb");
+	if(f==NULL) return;
 	for(i=0;i<MAX_TRANSFORMS;i++) PUTMACUSHORT(info[0].transformSequence[i], f);
 	for(i=0;i<MAX_TRANSFORMS;i++) PUTMACUSHORT(info[0].source[i], f);
 	for(i=0;i<MAX_TRANSFORMS;i++) PUTMACUSHORT(info[0].control[i], f);
@@ -479,157 +492,92 @@ void save_data(char *name)
 	fclose(f);
 }
 
-void file_selection_save(GtkWidget *widget, GtkWidget *file_select)
+static void file_selection_save(const gchar *filename, gpointer data)
 {
-	save_data(gtk_file_selection_get_filename (GTK_FILE_SELECTION(file_select)));
-	gtk_widget_destroy(file_select);
+	if (filename)
+		save_data(filename);
 }
 
-void file_selection_load(GtkWidget *widget, GtkWidget *file_select)
+static void file_selection_load(const gchar *filename, gpointer data)
 {
-	load_data(gtk_file_selection_get_filename (GTK_FILE_SELECTION(file_select)));
-	gtk_widget_destroy(file_select);
-	dialog_new_variations(widget, NULL);
-	dialog_update_previews(widget, NULL);
-}
-
-void file_selection_cancel(GtkWidget *widget, GtkWidget *file_select)
-{
-	gtk_widget_destroy(file_select);
+	if (filename == NULL)
+		return;
+	load_data(filename);
+	dialog_new_variations(NULL, NULL);
+	dialog_update_previews(NULL, NULL);
 }
 
 void dialog_load(GtkWidget *widget, gpointer d)
 {
-	GtkWidget *file_select;
-	file_select = gtk_file_selection_new ("Load QBE file...");
-	gtk_signal_connect (GTK_OBJECT (GTK_FILE_SELECTION (file_select)->ok_button), 
-		"clicked", (GtkSignalFunc) file_selection_load, 
-		(gpointer)file_select);
-	gtk_signal_connect (GTK_OBJECT (GTK_FILE_SELECTION (file_select)->cancel_button), 
-		"clicked", (GtkSignalFunc) file_selection_cancel, 
-		(gpointer)file_select);
-	gtk_widget_show(file_select);
+	gimp_file_dialog_open(GTK_WINDOW(d), "Load QBE file...", NULL,
+			      file_selection_load, NULL);
 }
 
 void dialog_save(GtkWidget *widget, gpointer d)
 {
-	GtkWidget *file_select;
-	file_select=gtk_file_selection_new("Save (middle transform) as QBE file...");
-	gtk_signal_connect (GTK_OBJECT (GTK_FILE_SELECTION (file_select)->ok_button), 
-		"clicked", (GtkSignalFunc) file_selection_save, 
-		(gpointer)file_select);
-	gtk_signal_connect (GTK_OBJECT (GTK_FILE_SELECTION (file_select)->cancel_button), 
-		"clicked", (GtkSignalFunc) file_selection_cancel, 
-		(gpointer)file_select);
-	gtk_widget_show(file_select);
+	gimp_file_dialog_save(GTK_WINDOW(d), "Save (middle transform) as QBE file...",
+			      NULL, file_selection_save, NULL);
 }
 
 
-int dialog_create()
+int dialog_create(void)
 {
 	GtkWidget *dialog;
 	GtkWidget *button;
 	GtkWidget *table;
 
-	guchar *color_cube;
-	gchar **argv;
-	gint argc;
-
 	int i;
 
 	srand(time(NULL));
 
-	argc = 1;
-	argv = g_new (gchar *, 1);
-	argv[0] = g_strdup ("video");
+	gtk_init ();
 
-	gtk_init (&argc, &argv);
-	gtk_rc_parse (gimp_gtkrc ());
-
-	gdk_set_use_xshm (gimp_use_xshm ());
-	gtk_preview_set_gamma (gimp_gamma ());
-	gtk_preview_set_install_cmap (gimp_install_cmap ());
-	color_cube = gimp_color_cube ();
-	gtk_preview_set_color_cube (color_cube[0], color_cube[1], 
-		color_cube[2], color_cube[3]);
-
-	gtk_widget_set_default_visual (gtk_preview_get_visual ());
-	gtk_widget_set_default_colormap (gtk_preview_get_cmap ());
-
-	dialog=gtk_dialog_new ();
-	gtk_window_set_title (GTK_WINDOW(dialog), "G-Qbist 1.10");
-	gtk_signal_connect (GTK_OBJECT (dialog), "destroy", 
-		(GtkSignalFunc) dialog_close, 
+	dialog=gimp_dialog_new ("G-Qbist 1.10");
+	g_signal_connect (dialog, "destroy",
+		G_CALLBACK (dialog_close),
 		NULL);
-                                              
-	table=gtk_table_new (3, 3, FALSE);
-	gtk_table_set_row_spacings(GTK_TABLE(table), 5);
-	gtk_table_set_col_spacings(GTK_TABLE(table), 5);
-	gtk_container_border_width (GTK_CONTAINER (table), 5);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->vbox), table, TRUE, TRUE, 0);
-	gtk_widget_show(table);
+
+	table=gimp_table_new (3, 3, FALSE);
+	gtk_grid_set_row_spacing(GTK_GRID(table), 5);
+	gtk_grid_set_column_spacing(GTK_GRID(table), 5);
+	gimp_container_set_border_width (table, 5);
+	gimp_box_pack_start(gimp_dialog_get_vbox(dialog), table, TRUE, TRUE, 0);
 
 	memcpy((char *)&(info[0]), (char *)&qbist_info, sizeof(s_info));
 	dialog_new_variations(NULL, NULL);
-        
-        for (i=0; i<9; i++) {
 
-       		button=gtk_button_new();
-		gtk_signal_connect (GTK_OBJECT (button), "clicked", 
-			(GtkSignalFunc) dialog_select_preview, (gpointer) &(info[(i+5)%9]));
-		gtk_table_attach(GTK_TABLE(table), button, i%3, (i%3)+1, i/3, (i/3)+1, 
-			GTK_EXPAND | GTK_FILL, GTK_EXPAND | GTK_FILL, 0, 0); 		
-		gtk_widget_show(button);
+	for (i=0; i<9; i++) {
 
-		preview[i] = gtk_preview_new(GTK_PREVIEW_COLOR);
-		gtk_preview_size(GTK_PREVIEW(preview[i]), PREVIEW_SIZE, PREVIEW_SIZE);
-		gtk_container_add(GTK_CONTAINER(button), preview[i]);
-		gtk_widget_show(preview[i]);
+		button=gtk_button_new();
+		g_signal_connect (button, "clicked",
+			G_CALLBACK (dialog_select_preview), (gpointer) &(info[(i+5)%9]));
+		gimp_table_attach(table, button, i%3, (i%3)+1, i/3, (i/3)+1,
+			GIMP_EXPAND | GIMP_FILL, GIMP_EXPAND | GIMP_FILL, 0, 0);
+
+		preview[i] = gimp_preview_new(GIMP_PREVIEW_COLOR);
+		gimp_preview_size(GIMP_PREVIEW(preview[i]), PREVIEW_SIZE, PREVIEW_SIZE);
+		gtk_button_set_child(GTK_BUTTON(button), preview[i]);
 	}
 
 	dialog_update_previews(NULL, NULL);
-	                                                                                                                          
-	button = gtk_button_new_with_label ("OK");
-	gtk_signal_connect (GTK_OBJECT (button), "clicked", 
-		(GtkSignalFunc) dialog_ok, 
-		(gpointer) dialog);
-	GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-	gtk_box_pack_start (GTK_BOX (GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_show (button);
 
-	button = gtk_button_new_with_label ("Load");
-	gtk_signal_connect(GTK_OBJECT(button), "clicked", 
-		(GtkSignalFunc)dialog_load, 
-		(gpointer)dialog);
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_show(button);
+	gimp_dialog_add_button (dialog, "OK", G_CALLBACK (dialog_ok),
+				dialog, FALSE);
+	gimp_dialog_add_button (dialog, "Load", G_CALLBACK (dialog_load),
+				dialog, FALSE);
+	gimp_dialog_add_button (dialog, "Save", G_CALLBACK (dialog_save),
+				dialog, FALSE);
+	gimp_dialog_add_button (dialog, "Cancel", G_CALLBACK (dialog_cancel),
+				dialog, TRUE);
 
-	button = gtk_button_new_with_label ("Save");
-	gtk_signal_connect(GTK_OBJECT(button), "clicked", 
-		(GtkSignalFunc)dialog_save, 
-		(gpointer)dialog);
-	GTK_WIDGET_SET_FLAGS(button, GTK_CAN_DEFAULT);
-	gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-	gtk_widget_show(button);
-
-	button = gtk_button_new_with_label ("Cancel");
-	gtk_signal_connect (GTK_OBJECT (button), "clicked", 
-		(GtkSignalFunc) dialog_cancel, 
-		(gpointer) dialog);
-	gtk_box_pack_end (GTK_BOX (GTK_DIALOG(dialog)->action_area), button, TRUE, TRUE, 0);
-	GTK_WIDGET_SET_FLAGS (button, GTK_CAN_DEFAULT);
-	gtk_widget_grab_default (button);
-	gtk_widget_show (button);
-
-	gtk_widget_show(dialog);
+	gtk_window_present(GTK_WINDOW(dialog));
 
 	result=FALSE;
 
-	gtk_main();
-	gdk_flush();
+	gimp_main_loop_run();
 
 	if (result)
 		memcpy((char *)&qbist_info, (char *)&(info[0]), sizeof(s_info));
 	return result;
 }
+

@@ -19,8 +19,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "appenv.h"
-#include "actionarea.h"
-#include "colormaps.h"
 #include "info_dialog.h"
 #include "info_window.h"
 #include "gdisplay.h"
@@ -41,59 +39,26 @@ struct _InfoWinData
   char shades_str[MAX_BUF];
 };
 
-/*  The different classes of visuals  */
-static char *visual_classes[] =
-{
-  "Static Gray",
-  "Grayscale",
-  "Static Color",
-  "Pseudo Color",
-  "True Color",
-  "Direct Color",
-};
-
-
 static void
 get_shades (GDisplay *gdisp,
 	    char     *buf)
 {
-  sprintf(buf, "Using GdkRgb - we'll get back to you");
-#if 0
-  GtkPreviewInfo *info;
-
-  info = gtk_preview_get_info ();
-
+  /*  The display is always drawn through cairo in 24 bit RGB  */
   switch (gimage_base_type (gdisp->gimage))
     {
     case GRAY:
-      sprintf (buf, "%d", info->ngray_shades);
+      sprintf (buf, "%d", 256);
       break;
     case RGB:
-      switch (gdisp->depth)
-	{
-	case 8 :
-	  sprintf (buf, "%d / %d / %d",
-		   info->nred_shades,
-		   info->ngreen_shades,
-		   info->nblue_shades);
-	  break;
-	case 15 : case 16 :
-	  sprintf (buf, "%d / %d / %d",
-		   (1 << (8 - info->visual->red_prec)),
-		   (1 << (8 - info->visual->green_prec)),
-		   (1 << (8 - info->visual->blue_prec)));
-	  break;
-	case 24 :
-	  sprintf (buf, "256 / 256 / 256");
-	  break;
-	}
+      sprintf (buf, "256 / 256 / 256");
       break;
-
     case INDEXED:
       sprintf (buf, "%d", gdisp->gimage->num_cols);
       break;
+    default:
+      buf[0] = '\0';
+      break;
     }
-#endif
 }
 
 static void
@@ -114,11 +79,6 @@ info_window_close_callback (GtkWidget *w,
    *      shades of color/gray
    */
 
-static ActionAreaItem action_items[] =
-{
-  { "Close", info_window_close_callback, NULL, NULL },
-};
-
 InfoDialog *
 info_window_create (void *gdisp_ptr)
 {
@@ -134,8 +94,7 @@ info_window_create (void *gdisp_ptr)
   type = gimage_base_type (gdisp->gimage);
 
   /*  allocate the title buffer  */
-  title_buf = (char *) g_malloc (sizeof (char) * (strlen (title) + 15));
-  sprintf (title_buf, "%s: Window Info", title);
+  title_buf = g_strdup_printf ("%s: Window Info", title);
 
   /*  create the info dialog  */
   info_win = info_dialog_new (title_buf);
@@ -167,8 +126,9 @@ info_window_create (void *gdisp_ptr)
   info_window_update (info_win, gdisp_ptr);
 
   /* Create the action area  */
-  action_items[0].user_data = info_win;
-  build_action_area (GTK_DIALOG (info_win->shell), action_items, 1, 0);
+  gimp_dialog_add_button (info_win->shell, "Close",
+			  G_CALLBACK (info_window_close_callback),
+			  info_win, TRUE);
 
   return info_win;
 }
@@ -217,15 +177,13 @@ info_window_update (InfoDialog *info_win,
   else if (type == INDEXED && !flat)
     sprintf (iwd->color_type_str, "%s", "Indexed-alpha Color");
 
-  /*  visual class  */
-  if (type == RGB ||
-      type == INDEXED)
-    sprintf (iwd->visual_class_str, "%s", visual_classes[g_visual->type]);
-  else if (type == GRAY)
-    sprintf (iwd->visual_class_str, "%s", visual_classes[g_visual->type]);
+  /*  visual class: there are no X visuals any more, the display is
+   *  rendered as true color through cairo
+   */
+  sprintf (iwd->visual_class_str, "%s", "True Color");
 
   /*  visual depth  */
-  sprintf (iwd->visual_depth_str, "%d", gdisp->depth);
+  sprintf (iwd->visual_depth_str, "%d", 24);
 
   /*  pure color shades  */
   get_shades (gdisp, iwd->shades_str);

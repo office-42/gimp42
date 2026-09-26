@@ -450,9 +450,10 @@ set_list_of_named_buffers (GtkWidget *list_widget)
 {
   GSList *list;
   NamedBuffer *nb;
-  GtkWidget *list_item;
+  GtkWidget *label;
+  GtkWidget *row;
 
-  gtk_list_clear_items (GTK_LIST (list_widget), 0, -1);
+  gtk_list_box_remove_all (GTK_LIST_BOX (list_widget));
   list = named_buffers;
 
   while (list)
@@ -460,28 +461,30 @@ set_list_of_named_buffers (GtkWidget *list_widget)
       nb = (NamedBuffer *) list->data;
       list = g_slist_next (list);
 
-      list_item = gtk_list_item_new_with_label (nb->name);
-      gtk_container_add (GTK_CONTAINER (list_widget), list_item);
-      gtk_widget_show (list_item);
-      gtk_object_set_user_data (GTK_OBJECT (list_item), (gpointer) nb);
+      label = gtk_label_new (nb->name);
+      gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+      gtk_list_box_append (GTK_LIST_BOX (list_widget), label);
+      row = gtk_widget_get_parent (label);
+      g_object_set_data (G_OBJECT (row), "user_data", (gpointer) nb);
     }
+
+  /*  browse mode: there is always a selected buffer  */
+  row = GTK_WIDGET (gtk_list_box_get_row_at_index (GTK_LIST_BOX (list_widget), 0));
+  if (row)
+    gtk_list_box_select_row (GTK_LIST_BOX (list_widget), GTK_LIST_BOX_ROW (row));
 }
 
-static void
-named_buffer_paste_foreach (GtkWidget *w,
-			    gpointer   client_data)
+/*  The buffer of the selected row, or NULL.  */
+static NamedBuffer *
+named_buffer_get_selected (PasteNamedDlg *pn_dlg)
 {
-  PasteNamedDlg *pn_dlg;
-  NamedBuffer *nb;
+  GtkListBoxRow *row;
 
-  if (w->state == GTK_STATE_SELECTED)
-    {
-      pn_dlg = (PasteNamedDlg *) client_data;
-      nb = (NamedBuffer *) gtk_object_get_user_data (GTK_OBJECT (w));
-      edit_paste (pn_dlg->gdisp->gimage,
-		  gimage_active_drawable (pn_dlg->gdisp->gimage),
-		  nb->buf, pn_dlg->paste_into);
-    }
+  row = gtk_list_box_get_selected_row (GTK_LIST_BOX (pn_dlg->list));
+  if (!row)
+    return NULL;
+
+  return (NamedBuffer *) g_object_get_data (G_OBJECT (row), "user_data");
 }
 
 static void
@@ -489,37 +492,23 @@ named_buffer_paste_callback (GtkWidget *w,
 			     gpointer   client_data)
 {
   PasteNamedDlg *pn_dlg;
+  NamedBuffer *nb;
 
   pn_dlg = (PasteNamedDlg *) client_data;
 
-  gtk_container_foreach ((GtkContainer*) pn_dlg->list,
-			 named_buffer_paste_foreach, client_data);
+  nb = named_buffer_get_selected (pn_dlg);
+  if (nb)
+    edit_paste (pn_dlg->gdisp->gimage,
+		gimage_active_drawable (pn_dlg->gdisp->gimage),
+		nb->buf, pn_dlg->paste_into);
 
   /*  Destroy the box  */
-  gtk_widget_destroy (pn_dlg->shell);
+  gtk_window_destroy (GTK_WINDOW (pn_dlg->shell));
 
   g_free (pn_dlg);
-      
+
   /*  flush the display  */
   gdisplays_flush ();
-}
-
-static void
-named_buffer_delete_foreach (GtkWidget *w,
-			     gpointer   client_data)
-{
-  PasteNamedDlg *pn_dlg;
-  NamedBuffer * nb;
-
-  if (w->state == GTK_STATE_SELECTED)
-    {
-      pn_dlg = (PasteNamedDlg *) client_data;
-      nb = (NamedBuffer *) gtk_object_get_user_data (GTK_OBJECT (w));
-      named_buffers = g_slist_remove (named_buffers, (void *) nb);
-      g_free (nb->name);
-      tile_manager_destroy (nb->buf);
-      g_free (nb);
-    }
 }
 
 static void
@@ -527,10 +516,19 @@ named_buffer_delete_callback (GtkWidget *w,
 			      gpointer   client_data)
 {
   PasteNamedDlg *pn_dlg;
+  NamedBuffer * nb;
 
   pn_dlg = (PasteNamedDlg *) client_data;
-  gtk_container_foreach ((GtkContainer*) pn_dlg->list,
-			 named_buffer_delete_foreach, client_data);
+
+  nb = named_buffer_get_selected (pn_dlg);
+  if (nb)
+    {
+      named_buffers = g_slist_remove (named_buffers, (void *) nb);
+      g_free (nb->name);
+      tile_manager_destroy (nb->buf);
+      g_free (nb);
+    }
+
   set_list_of_named_buffers (pn_dlg->list);
 }
 
@@ -543,17 +541,16 @@ named_buffer_cancel_callback (GtkWidget *w,
   pn_dlg = (PasteNamedDlg *) client_data;
 
   /*  Destroy the box  */
-  gtk_widget_destroy (pn_dlg->shell);
+  gtk_window_destroy (GTK_WINDOW (pn_dlg->shell));
 
   g_free (pn_dlg);
 }
 
-static gint
-named_buffer_dialog_delete_callback (GtkWidget *w,
-				     GdkEvent  *e,
+static gboolean
+named_buffer_dialog_delete_callback (GtkWindow *w,
 				     gpointer   client_data)
 {
-  named_buffer_cancel_callback (w, client_data);
+  named_buffer_cancel_callback (GTK_WIDGET (w), client_data);
 
   return TRUE;
 }
@@ -566,7 +563,7 @@ named_buffer_paste_into_update (GtkWidget *w,
 
   pn_dlg = (PasteNamedDlg *) client_data;
 
-  if (GTK_TOGGLE_BUTTON (w)->active)
+  if (gtk_check_button_get_active (GTK_CHECK_BUTTON (w)))
     pn_dlg->paste_into = FALSE;
   else
     pn_dlg->paste_into = TRUE;
@@ -589,52 +586,45 @@ paste_named_buffer (GDisplay *gdisp)
 
   pn_dlg = (PasteNamedDlg *) g_malloc (sizeof (PasteNamedDlg));
   pn_dlg->gdisp = gdisp;
+  pn_dlg->paste_into = TRUE;	/*  "Replace Current Selection" is off  */
 
-  pn_dlg->shell = gtk_dialog_new ();
-  gtk_window_set_wmclass (GTK_WINDOW (pn_dlg->shell), "paste_named_buffer", "Gimp");
-  gtk_window_set_title (GTK_WINDOW (pn_dlg->shell), "Paste Named Buffer");
-  gtk_window_position (GTK_WINDOW (pn_dlg->shell), GTK_WIN_POS_MOUSE);
+  pn_dlg->shell = gimp_dialog_new ("Paste Named Buffer");
 
-  gtk_signal_connect (GTK_OBJECT (pn_dlg->shell), "delete_event",
-		      GTK_SIGNAL_FUNC (named_buffer_dialog_delete_callback),
-		      pn_dlg);
+  g_signal_connect (pn_dlg->shell, "close-request",
+		    G_CALLBACK (named_buffer_dialog_delete_callback),
+		    pn_dlg);
 
-  vbox = gtk_vbox_new (FALSE, 1);
-  gtk_container_border_width (GTK_CONTAINER (vbox), 1);
-  gtk_box_pack_start (GTK_BOX (GTK_DIALOG (pn_dlg->shell)->vbox), vbox, TRUE, TRUE, 0);
-  gtk_widget_show (vbox);
+  vbox = gimp_vbox_new (FALSE, 1);
+  gimp_container_set_border_width (vbox, 1);
+  gimp_box_pack_start (gimp_dialog_get_vbox (pn_dlg->shell), vbox, TRUE, TRUE, 0);
 
   label = gtk_label_new ("Select a buffer to paste:");
-  gtk_box_pack_start (GTK_BOX (vbox), label, TRUE, FALSE, 0);
-  gtk_widget_show (label);
+  gimp_box_pack_start (vbox, label, FALSE, FALSE, 0);
 
-  listbox = gtk_scrolled_window_new (NULL, NULL);
+  listbox = gtk_scrolled_window_new ();
   gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (listbox),
 				  GTK_POLICY_AUTOMATIC,
 				  GTK_POLICY_AUTOMATIC);
-  gtk_box_pack_start (GTK_BOX (vbox), listbox, TRUE, TRUE, 0);
-  gtk_widget_set_usize (listbox, 125, 150);
-  gtk_widget_show (listbox);
+  gimp_box_pack_start (vbox, listbox, TRUE, TRUE, 0);
+  gtk_widget_set_size_request (listbox, 125, 150);
 
-  pn_dlg->list = gtk_list_new ();
-  gtk_list_set_selection_mode (GTK_LIST (pn_dlg->list), GTK_SELECTION_BROWSE);
-  gtk_scrolled_window_add_with_viewport (GTK_SCROLLED_WINDOW (listbox), pn_dlg->list);
+  pn_dlg->list = gtk_list_box_new ();
+  gtk_list_box_set_selection_mode (GTK_LIST_BOX (pn_dlg->list), GTK_SELECTION_BROWSE);
+  gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (listbox), pn_dlg->list);
   set_list_of_named_buffers (pn_dlg->list);
-  gtk_widget_show (pn_dlg->list);
 
   paste_into = gtk_check_button_new_with_label ("Replace Current Selection");
-  gtk_box_pack_start (GTK_BOX (vbox), paste_into, FALSE, FALSE, 0);
-  gtk_signal_connect (GTK_OBJECT (paste_into), "toggled",
-		      (GtkSignalFunc) named_buffer_paste_into_update,
-		      pn_dlg);
-  gtk_widget_show (paste_into);
+  gimp_box_pack_start (vbox, paste_into, FALSE, FALSE, 0);
+  g_signal_connect (paste_into, "toggled",
+		    G_CALLBACK (named_buffer_paste_into_update),
+		    pn_dlg);
 
   action_items[0].user_data = pn_dlg;
   action_items[1].user_data = pn_dlg;
   action_items[2].user_data = pn_dlg;
-  build_action_area (GTK_DIALOG (pn_dlg->shell), action_items, 3, 0);
+  build_action_area (pn_dlg->shell, action_items, 3, 0);
 
-  gtk_widget_show (pn_dlg->shell);
+  gtk_window_present (GTK_WINDOW (pn_dlg->shell));
 }
 
 static void

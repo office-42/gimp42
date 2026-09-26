@@ -39,7 +39,10 @@ extern "C" {
 #include <gck/gckmath.h>
 #include <gck/gckvector.h>
 #include <gck/gckui.h>
-#include <gck/gcklistbox.h>
+
+/* gimp42: gcklistbox.c is built on GTK 1's GtkList, which GTK 4 does */
+/* not have, and nothing in the tree uses it; it is not built, and    */
+/* gcklistbox.h is no longer part of gck.h.                           */
 
 #ifdef __cplusplus
 }
