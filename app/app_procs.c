@@ -421,10 +421,29 @@ app_init_update_status(char *label1val,
 /* #define RESET_BAR() app_init_update_status("", "", 0) */
 #define RESET_BAR()
 
+static void
+app_set_icon (void)
+{
+  char *icons;
+
+  /*  The icon lives in the hicolor theme in share/icons, next to the
+   *  data folder (share/gimp42/<version>), wherever the program was
+   *  installed; every window takes it.
+   */
+  icons = g_build_filename (gimp_data_directory (), "..", "..", "icons", NULL);
+  gtk_icon_theme_add_search_path
+    (gtk_icon_theme_get_for_display (gdk_display_get_default ()), icons);
+  gtk_window_set_default_icon_name ("gimp42");
+  g_free (icons);
+}
+
 void
 app_init (void)
 {
   char *path;
+
+  if (no_interface == FALSE)
+    app_set_icon ();
 
   make_initialization_status_window();
   app_init_update_status (NULL, NULL, 0.0);

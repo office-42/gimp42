@@ -131,8 +131,19 @@ app_deps = [libgimpwidgets_dep, gtk_dep, glib_dep, gio_dep, cairo_dep,
 
 app_c_args = ['-DREGEX_MALLOC']
 
+# On Windows the program carries its icon and version, for Explorer,
+# the taskbar and the Start menu.
+app_resources = []
+if is_windows
+  windows = import('windows')
+  app_resources = windows.compile_resources('../build-aux/gimp42.rc',
+    include_directories: include_directories('../build-aux'),
+    depend_files: files('../build-aux/gimp42.ico'))
+endif
+
 gimp_exe = executable('gimp42',
   app_sources,
+  app_resources,
   gimpfeatures_h,
   link_with: libgimpwire,
   dependencies: app_deps,

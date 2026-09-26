@@ -33,106 +33,43 @@
 		    ""))
 
 (define (script-fu-bookmark-1)
-    (script-fu-bookmark "http://www.gimp.org/the_gimp.html"))
+    (script-fu-bookmark "https://github.com/office-42/gimp42"))
 
 (bookmark-register  "script-fu-bookmark-1"
-		    "<Toolbox>/Xtns/Web Browser/GIMP.ORG/The GIMP"
-		    "Link to http://www.gimp.org/the_gimp.html")
+		    "<Toolbox>/Xtns/Web Browser/GIMP42"
+		    "Link to https://github.com/office-42/gimp42")
 
 (define (script-fu-bookmark-2)
-    (script-fu-bookmark "http://www.gimp.org/docs.html"))
+    (script-fu-bookmark "https://github.com/office-42/gimp42#readme"))
 
 (bookmark-register  "script-fu-bookmark-2"
-		    "<Toolbox>/Xtns/Web Browser/GIMP.ORG/Documenation"
-		    "Link to http://www.gimp.org/docs.html")
+		    "<Toolbox>/Xtns/Web Browser/Documentation"
+		    "Link to https://github.com/office-42/gimp42#readme")
 
 (define (script-fu-bookmark-3)
-    (script-fu-bookmark "http://www.gimp.org/mailing_list.html"))
+    (script-fu-bookmark "https://github.com/office-42/gimp42/issues"))
 
 (bookmark-register  "script-fu-bookmark-3"
-		    "<Toolbox>/Xtns/Web Browser/GIMP.ORG/Mailing Lists"
-		    "Link to http://www.gimp.org/mailing_list.html")
+		    "<Toolbox>/Xtns/Web Browser/Report a Bug"
+		    "Link to https://github.com/office-42/gimp42/issues")
 
 (define (script-fu-bookmark-4)
-    (script-fu-bookmark "http://www.gimp.org/data.html"))
+    (script-fu-bookmark "https://github.com/office-42/gimp42/releases"))
 
 (bookmark-register  "script-fu-bookmark-4"
-		    "<Toolbox>/Xtns/Web Browser/GIMP.ORG/Resources"
-		    "Link to http://www.gimp.org/data.html")
+		    "<Toolbox>/Xtns/Web Browser/Download"
+		    "Link to https://github.com/office-42/gimp42/releases")
 
 (define (script-fu-bookmark-5)
-    (script-fu-bookmark "http://www.gimp.org/download.html"))
+    (script-fu-bookmark "https://github.com/office-42/gimp42/tree/main"))
 
 (bookmark-register  "script-fu-bookmark-5"
-		    "<Toolbox>/Xtns/Web Browser/GIMP.ORG/Download"
-		    "Link to http://www.gimp.org/download.html")
+		    "<Toolbox>/Xtns/Web Browser/Source Code"
+		    "Link to https://github.com/office-42/gimp42/tree/main")
 
 (define (script-fu-bookmark-6)
-    (script-fu-bookmark "http://www.gimp.org/art.html"))
+    (script-fu-bookmark "https://www.gtk.org/"))
 
 (bookmark-register  "script-fu-bookmark-6"
-		    "<Toolbox>/Xtns/Web Browser/GIMP.ORG/GIMP Art"
-		    "Link to http://www.gimp.org/art.html")
-
-(define (script-fu-bookmark-7)
-    (script-fu-bookmark "http://www.gimp.org/links.html"))
-
-(bookmark-register  "script-fu-bookmark-7"
-		    "<Toolbox>/Xtns/Web Browser/GIMP.ORG/Links"
-		    "Link to http://www.gimp.org/links.html")
-
-(define (script-fu-bookmark-8)
-    (script-fu-bookmark "http://www.gimp.org/gtk/"))
-
-(bookmark-register  "script-fu-bookmark-8"
-		    "<Toolbox>/Xtns/Web Browser/GIMP.ORG/GTK"
-		    "Link to http://www.gimp.org/gtk/")
-
-(define (script-fu-bookmark-10)
-    (script-fu-bookmark "http://xach.dorknet.com/gimp/news/"))
-
-(bookmark-register  "script-fu-bookmark-10"
-		    "<Toolbox>/Xtns/Web Browser/GIMP News"
-		    "Link to http://xach.dorknet.com/gimp/news/")
-
-(define (script-fu-bookmark-11)
-    (script-fu-bookmark "http://gimp.foebud.org/registry/"))
-
-(bookmark-register  "script-fu-bookmark-11"
-		    "<Toolbox>/Xtns/Web Browser/Plug-In Registry"
-		    "Link to http://gimp.foebud.org/registry/")
-
-(define (script-fu-bookmark-12)
-    (script-fu-bookmark "http://www.rru.com/~meo/gimp/faq-user.html"))
-
-(bookmark-register  "script-fu-bookmark-12"
-		    "<Toolbox>/Xtns/Web Browser/User FAQ"
-		    "Link to http://www.rru.com/~meo/gimp/faq-user.html")
-
-(define (script-fu-bookmark-13)
-    (script-fu-bookmark "http://www.rru.com/~meo/gimp/faq-dev.html"))
-
-(bookmark-register  "script-fu-bookmark-13"
-		    "<Toolbox>/Xtns/Web Browser/Developer FAQ"
-		    "Link to http://www.rru.com/~meo/gimp/faq-dev.html")
-
-(define (script-fu-bookmark-14)
-    (script-fu-bookmark "http://manual.gimp.org/"))
-
-(bookmark-register  "script-fu-bookmark-14"
-		    "<Toolbox>/Xtns/Web Browser/GIMP Manual"
-		    "Link to http://manual.gimp.org/")
-
-(define (script-fu-bookmark-15)
-    (script-fu-bookmark "http://abattoir.cc.ndsu.nodak.edu/~nem/gimp/tuts/"))
-
-(bookmark-register  "script-fu-bookmark-15"
-		    "<Toolbox>/Xtns/Web Browser/GIMP Tutorials"
-		    "Link to http://abattoir.cc.ndsu.nodak.edu/~nem/gimp/tuts/")
-
-(define (script-fu-bookmark-16)
-    (script-fu-bookmark "http://www.wilberworks.com/bugs.cgi"))
-
-(bookmark-register  "script-fu-bookmark-16"
-		    "<Toolbox>/Xtns/Web Browser/GIMP Bugs"
-		    "Link to http://www.wilberworks.com/bugs.cgi")
+		    "<Toolbox>/Xtns/Web Browser/GTK"
+		    "Link to https://www.gtk.org/")

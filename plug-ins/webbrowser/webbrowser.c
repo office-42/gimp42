@@ -83,7 +83,7 @@ typedef struct
 u_info;
 
 static u_info url_info = {
-  "http://www.gimp.org/",	/* Default URL */
+  "https://github.com/office-42/gimp42",	/* Default URL */
   OPEN_URL_NEW_WINDOW,		/* Change to ...CURRENT_WINDOW if
 				   you prefer that as the default */
 };

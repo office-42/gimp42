@@ -3538,7 +3538,7 @@ help (void)
 {
   fprintf (siod_output, "HELP for SIOD, Version %s\n", siod_version ());
   fprintf (siod_output, "For the latest Script-Fu tips, tutorials, & info:\n");
-  fprintf (siod_output, "\thttp://www.gimp.org/scripts.html\n\n");
+  fprintf (siod_output, "\thttps://github.com/office-42/gimp42\n\n");
 
   return NIL;
 }

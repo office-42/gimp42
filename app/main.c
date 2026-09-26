@@ -145,6 +145,10 @@ main (int argc, char **argv)
   /* Initialize variables */
   prog_name = argv[0];
 
+  /*  The name recent files and the desktop know the program by.  */
+  g_set_prgname ("gimp42");
+  g_set_application_name ("GIMP42");
+
   setlocale (LC_ALL, "");
   setlocale (LC_NUMERIC, "C");  /* must use dot, not comma, as decimal separator */
 
