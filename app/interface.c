@@ -25,6 +25,7 @@
 #include "commands.h"
 #include "disp_callbacks.h"
 #include "errors.h"
+#include "fileops.h"
 #include "gdisplay.h"
 #include "gdisplay_ops.h"
 #include "gimage.h"
@@ -328,6 +329,60 @@ create_pixmap_widget (char **data,
 }
 
 
+/*  Dropping image files on the toolbox or an image window opens them.  */
+static gboolean
+interface_files_dropped (GtkDropTarget *target,
+			 const GValue  *value,
+			 double         x,
+			 double         y,
+			 gpointer       data)
+{
+  GSList *files;
+  GSList *list;
+
+  if (!G_VALUE_HOLDS (value, GDK_TYPE_FILE_LIST))
+    return FALSE;
+
+  files = gdk_file_list_get_files (g_value_get_boxed (value));
+
+  for (list = files; list; list = list->next)
+    {
+      char *filename = g_file_get_path (list->data);
+
+      if (filename)
+	{
+	  char *raw_filename = g_path_get_basename (filename);
+
+	  if (!file_open (filename, raw_filename))
+	    {
+	      char *message = g_strdup_printf ("Open failed: %s", raw_filename);
+
+	      message_box (message, NULL, NULL);
+	      g_free (message);
+	    }
+
+	  g_free (raw_filename);
+	  g_free (filename);
+	}
+    }
+
+  g_slist_free (files);
+
+  return TRUE;
+}
+
+static void
+interface_accept_file_drops (GtkWidget *widget)
+{
+  GtkDropTarget *target;
+
+  target = gtk_drop_target_new (GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+  g_signal_connect (target, "drop",
+		    G_CALLBACK (interface_files_dropped), NULL);
+  gtk_widget_add_controller (widget, GTK_EVENT_CONTROLLER (target));
+}
+
+
 static void
 create_color_area (GtkWidget *parent)
 {
@@ -449,6 +504,8 @@ create_toolbox ()
   /*  Install the accelerator table in the main window  */
   menus_install (window, "<Toolbox>");
 
+  interface_accept_file_drops (window);
+
   vbox = gimp_vbox_new (FALSE, 1);
   gimp_box_pack_start (main_vbox, vbox, TRUE, TRUE, 0);
 
@@ -527,6 +584,8 @@ create_display_shell (int   gdisp_id,
 		      int   type)
 {
   GDisplay *gdisp;
+  GtkWidget *vbox;
+  GtkWidget *menubar;
   GtkWidget *table;
   GtkEventController *controller;
   int n_width, n_height;
@@ -590,12 +649,25 @@ create_display_shell (int   gdisp_id,
   /*  the menu actions and accelerators for images  */
   menus_install (gdisp->shell, "<Image>");
 
+  interface_accept_file_drops (gdisp->shell);
+
+  /*  The image menu as a menu bar.  The GIMP 1.0 kept it behind the
+   *  right mouse button only, which still works, but nobody looks there
+   *  any more.
+   */
+  vbox = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  gtk_window_set_child (GTK_WINDOW (gdisp->shell), vbox);
+
+  menubar = gtk_popover_menu_bar_new_from_model (menus_get_image_model ());
+  gtk_box_append (GTK_BOX (vbox), menubar);
+
   /*  the table containing all widgets  */
   table = gtk_grid_new ();
   gtk_grid_set_column_spacing (GTK_GRID (table), 1);
   gtk_grid_set_row_spacing (GTK_GRID (table), 1);
   gimp_container_set_border_width (table, 2);
-  gtk_window_set_child (GTK_WINDOW (gdisp->shell), table);
+  gtk_widget_set_vexpand (table, TRUE);
+  gtk_box_append (GTK_BOX (vbox), table);
 
   /*  the corner between the rulers opens the image menu  */
   gdisp->origin = gtk_menu_button_new ();
@@ -667,7 +739,7 @@ create_display_shell (int   gdisp_id,
 
   /*  room for the image, the rulers and the scrollbars  */
   gtk_window_set_default_size (GTK_WINDOW (gdisp->shell),
-			       n_width + 40, n_height + 40);
+			       n_width + 40, n_height + 70);
 
   gtk_window_present (GTK_WINDOW (gdisp->shell));
 

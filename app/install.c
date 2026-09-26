@@ -31,6 +31,7 @@
 
 
 static void install_run (InstallCallback);
+static int  install_silently (void);
 static void install_help (InstallCallback);
 static void help_install_callback (GtkWidget *, gpointer);
 static void help_ignore_callback (GtkWidget *, gpointer);
@@ -76,17 +77,18 @@ install_verify (InstallCallback install_callback)
   if (! g_file_test (filename, G_FILE_TEST_EXISTS))
     properly_installed = FALSE;
 
-  /*  If there is already a proper installation, invoke the callback  */
-  if (properly_installed)
+  /*  If there is already a proper installation, invoke the callback.
+   *  Otherwise set up the user's folder right away: everybody wants
+   *  it, so there is nothing to ask.  Only when that fails does the
+   *  old dialog appear, to explain and show the log.
+   */
+  if (properly_installed || install_silently ())
     {
       (* install_callback) ();
     }
-  /*  Otherwise, prepare for installation  */
   else if (no_interface)
     {
-      g_print ("The GIMP is not properly installed for the current user\n");
-      g_print ("User installation was skipped because the '--nointerface' flag was encountered\n");
-      g_print ("To perform user installation, run the GIMP without the '--nointerface' flag\n");
+      g_print ("The GIMP could not set up %s for the current user\n", filename);
 
       (* install_callback) ();
     }
@@ -146,6 +148,16 @@ install_text_insert (GtkTextBuffer *buffer,
 		     const char    *text)
 {
   GtkTextIter end;
+
+  /*  Without a log window (the automatic installation) only problems
+   *  are worth reporting, and they go to the console.
+   */
+  if (!buffer)
+    {
+      if (tag)
+	g_printerr ("%s", text);
+      return;
+    }
 
   gtk_text_buffer_get_end_iter (buffer, &end);
 
@@ -498,6 +510,18 @@ install_user_files (GtkTextBuffer *log,
   g_free (dest);
 
   return TRUE;
+}
+
+/*  The installation without any window; TRUE when it worked.  */
+static int
+install_silently (void)
+{
+  char *data_dir = gimp_data_directory ();
+
+  if (! g_file_test (data_dir, G_FILE_TEST_IS_DIR))
+    return FALSE;
+
+  return install_user_files (NULL, data_dir, gimp_directory ());
 }
 
 static void
