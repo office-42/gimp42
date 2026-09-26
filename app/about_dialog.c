@@ -228,7 +228,7 @@ about_dialog_create (int timeout)
       gtk_drawing_area_set_content_height (GTK_DRAWING_AREA (scroll_area),
 					   max_height);
 
-      label = gtk_label_new ("Please visit http://www.gimp.org/ for more info");
+      label = gtk_label_new ("Please visit https://github.com/office-42/gimp42 for more info");
       gimp_box_pack_start (vbox, label, FALSE, TRUE, 0);
     }
 

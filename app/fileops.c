@@ -272,6 +272,168 @@ file_ops_pre_init ()
   procedural_db_register (&file_temp_name_proc);
 }
 
+/*  File > Open Recent: the images this program opened or saved last, from
+ *  the system's list of recently used files, so they also show up where
+ *  the desktop shows recent files.
+ */
+
+#define RECENT_MAX 10
+
+static const char *recent_menus[] = { "<Toolbox>", "<Image>" };
+static GPtrArray *recent_paths = NULL;       /*  menu paths now shown  */
+static GPtrArray *recent_files = NULL;       /*  their file names      */
+
+static void
+file_recent_callback (GtkWidget *widget,
+		      gpointer   data,
+		      guint      action)
+{
+  const char *filename;
+  char *raw_filename;
+
+  if (!recent_files || action >= recent_files->len)
+    return;
+
+  filename = g_ptr_array_index (recent_files, action);
+  raw_filename = g_path_get_basename (filename);
+
+  if (!file_open ((char *) filename, raw_filename))
+    {
+      char *message = g_strdup_printf ("Open failed: %s", filename);
+
+      message_box (message, NULL, NULL);
+      g_free (message);
+    }
+
+  g_free (raw_filename);
+}
+
+static gint
+file_recent_compare (gconstpointer a,
+		     gconstpointer b)
+{
+  GDateTime *ta = gtk_recent_info_get_modified ((GtkRecentInfo *) a);
+  GDateTime *tb = gtk_recent_info_get_modified ((GtkRecentInfo *) b);
+
+  return g_date_time_compare (tb, ta);
+}
+
+static void
+file_recent_rebuild (void)
+{
+  GtkRecentManager *manager = gtk_recent_manager_get_default ();
+  const char *app_name = g_get_application_name ();
+  GList *items, *list;
+  guint i;
+  int n = 0;
+
+  /*  take away what is there  */
+  if (recent_paths)
+    for (i = 0; i < recent_paths->len; i++)
+      menus_destroy (g_ptr_array_index (recent_paths, i));
+
+  if (recent_paths)
+    g_ptr_array_free (recent_paths, TRUE);
+  if (recent_files)
+    g_ptr_array_free (recent_files, TRUE);
+  recent_paths = g_ptr_array_new_with_free_func (g_free);
+  recent_files = g_ptr_array_new_with_free_func (g_free);
+
+  items = g_list_sort (gtk_recent_manager_get_items (manager),
+		       file_recent_compare);
+
+  for (list = items; list && n < RECENT_MAX; list = list->next)
+    {
+      GtkRecentInfo *info = list->data;
+      char *filename;
+      char *label;
+      int m;
+
+      if (!gtk_recent_info_is_local (info) ||
+	  !gtk_recent_info_has_application (info, app_name))
+	continue;
+
+      filename = g_filename_from_uri (gtk_recent_info_get_uri (info), NULL, NULL);
+      if (!filename || !g_file_test (filename, G_FILE_TEST_IS_REGULAR))
+	{
+	  g_free (filename);
+	  continue;
+	}
+
+      {
+	char *base = g_path_get_basename (filename);
+	label = g_strdup_printf ("%d. %s", n + 1, base);
+	g_free (base);
+      }
+
+      for (m = 0; m < (int) G_N_ELEMENTS (recent_menus); m++)
+	{
+	  MenuEntry entry;
+
+	  memset (&entry, 0, sizeof (entry));
+	  entry.path = g_strdup_printf ("%s/File/Open Recent/%s",
+					recent_menus[m], label);
+	  entry.callback = file_recent_callback;
+	  entry.callback_action = n;
+	  menus_create (&entry, 1);
+	  g_ptr_array_add (recent_paths, entry.path);
+	}
+
+      g_ptr_array_add (recent_files, filename);
+      g_free (label);
+      n++;
+    }
+
+  g_list_free_full (items, (GDestroyNotify) gtk_recent_info_unref);
+
+  /*  an empty submenu says so  */
+  if (n == 0)
+    {
+      int m;
+
+      for (m = 0; m < (int) G_N_ELEMENTS (recent_menus); m++)
+	{
+	  MenuEntry entry;
+
+	  memset (&entry, 0, sizeof (entry));
+	  entry.path = g_strdup_printf ("%s/File/Open Recent/No recent images",
+					recent_menus[m]);
+	  menus_create (&entry, 1);
+	  menus_set_sensitive (entry.path, FALSE);
+	  g_ptr_array_add (recent_paths, entry.path);
+	}
+    }
+}
+
+static void
+file_recent_changed (GtkRecentManager *manager,
+		     gpointer          data)
+{
+  file_recent_rebuild ();
+}
+
+/*  Puts filename at the top of the recent files.  */
+static void
+file_recent_add (const char *filename)
+{
+  char *uri;
+
+  if (no_interface || !filename)
+    return;
+
+  {
+    char *absolute = g_canonicalize_filename (filename, NULL);
+
+    uri = g_filename_to_uri (absolute, NULL, NULL);
+    g_free (absolute);
+  }
+  if (uri)
+    {
+      gtk_recent_manager_add_item (gtk_recent_manager_get_default (), uri);
+      g_free (uri);
+    }
+}
+
 void
 file_ops_post_init ()
 {
@@ -280,6 +442,13 @@ file_ops_post_init ()
    */
   load_procs = g_slist_reverse (load_procs);
   save_procs = g_slist_reverse (save_procs);
+
+  if (!no_interface)
+    {
+      g_signal_connect (gtk_recent_manager_get_default (), "changed",
+			G_CALLBACK (file_recent_changed), NULL);
+      file_recent_rebuild ();
+    }
 }
 
 static Argument*
@@ -734,6 +903,8 @@ file_open (char *filename, char* raw_filename)
 
       /*  display the image */
       gdisplay_new (gimage, 0x0101);
+
+      file_recent_add (filename);
     }
 
   return return_val;
@@ -788,6 +959,8 @@ file_save (int   image_ID,
 
       /*  set the image title  */
       gimage_set_filename (gimage, filename);
+
+      file_recent_add (filename);
     }
 
   g_free (return_vals);

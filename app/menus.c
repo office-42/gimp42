@@ -35,6 +35,7 @@ static MenuEntry toolbox_entries[] =
 {
   { "/File/New", "<control>N", (MenuCallback) file_new_cmd_callback, 0 },
   { "/File/Open", "<control>O", (MenuCallback) file_open_cmd_callback, 0 },
+  { "/File/Open Recent/", NULL, NULL, 0 },
   { "/File/About...", NULL, (MenuCallback) about_dialog_cmd_callback, 0 },
   { "/File/Preferences...", NULL, (MenuCallback) file_pref_cmd_callback, 0 },
   { "/File/Tip of the day", NULL, (MenuCallback) tips_dialog_cmd_callback, 0 },
@@ -53,8 +54,9 @@ static MenuEntry image_entries[] =
 {
   { "/File/New", "<control>N", (MenuCallback) file_new_cmd_callback, 1 },
   { "/File/Open", "<control>O", (MenuCallback) file_open_cmd_callback, 0 },
+  { "/File/Open Recent/", NULL, NULL, 0 },
   { "/File/Save", "<control>S", (MenuCallback) file_save_cmd_callback, 0 },
-  { "/File/Save as", NULL, (MenuCallback) file_save_as_cmd_callback, 0 },
+  { "/File/Save as", "<control><shift>S", (MenuCallback) file_save_as_cmd_callback, 0 },
   { "/File/Preferences...", NULL, (MenuCallback) file_pref_cmd_callback, 0 },
   { "/File/---", NULL, NULL, 0, "<Separator>" },
   
@@ -71,7 +73,7 @@ static MenuEntry image_entries[] =
   { "/Edit/Fill", "<control>.", (MenuCallback) edit_fill_cmd_callback, 0 },
   { "/Edit/Stroke", NULL, (MenuCallback) edit_stroke_cmd_callback, 0 },
   { "/Edit/Undo", "<control>Z", (MenuCallback) edit_undo_cmd_callback, 0 },
-  { "/Edit/Redo", "<control>R", (MenuCallback) edit_redo_cmd_callback, 0 },
+  { "/Edit/Redo", "<control>Y", (MenuCallback) edit_redo_cmd_callback, 0 },
   { "/Edit/---", NULL, NULL, 0, "<Separator>" },
   { "/Edit/Cut Named", "<control><shift>X", (MenuCallback) edit_named_cut_cmd_callback, 0 },
   { "/Edit/Copy Named", "<control><shift>C", (MenuCallback) edit_named_copy_cmd_callback, 0 },

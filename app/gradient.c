@@ -1528,7 +1528,7 @@ ed_do_save_pov_callback(const gchar *filename, gpointer client_data)
 		g_message ("ed_do_save_pov_callback(): oops, could not open \"%s\"", filename);
 	else {
 		fprintf(file, "/* color_map file created by the GIMP */\n");
-		fprintf(file, "/* http://www.gimp.org/               */\n");
+		fprintf(file, "/* https://github.com/office-42/gimp42 */\n");
 
 		fprintf(file, "color_map {\n");
 

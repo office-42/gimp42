@@ -30,6 +30,7 @@ DisableProgramGroupPage=yes
 LicenseFile={#SourceDir}\COPYING
 OutputDir=.
 OutputBaseFilename=gimp42-{#AppVersion}-setup
+SetupIconFile=gimp42.ico
 UninstallDisplayIcon={app}\bin\gimp42.exe
 Compression=lzma2
 SolidCompression=yes
