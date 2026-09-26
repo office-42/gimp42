@@ -17,7 +17,6 @@
  */
 #include <stdlib.h>
 #include <stdio.h>
-#include "gdk/gdkkeysyms.h"
 #include "appenv.h"
 #include "actionarea.h"
 #include "draw_core.h"

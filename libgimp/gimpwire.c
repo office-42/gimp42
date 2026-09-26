@@ -319,7 +319,8 @@ wire_read_double (GIOChannel *channel,
     {
       if (!wire_read_string (channel, &str, 1))
 	return FALSE;
-      sscanf (str, "%le", &data[i]);
+      /*  always '.' as the decimal point, whatever the locale  */
+      data[i] = g_ascii_strtod (str, NULL);
       g_free (str);
     }
 
@@ -418,7 +419,7 @@ wire_write_double (GIOChannel *channel,
   t = buf;
   for (i = 0; i < count; i++)
     {
-      sprintf (buf, "%0.50e", data[i]);
+      g_ascii_formatd (buf, sizeof (buf), "%0.50e", data[i]);
       if (!wire_write_string (channel, &t, 1))
 	return FALSE;
     }

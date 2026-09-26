@@ -273,6 +273,11 @@ main (int argc, char **argv)
 		      prog_name);
 	  exit (1);
 	}
+
+      /*  gtk_init set the locale from the system; numbers in gimprc
+       *  and elsewhere are read with a '.' decimal point.
+       */
+      setlocale (LC_NUMERIC, "C");
     }
 
   g_log_set_handler (NULL, G_LOG_LEVEL_MESSAGE, log_message_func, NULL);

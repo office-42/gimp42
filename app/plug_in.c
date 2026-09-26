@@ -2062,9 +2062,9 @@ plug_in_write_rc (char *filename)
 
       if (plug_in_def->proc_defs)
 	{
-	  fprintf (fp, "(plug-in-def \"%s\" %ld",
-		   plug_in_def->prog,
-		   (long) plug_in_def->mtime);
+	  fprintf (fp, "(plug-in-def ");
+	  plug_in_write_rc_string (fp, plug_in_def->prog);
+	  fprintf (fp, " %ld", (long) plug_in_def->mtime);
 
 	  tmp2 = plug_in_def->proc_defs;
 	  if (tmp2)
