@@ -2353,7 +2353,7 @@ control_motion(gint x)
 						      g_editor->control_sel_r,
 						      seg, pos);
 
-			sprintf(str, "Handle position: %0.6f", seg->left);
+			g_snprintf(str, sizeof(str), "Handle position: %0.6f", seg->left);
 			ed_set_hint(str);
 
 			break;
@@ -2362,7 +2362,7 @@ control_motion(gint x)
 			pos = control_calc_g_pos(x);
 			seg->middle = BOUNDS(pos, seg->left + EPSILON, seg->right - EPSILON);
 
-			sprintf(str, "Handle position: %0.6f", seg->middle);
+			g_snprintf(str, sizeof(str), "Handle position: %0.6f", seg->middle);
 			ed_set_hint(str);
 
 			break;
@@ -2379,7 +2379,7 @@ control_motion(gint x)
 
 			g_editor->control_last_gx += delta;
 
-			sprintf(str, "Distance: %0.6f",
+			g_snprintf(str, sizeof(str), "Distance: %0.6f",
 				g_editor->control_last_gx - g_editor->control_orig_pos);
 			ed_set_hint(str);
 
@@ -5293,8 +5293,16 @@ grad_load_gradient(char *filename)
 		else
 			grad->segments = seg;
 
-		if (!fgets(line, 1024, file))
-			line[0] = '\0';
+		if (!fgets(line, 1024, file)) {
+			/* Truncated file; don't loop (and allocate) up
+			 * to a bogus segment count.
+			 */
+			g_message ("grad_load_gradient(): unexpected end of file in \"%s\"",
+				   filename);
+			fclose(file);
+			grad_free_gradient(grad);
+			return;
+		} /* if */
 
 		if (grad_parse_segment(line, seg, &type, &color) != 13) {
 			g_message ("grad_load_gradient(): badly formatted "
@@ -5304,6 +5312,26 @@ grad_load_gradient(char *filename)
 			seg->type  = (grad_type_t) type;
 			seg->color = (grad_color_t) color;
 		} /* else */
+
+		/* Enforce the invariants the rest of the code relies on
+		 * (segments contiguous and ordered, covering [0, 1], with
+		 * known types).  This is a no-op for well-formed files.
+		 */
+
+		seg->left = prev ? prev->right : 0.0;
+		if (!(seg->right >= seg->left)) /* also catches NaN */
+			seg->right = seg->left;
+		if (seg->right > 1.0 || i == num_segments - 1)
+			seg->right = 1.0;
+		if (!(seg->middle >= seg->left))
+			seg->middle = seg->left;
+		if (seg->middle > seg->right)
+			seg->middle = seg->right;
+
+		if ((int) seg->type < GRAD_LINEAR || (int) seg->type > GRAD_SPHERE_DECREASING)
+			seg->type = GRAD_LINEAR;
+		if ((int) seg->color < GRAD_RGB || (int) seg->color > GRAD_HSV_CW)
+			seg->color = GRAD_RGB;
 
 		prev = seg;
 	} /* for */

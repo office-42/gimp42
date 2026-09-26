@@ -58,6 +58,14 @@ typedef enum
   COMPRESS_FRACTAL = 3
 } CompressionType;
 
+/* Sanity limits applied to values read from (untrusted) XCF files.  */
+#define XCF_MAX_IMAGE_SIZE     262144     /* max width or height          */
+#define XCF_MAX_LAYER_OFFSET   (1 << 28)  /* max |layer offset|           */
+#define XCF_MAX_STRING_LENGTH  (1 << 20)  /* max stored length of a name  */
+
+#define XCF_VALID_SIZE(w, h) ((w) > 0 && (w) <= XCF_MAX_IMAGE_SIZE && \
+                              (h) > 0 && (h) <= XCF_MAX_IMAGE_SIZE)
+
 typedef GImage* XcfLoader(XcfInfo *info);
 
 static Argument* xcf_load_invoker (Argument  *args);
@@ -101,7 +109,9 @@ static gint     xcf_load_layer_props   (XcfInfo     *info,
 					Layer       *layer);
 static gint     xcf_load_channel_props (XcfInfo     *info,
 					GImage      *gimage,
-					Channel     *channel);
+					Channel     *channel,
+					gint         is_layer_mask,
+					gint        *is_selection);
 static gint     xcf_load_prop          (XcfInfo     *info,
 					PropType    *prop_type,
 					guint32     *prop_size);
@@ -110,7 +120,8 @@ static Layer*   xcf_load_layer         (XcfInfo     *info,
 static Channel* xcf_load_channel       (XcfInfo     *info,
 					GImage      *gimage);
 static LayerMask* xcf_load_layer_mask  (XcfInfo     *info,
-					GImage      *gimage);
+					GImage      *gimage,
+					Layer       *layer);
 static gint     xcf_load_hierarchy     (XcfInfo     *info,
 					TileManager *tiles);
 static gint     xcf_load_level         (XcfInfo     *info,
@@ -283,9 +294,10 @@ xcf_load_invoker (Argument *args)
   GImage *gimage;
   char *filename;
   int success;
-  char id[14];
+  char id[15];
 
   gimage = NULL;
+  memset (id, 0, sizeof (id));
 
   success = FALSE;
 
@@ -307,6 +319,7 @@ xcf_load_invoker (Argument *args)
 
       success = TRUE;
       info.cp += xcf_read_int8 (info.fp, (guint8*) id, 14);
+      id[14] = '\0';
       if (strncmp (id, "gimp xcf ", 9) != 0)
 	success = FALSE;
       else if (strcmp (id+9, "file") == 0) 
@@ -322,7 +335,7 @@ xcf_load_invoker (Argument *args)
       
       if (success)
 	{
-	  if (info.file_version < N_xcf_loaders)
+	  if (info.file_version >= 0 && info.file_version < N_xcf_loaders)
 	    {
 	      gimage = (*(xcf_loaders[info.file_version])) (&info);
 	      if (!gimage)
@@ -414,7 +427,7 @@ xcf_save_image (XcfInfo *info,
   GSList *list;
   int have_selection;
   int t1, t2, t3, t4;
-  char version_tag[14];
+  char version_tag[16];
 
   floating_layer = gimage_floating_sel (gimage);
   if (floating_layer)
@@ -423,7 +436,8 @@ xcf_save_image (XcfInfo *info,
   /* write out the tag information for the image */
   if (info->file_version > 0) 
     {
-      sprintf (version_tag, "gimp xcf v%03d", info->file_version);
+      g_snprintf (version_tag, sizeof (version_tag), "gimp xcf v%03d",
+                  info->file_version);
     } 
   else 
     {
@@ -1228,6 +1242,13 @@ xcf_load_image (XcfInfo *info)
   info->cp += xcf_read_int32 (info->fp, (guint32*) &height, 1);
   info->cp += xcf_read_int32 (info->fp, (guint32*) &image_type, 1);
 
+  if (!XCF_VALID_SIZE (width, height) ||
+      (image_type != RGB && image_type != GRAY && image_type != INDEXED))
+    {
+      g_message ("XCF error: invalid image size or type");
+      return NULL;
+    }
+
   /* create a new gimage */
   gimage = gimage_new (width, height, image_type);
   if (!gimage)
@@ -1314,7 +1335,8 @@ xcf_load_image (XcfInfo *info)
   if (info->active_layer)
     gimage_set_active_layer (gimage, info->active_layer);
 
-  if (info->active_channel)
+  if (info->active_channel &&
+      g_slist_find (gimage->channels, info->active_channel))
     gimage_set_active_channel (gimage, info->active_channel);
 
   gimage_set_filename (gimage, info->filename);
@@ -1343,14 +1365,30 @@ xcf_load_image_props (XcfInfo *info,
 	case PROP_END:
 	  return TRUE;
 	case PROP_COLORMAP:
-	  if (info->file_version == 0) 
+	  {
+	    guint32 ncols;
+
+	    info->cp += xcf_read_int32 (info->fp, &ncols, 1);
+	    if (ncols > COLORMAP_SIZE / 3)
+	      {
+		g_message ("XCF error: invalid colormap size %u", ncols);
+		return FALSE;
+	      }
+	    gimage->num_cols = ncols;
+
+	    /* always keep a full sized colormap; indexed pixel values
+	     * can reference any of the 256 entries.
+	     */
+	    if (!gimage->cmap)
+	      gimage->cmap = g_new0 (guchar, COLORMAP_SIZE);
+	  }
+
+	  if (info->file_version == 0)
 	    {
 	      int i;
 	      g_message ("XCF warning: version 0 of XCF file format\n"
 			 "did not save indexed colormaps correctly.\n"
 			 "Substituting grayscale map.");
-	      info->cp += xcf_read_int32 (info->fp, (guint32*) &gimage->num_cols, 1);
-	      gimage->cmap = g_new (guchar, gimage->num_cols*3);
 	      xcf_seek_pos (info, info->cp + gimage->num_cols);
 	      for (i = 0; i<gimage->num_cols; i++) 
 		{
@@ -1359,10 +1397,8 @@ xcf_load_image_props (XcfInfo *info,
 		  gimage->cmap[i*3+2] = i;
 		}
 	    }
-	  else 
+	  else
 	    {
-	      info->cp += xcf_read_int32 (info->fp, (guint32*) &gimage->num_cols, 1);
-	      gimage->cmap = g_new (guchar, gimage->num_cols*3);
 	      info->cp += xcf_read_int8 (info->fp, (guint8*) gimage->cmap, gimage->num_cols*3);
 	    }
 	  break;
@@ -1397,6 +1433,9 @@ xcf_load_image_props (XcfInfo *info,
 		info->cp += xcf_read_int32 (info->fp, (guint32*) &position, 1);
 		info->cp += xcf_read_int8 (info->fp, (guint8*) &orientation, 1);
 
+		if (feof (info->fp) || ferror (info->fp))
+		  break;
+
 		guide = g_new (Guide, 1);
 		guide->position = position;
 		guide->orientation = orientation;
@@ -1419,6 +1458,8 @@ xcf_load_image_props (XcfInfo *info,
 		amount = MIN (16, prop_size);
 		info->cp += xcf_read_int8 (info->fp, buf, amount);
 		prop_size -= MIN (16, amount);
+		if (feof (info->fp) || ferror (info->fp))
+		  return FALSE;
 	      }
 	  }
 	  break;
@@ -1449,11 +1490,17 @@ xcf_load_layer_props (XcfInfo *info,
 	  info->active_layer = layer;
 	  break;
 	case PROP_FLOATING_SELECTION:
+	  if (info->floating_sel)
+	    {
+	      g_message ("XCF error: more than one floating selection");
+	      return FALSE;
+	    }
 	  info->floating_sel = layer;
 	  info->cp += xcf_read_int32 (info->fp, (guint32*) &info->floating_sel_offset, 1);
 	  break;
 	case PROP_OPACITY:
 	  info->cp += xcf_read_int32 (info->fp, (guint32*) &layer->opacity, 1);
+	  layer->opacity = CLAMP (layer->opacity, 0, 255);
 	  break;
 	case PROP_VISIBLE:
 	  info->cp += xcf_read_int32 (info->fp, (guint32*) &GIMP_DRAWABLE(layer)->visible, 1);
@@ -1476,9 +1523,20 @@ xcf_load_layer_props (XcfInfo *info,
 	case PROP_OFFSETS:
 	  info->cp += xcf_read_int32 (info->fp, (guint32*) &GIMP_DRAWABLE(layer)->offset_x, 1);
 	  info->cp += xcf_read_int32 (info->fp, (guint32*) &GIMP_DRAWABLE(layer)->offset_y, 1);
+	  if (GIMP_DRAWABLE(layer)->offset_x > XCF_MAX_LAYER_OFFSET ||
+	      GIMP_DRAWABLE(layer)->offset_x < -XCF_MAX_LAYER_OFFSET ||
+	      GIMP_DRAWABLE(layer)->offset_y > XCF_MAX_LAYER_OFFSET ||
+	      GIMP_DRAWABLE(layer)->offset_y < -XCF_MAX_LAYER_OFFSET)
+	    {
+	      g_message ("XCF error: invalid layer offsets");
+	      return FALSE;
+	    }
 	  break;
 	case PROP_MODE:
 	  info->cp += xcf_read_int32 (info->fp, (guint32*) &layer->mode, 1);
+	  /* the mode indexes the layer_modes[] table */
+	  if (layer->mode < NORMAL_MODE || layer->mode > REPLACE_MODE)
+	    layer->mode = NORMAL_MODE;
 	  break;
 	default:
 	  g_message ("unexpected/unknown layer property: %d (skipping)", prop_type);
@@ -1492,6 +1550,8 @@ xcf_load_layer_props (XcfInfo *info,
 		amount = MIN (16, prop_size);
 		info->cp += xcf_read_int8 (info->fp, buf, amount);
 		prop_size -= MIN (16, amount);
+		if (feof (info->fp) || ferror (info->fp))
+		  return FALSE;
 	      }
 	  }
 	  break;
@@ -1504,10 +1564,14 @@ xcf_load_layer_props (XcfInfo *info,
 static gint
 xcf_load_channel_props (XcfInfo *info,
 			GImage  *gimage,
-			Channel *channel)
+			Channel *channel,
+			gint     is_layer_mask,
+			gint    *is_selection)
 {
   PropType prop_type;
   guint32 prop_size;
+
+  *is_selection = FALSE;
 
   while (1)
     {
@@ -1519,16 +1583,26 @@ xcf_load_channel_props (XcfInfo *info,
 	case PROP_END:
 	  return TRUE;
 	case PROP_ACTIVE_CHANNEL:
-	  info->active_channel = channel;
+	  if (!is_layer_mask)
+	    info->active_channel = channel;
 	  break;
 	case PROP_SELECTION:
-	  channel_delete (gimage->selection_mask);
-	  gimage->selection_mask = channel;
-	  channel->boundary_known = FALSE;
-	  channel->bounds_known = FALSE;
+	  /* the selection mask must be a plain channel covering the
+	   * whole image; it is installed once the channel has been
+	   * loaded completely (see xcf_load_channel).
+	   */
+	  if (is_layer_mask ||
+	      GIMP_DRAWABLE(channel)->width != gimage->width ||
+	      GIMP_DRAWABLE(channel)->height != gimage->height)
+	    {
+	      g_message ("XCF error: invalid selection mask");
+	      return FALSE;
+	    }
+	  *is_selection = TRUE;
 	  break;
 	case PROP_OPACITY:
 	  info->cp += xcf_read_int32 (info->fp, (guint32*) &channel->opacity, 1);
+	  channel->opacity = CLAMP (channel->opacity, 0, 255);
 	  break;
 	case PROP_VISIBLE:
 	  info->cp += xcf_read_int32 (info->fp, (guint32*) &GIMP_DRAWABLE(channel)->visible, 1);
@@ -1551,6 +1625,8 @@ xcf_load_channel_props (XcfInfo *info,
 		amount = MIN (16, prop_size);
 		info->cp += xcf_read_int8 (info->fp, buf, amount);
 		prop_size -= MIN (16, amount);
+		if (feof (info->fp) || ferror (info->fp))
+		  return FALSE;
 	      }
 	  }
 	  break;
@@ -1567,6 +1643,14 @@ xcf_load_prop (XcfInfo  *info,
 {
   info->cp += xcf_read_int32 (info->fp, (guint32*) prop_type, 1);
   info->cp += xcf_read_int32 (info->fp, (guint32*) prop_size, 1);
+
+  /* a truncated file must not be mistaken for a PROP_END */
+  if (feof (info->fp) || ferror (info->fp))
+    {
+      g_message ("XCF error: unexpected end of file");
+      return FALSE;
+    }
+
   return TRUE;
 }
 
@@ -1597,19 +1681,34 @@ xcf_load_layer (XcfInfo *info,
   info->cp += xcf_read_int32 (info->fp, (guint32*) &width, 1);
   info->cp += xcf_read_int32 (info->fp, (guint32*) &height, 1);
   info->cp += xcf_read_int32 (info->fp, (guint32*) &type, 1);
+
+  if (!XCF_VALID_SIZE (width, height) ||
+      type < RGB_GIMAGE || type > INDEXEDA_GIMAGE)
+    {
+      g_message ("XCF error: invalid layer size or type");
+      return NULL;
+    }
+
   info->cp += xcf_read_string (info->fp, &name, 1);
 
   /* create a new layer */
   layer = layer_new (gimage->ID, width, height, type, name, 255, NORMAL_MODE);
+  g_free (name);
   if (!layer)
-    {
-      g_free (name);
-      return NULL;
-    }
+    return NULL;
 
   /* read in the layer properties */
   if (!xcf_load_layer_props (info, gimage, layer))
     goto error;
+
+  /* the layer's pixel format must match the image, except for a
+   * floating selection (which may have been pasted into a channel).
+   */
+  if (layer != info->floating_sel && type / 2 != gimage->base_type)
+    {
+      g_message ("XCF error: layer type does not match image type");
+      goto error;
+    }
 
   if (info->compression == COMPRESS_FRACTAL)
     xcf_compress_frac_info (GIMP_DRAWABLE(layer)->type);
@@ -1628,7 +1727,7 @@ xcf_load_layer (XcfInfo *info,
     {
       xcf_seek_pos (info, layer_mask_offset);
 
-      layer_mask = xcf_load_layer_mask (info, gimage);
+      layer_mask = xcf_load_layer_mask (info, gimage, layer);
       if (!layer_mask)
 	goto error;
 
@@ -1653,7 +1752,10 @@ xcf_load_layer (XcfInfo *info,
       Layer *floating_sel;
 
       floating_sel = info->floating_sel;
-      floating_sel_attach (floating_sel, GIMP_DRAWABLE(layer));
+      /* attach only once, even if the drawable offset is listed twice */
+      info->floating_sel_offset = 0;
+      if (floating_sel && GIMP_DRAWABLE(floating_sel) != GIMP_DRAWABLE(layer))
+	floating_sel_attach (floating_sel, GIMP_DRAWABLE(layer));
     }
 
   return layer;
@@ -1672,6 +1774,7 @@ xcf_load_channel (XcfInfo *info,
   int width;
   int height;
   int add_floating_sel;
+  gint is_selection;
   char *name;
   guchar color[3] = { 0, 0, 0 };
 
@@ -1684,18 +1787,24 @@ xcf_load_channel (XcfInfo *info,
   /* read in the layer width, height and name */
   info->cp += xcf_read_int32 (info->fp, (guint32*) &width, 1);
   info->cp += xcf_read_int32 (info->fp, (guint32*) &height, 1);
+
+  /* channels are always the size of the image */
+  if (width != gimage->width || height != gimage->height)
+    {
+      g_message ("XCF error: channel size does not match image");
+      return NULL;
+    }
+
   info->cp += xcf_read_string (info->fp, &name, 1);
 
   /* create a new channel */
   channel = channel_new (gimage->ID, width, height, name, 255, color);
+  g_free (name);
   if (!channel)
-    {
-      g_free (name);
-      return NULL;
-    }
+    return NULL;
 
   /* read in the channel properties */
-  if (!xcf_load_channel_props (info, gimage, channel))
+  if (!xcf_load_channel_props (info, gimage, channel, FALSE, &is_selection))
     goto error;
 
   /* read the hierarchy and layer mask offsets */
@@ -1706,13 +1815,27 @@ xcf_load_channel (XcfInfo *info,
   if (!xcf_load_hierarchy (info, GIMP_DRAWABLE(channel)->tiles))
     goto error;
 
+  /* install the selection mask only now that it is fully loaded */
+  if (is_selection)
+    {
+      if (info->active_channel == gimage->selection_mask)
+	info->active_channel = NULL;
+      channel_delete (gimage->selection_mask);
+      gimage->selection_mask = channel;
+      channel->boundary_known = FALSE;
+      channel->bounds_known = FALSE;
+    }
+
   /* attach the floating selection... */
   if (add_floating_sel)
     {
       Layer *floating_sel;
 
       floating_sel = info->floating_sel;
-      floating_sel_attach (floating_sel, GIMP_DRAWABLE(channel));
+      /* attach only once, even if the drawable offset is listed twice */
+      info->floating_sel_offset = 0;
+      if (floating_sel && GIMP_DRAWABLE(floating_sel) != GIMP_DRAWABLE(channel))
+	floating_sel_attach (floating_sel, GIMP_DRAWABLE(channel));
     }
 
   return channel;
@@ -1724,13 +1847,15 @@ error:
 
 static LayerMask*
 xcf_load_layer_mask (XcfInfo *info,
-		     GImage  *gimage)
+		     GImage  *gimage,
+		     Layer   *layer)
 {
   LayerMask *layer_mask;
   guint32 hierarchy_offset;
   int width;
   int height;
   int add_floating_sel;
+  gint is_selection;
   char *name;
   guchar color[3] = { 0, 0, 0 };
 
@@ -1743,18 +1868,26 @@ xcf_load_layer_mask (XcfInfo *info,
   /* read in the layer width, height and name */
   info->cp += xcf_read_int32 (info->fp, (guint32*) &width, 1);
   info->cp += xcf_read_int32 (info->fp, (guint32*) &height, 1);
+
+  /* the mask is applied pixel-for-pixel to the layer */
+  if (width != GIMP_DRAWABLE(layer)->width ||
+      height != GIMP_DRAWABLE(layer)->height)
+    {
+      g_message ("XCF error: layer mask size does not match layer");
+      return NULL;
+    }
+
   info->cp += xcf_read_string (info->fp, &name, 1);
 
   /* create a new layer mask */
   layer_mask = layer_mask_new (gimage->ID, width, height, name, 255, color);
+  g_free (name);
   if (!layer_mask)
-    {
-      g_free (name);
-      return NULL;
-    }
+    return NULL;
 
   /* read in the layer_mask properties */
-  if (!xcf_load_channel_props (info, gimage, GIMP_CHANNEL(layer_mask)))
+  if (!xcf_load_channel_props (info, gimage, GIMP_CHANNEL(layer_mask),
+			       TRUE, &is_selection))
     goto error;
 
   /* read the hierarchy and layer mask offsets */
@@ -1771,7 +1904,10 @@ xcf_load_layer_mask (XcfInfo *info,
       Layer *floating_sel;
 
       floating_sel = info->floating_sel;
-      floating_sel_attach (floating_sel, GIMP_DRAWABLE(layer_mask));
+      /* attach only once, even if the drawable offset is listed twice */
+      info->floating_sel_offset = 0;
+      if (floating_sel && GIMP_DRAWABLE(floating_sel) != GIMP_DRAWABLE(layer_mask))
+	floating_sel_attach (floating_sel, GIMP_DRAWABLE(layer_mask));
     }
 
   return layer_mask;
@@ -1910,10 +2046,12 @@ xcf_load_level (XcfInfo     *info,
 	    return FALSE;
 	  break;
 	case COMPRESS_ZLIB:
-	  g_error ("xcf: zlib compression unimplemented");
+	  g_message ("xcf: zlib compression unimplemented");
+	  return FALSE;
 	  break;
 	case COMPRESS_FRACTAL:
-	  g_error ("xcf: fractal compression unimplemented");
+	  g_message ("xcf: fractal compression unimplemented");
+	  return FALSE;
 	  break;
 	}
 
@@ -2001,6 +2139,10 @@ xcf_load_tile_rle (XcfInfo *info,
 		  length = (buffer[0] << 8) + buffer[1];
 		}
 
+	      /* never write past the end of the tile */
+	      if (length > size || feof (info->fp) || ferror (info->fp))
+		goto bogus_rle;
+
 	      count += length;
 	      size -= length;
 
@@ -2026,11 +2168,12 @@ xcf_load_tile_rle (XcfInfo *info,
 		  length = (buffer[0] << 8) + buffer[1];
 		}
 
+	      /* never write past the end of the tile */
+	      if (length > size || feof (info->fp) || ferror (info->fp))
+		goto bogus_rle;
+
 	      count += length;
 	      size -= length;
-
-              if (size < 0)
-                g_message ("xcf: uh oh! xcf rle tile loading error: %d", count);
 
 	      info->cp += xcf_read_int8 (info->fp, &val, 1);
 
@@ -2046,6 +2189,12 @@ xcf_load_tile_rle (XcfInfo *info,
   tile_unref (tile, TRUE);
 
   return TRUE;
+
+bogus_rle:
+  g_message ("xcf: uh oh! xcf rle tile loading error: %d", count);
+  tile_unref (tile, TRUE);
+
+  return FALSE;
 }
 
 
@@ -2163,7 +2312,14 @@ xcf_read_int8 (FILE     *fp,
     {
       bytes = fread ((char*) data, sizeof (char), count, fp);
       if (bytes <= 0) /* something bad happened */
-        break;
+        {
+          /* never hand uninitialized (or stale) data to the caller:
+           * a truncated file reads as zeros, which terminates all
+           * offset lists and property lists.
+           */
+          memset (data, 0, count);
+          break;
+        }
       count -= bytes;
       data += bytes;
     }
@@ -2186,8 +2342,22 @@ xcf_read_string (FILE     *fp,
       total += xcf_read_int32 (fp, &tmp, 1);
       if (tmp > 0)
         {
-          data[i] = g_new (gchar, tmp);
-          total += xcf_read_int8 (fp, (guint8*) data[i], tmp);
+          guint32 len = MIN (tmp, XCF_MAX_STRING_LENGTH);
+
+          /* the stored string includes its terminator, but don't
+           * trust the file to provide it.
+           */
+          data[i] = g_new (gchar, len + 1);
+          xcf_read_int8 (fp, (guint8*) data[i], len);
+          data[i][len] = '\0';
+
+          /* skip whatever didn't fit */
+          if (tmp - len > (guint32) G_MAXLONG)
+            fseek (fp, 0, SEEK_END);
+          else if (tmp > len)
+            fseek (fp, (long) (tmp - len), SEEK_CUR);
+
+          total += tmp;
         }
       else
         {

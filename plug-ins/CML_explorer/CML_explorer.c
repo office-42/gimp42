@@ -211,7 +211,7 @@ static GtkWidget	*gtkW_vbox_new (GtkWidget *parent);
 #define	RANDOM	((gdouble) ((double) rand ()/((double) RAND_MAX)))
 #define CANNONIZE(p, x)	(255*(((p).range_h - (p).range_l)*(x) + (p).range_l))
 #define HCANNONIZE(p, x)	(254*(((p).range_h - (p).range_l)*(x) + (p).range_l))
-#define POS_IN_TORUS(i,size)	((i < 0) ? size + i : ((size <= i) ? i - size : i))
+#define POS_IN_TORUS(i,size)	((((i) % (size)) + (size)) % (size))
 
 gtkW_menu_item function_menu [] =
 {
@@ -861,7 +861,7 @@ MAIN_FUNCTION (gint preview_p)
 		  }
 		if (dest_has_alpha)
 		  dest_buffer[dest_offset] = 255;
-		if ((!preview_p) && (++processed % (total / PROGRESS_UPDATE_NUM)) == 0)
+		if ((!preview_p) && (++processed % MAX (1, total / PROGRESS_UPDATE_NUM)) == 0)
 		  gimp_progress_update ((double)processed /(double) total);
 	      }
 	}
@@ -2110,6 +2110,24 @@ CML_execute_load_from_file (const gchar *filename, gpointer client_data)
     }
 }
 
+/* Values read from a parameter file are used as menu indices, divisors
+ * and loop bounds; force them into the ranges the dialog allows. */
+static void
+CML_sanitize_param (CML_PARAM *param)
+{
+  if (param->function < 0 ||
+      param->function >= (gint) G_N_ELEMENTS (function_menu))
+    param->function = 0;
+  if (param->composition < 0 ||
+      param->composition >= (gint) G_N_ELEMENTS (composition_menu))
+    param->composition = 0;
+  if (param->arrange < 0 ||
+      param->arrange >= (gint) G_N_ELEMENTS (arrange_menu))
+    param->arrange = 0;
+  param->diffusion_dist = CLAMP (param->diffusion_dist, 2, 10);
+  param->range_num = CLAMP (param->range_num, 1, 10);
+}
+
 static gint
 CML_load_parameter_file (gchar *filename, gint interactive_mode)
 {
@@ -2131,7 +2149,7 @@ CML_load_parameter_file (gchar *filename, gint interactive_mode)
 
       if (interactive_mode)
 	{
-	  sprintf (buffer, "Error: could not open \"%s\"", filename);
+	  g_snprintf (buffer, sizeof (buffer), "Error: could not open \"%s\"", filename);
 	  gtkW_message_dialog (TRUE, buffer);
 	}
       return FALSE;
@@ -2175,7 +2193,12 @@ CML_load_parameter_file (gchar *filename, gint interactive_mode)
 	    }
 	  ch[channel_id].function = parse_line_to_gint (file, &flag);
 	  if (version < 1.0)
-	    ch[channel_id].function = old2new_function_id [ch[channel_id].function];
+	    {
+	      if (ch[channel_id].function < 0 ||
+		  ch[channel_id].function >= (gint) G_N_ELEMENTS (old2new_function_id))
+		ch[channel_id].function = 0;
+	      ch[channel_id].function = old2new_function_id [ch[channel_id].function];
+	    }
 	  if (1.0 <= version)
 	    ch[channel_id].composition = parse_line_to_gint (file, &flag);
 	  else
@@ -2196,10 +2219,11 @@ CML_load_parameter_file (gchar *filename, gint interactive_mode)
 	  ch[channel_id].range_h = parse_line_to_gdouble (file, &flag);
 	  ch[channel_id].mutation_rate = parse_line_to_gdouble (file, &flag);
 	  ch[channel_id].mutation_dist = parse_line_to_gdouble (file, &flag);
+	  CML_sanitize_param (&ch[channel_id]);
 	}
       if (flag)
 	{
-	  gint dummy;
+	  gint dummy = TRUE;
 	
 	  if (fgets (line, CML_LINE_SIZE - 1, file) == NULL) /* skip a line */
 	    dummy = 1;
@@ -2217,6 +2241,12 @@ CML_load_parameter_file (gchar *filename, gint interactive_mode)
 	      start_offset = 0;
 	      seed = 0;
 	    }
+	  /* keep the values within the ranges the dialog allows */
+	  if (initial_value < 0 ||
+	      initial_value >= (gint) G_N_ELEMENTS (initial_value_menu))
+	    initial_value = 0;
+	  scale = CLAMP (scale, 1, 10);
+	  start_offset = CLAMP (start_offset, 0, 100);
 	}
       fclose(file);
     }

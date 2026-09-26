@@ -210,7 +210,7 @@ static guint16 get_short( FILE * file )
  *     bit ordering should not matter 
  */
 {
-	guchar buf[2];
+	guchar buf[2] = { 0, 0 };
 	
 	fread( buf, 2, 1, file);
 	return ( buf[0] << 8 ) + ( buf[1] << 0 );
@@ -237,7 +237,7 @@ static guint32 get_long( FILE * file )
  *     bit ordering should not matter 
  */
 {
-	guchar buf[4];
+	guchar buf[4] = { 0, 0, 0, 0 };
 
 	fread( buf, 4, 1, file );
 	return ( buf[0] << 24 ) + ( buf[1] << 16 ) 
@@ -250,7 +250,7 @@ static gchar get_char( FILE * file )
  *     Reads a byte from a file.  Provided for convenience; 
  */
 {
-	gchar result;
+	gchar result = 0;
 
 	fread( &result, 1, 1, file );
 	return result;
@@ -321,6 +321,11 @@ static gint32 load_image (char *filename)
 		fclose( file );
 		return -1;
 	}
+
+	if ( width == 0 || height == 0 ) {
+		fclose( file );
+		return -1;
+	}
 	 
 	image_ID = gimp_image_new ( width, height, imgtype );
 	gimp_image_set_filename ( image_ID, filename );
@@ -341,7 +346,7 @@ static gint32 load_image (char *filename)
 		gint   readlen;
 		tile_height = gimp_tile_height();   
 
-		dest_base = dest = g_new (guchar, 3 * width * tile_height); 
+		dest_base = dest = g_new0 (guchar, 3 * width * tile_height); 
 
 		for (i = 0; i < height;) {
 			for ( dest = dest_base, row = 0;
@@ -371,13 +376,13 @@ static gint32 load_image (char *filename)
 			gimp_progress_update ((double) i / (double) height);
 		}
 
-		free( dest_base );
+		g_free( dest_base );
 	} else {
 		/* Read an 8-bit Matte image */
 		guchar record[2];
 		gint   readlen;  
 
-		dest_base = dest = g_new (guchar, width * tile_height); 
+		dest_base = dest = g_new0 (guchar, width * tile_height); 
 
 		for (i = 0; i < height;) {
 			for ( dest = dest_base, row = 0;
@@ -404,7 +409,7 @@ static gint32 load_image (char *filename)
 									 width, row);
 			gimp_progress_update ((double) i / (double) height);
 		}
-		free( dest_base );
+		g_free( dest_base );
 	}
 
 	gimp_drawable_flush (drawable);
@@ -500,8 +505,8 @@ static gint save_image( char *filename,  gint32 image_ID, gint32 drawable_ID )
 		guchar record[4];
 
 		for (i = 0; i < drawable->height;) {
-			rectHeight = ( tile_height < ( drawable->height - i - 1 ) ) ?
-				tile_height : ( drawable->height - i - 1 );
+			rectHeight = ( tile_height < ( drawable->height - i ) ) ?
+				tile_height : ( drawable->height - i );
 			gimp_pixel_rgn_get_rect (&pixel_rgn, src_base, 0, i, 
 									 drawable->width, rectHeight);
 
@@ -544,8 +549,8 @@ static gint save_image( char *filename,  gint32 image_ID, gint32 drawable_ID )
 		guchar record[2];
 
 		for (i = 0; i < drawable->height;) {
-			rectHeight = ( tile_height < ( drawable->height - i - 1 ) ) ?
-				tile_height : ( drawable->height - i - 1 );
+			rectHeight = ( tile_height < ( drawable->height - i ) ) ?
+				tile_height : ( drawable->height - i );
 			gimp_pixel_rgn_get_rect (&pixel_rgn, src_base, 0, i, 
 									 drawable->width, rectHeight);
 
@@ -578,7 +583,7 @@ static gint save_image( char *filename,  gint32 image_ID, gint32 drawable_ID )
 		}
 	}
 	
-	free( src_base );
+	g_free( src_base );
 
 	fclose( file );
 	return (1);

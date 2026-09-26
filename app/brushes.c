@@ -35,6 +35,10 @@
 #include "gimprc.h"
 #include "menus.h"
 
+/*  sanity limits for brush files  */
+#define GBRUSH_MAX_SIZE  262144   /*  max width or height of a brush  */
+#define GBRUSH_MAX_NAME  65536    /*  max length of a brush name      */
+
 
 /*  global variables  */
 GBrushP             active_brush = NULL;
@@ -101,16 +105,11 @@ brushes_init (int no_data)
 	 && gb2->name
 	 && (strcmp(gb_start->name,gb2->name) == 0)) {
 
-        gint b_digits = 2;
-        gint gb_tmp_cnt = gb_count++;
+        gb_count++;
 
         /* Alter gb2... */
         g_free(gb2->name);
-        while((gb_tmp_cnt /= 10) > 0)
-          b_digits++;
-        /* name str + " #" + digits + null */
-        gb2->name = g_malloc(strlen(gb_start->name)+3+b_digits);
-        sprintf(gb2->name,"%s #%d",gb_start->name,gb_count);
+        gb2->name = g_strdup_printf ("%s #%d", gb_start->name, gb_count);
       }
       else
       {
@@ -278,6 +277,22 @@ load_brush(char *filename)
 	}
     }
 
+  /*  Sanity check the header: brushes are 8-bit grayscale masks, and
+   *  the name (which follows the header) must have a sane length.
+   */
+  if (header.width == 0 || header.width > GBRUSH_MAX_SIZE ||
+      header.height == 0 || header.height > GBRUSH_MAX_SIZE ||
+      (guint64) header.width * header.height > G_MAXINT ||
+      header.bytes != 1 ||
+      header.header_size < sz_BrushHeader ||
+      header.header_size - sz_BrushHeader > GBRUSH_MAX_NAME)
+    {
+      g_message ("Invalid header data in GIMP brush file \"%s\"", filename);
+      fclose (fp);
+      free_brush (brush);
+      return;
+    }
+
   /*  Get a new brush mask  */
   brush->mask = temp_buf_new (header.width, header.height, header.bytes, 0, 0, NULL);
   brush->spacing = header.spacing;
@@ -285,7 +300,7 @@ load_brush(char *filename)
   /*  Read in the brush name  */
   if ((bn_size = (header.header_size - sz_BrushHeader)))
     {
-      brush->name = (char *) g_malloc (sizeof (char) * bn_size);
+      brush->name = (char *) g_malloc0 (sizeof (char) * (bn_size + 1));
       if ((fread (brush->name, 1, bn_size, fp)) < bn_size)
 	{
 	  g_message ("Error in GIMP brush file...aborting.");
@@ -293,15 +308,24 @@ load_brush(char *filename)
 	  free_brush (brush);
 	  return;
 	}
+      /* the stored name should be terminated, but don't rely on it */
+      brush->name[bn_size] = '\0';
     }
   else
     brush->name = g_strdup ("Unnamed");
 
   /*  Read the brush mask data  */
   /*  Read the image data  */
-  if ((fread (temp_buf_data (brush->mask), 1, header.width * header.height, fp)) <
-      header.width * header.height)
-    g_message ("GIMP brush file appears to be truncated.");
+  {
+    size_t n = header.width * header.height;
+    size_t got = fread (temp_buf_data (brush->mask), 1, n, fp);
+
+    if (got < n)
+      {
+	g_message ("GIMP brush file appears to be truncated.");
+	memset (temp_buf_data (brush->mask) + got, 0, n - got);
+      }
+  }
 
   /*  Clean up  */
   fclose (fp);
@@ -314,7 +338,7 @@ load_brush(char *filename)
 
   /* Check if the current brush is the default one */
 
-  if (strcmp(default_brush, prune_filename(filename)) == 0) {
+  if (default_brush && strcmp(default_brush, prune_filename(filename)) == 0) {
 	  active_brush = brush;
 	  have_default_brush = 1;
   } /* if */

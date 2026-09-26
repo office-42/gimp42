@@ -99,6 +99,9 @@ typedef struct
 
 #define SAVE_COMMENT_STRING "# CREATOR: The GIMP's PNM Filter Version 1.0\n"
 
+/* Largest width or height accepted when loading */
+#define PNM_MAX_DIMENSION 262144
+
 /* Declare some local functions.
  */
 static void   query      (void);
@@ -360,7 +363,7 @@ load_image (char *filename)
     }
 
   /* allocate the necessary structures */
-  pnminfo = (PNMInfo *) g_malloc(sizeof(PNMInfo));
+  pnminfo = g_new0 (PNMInfo, 1);
   if (!pnminfo)
     {
       close (fd);
@@ -408,14 +411,16 @@ load_image (char *filename)
   CHECK_FOR_ERROR(pnmscanner_eof(scan), pnminfo->jmpbuf,
 		  "pnm filter: premature end of file\n");
   pnminfo->xres = isdigit(*buf)?atoi(buf):0;
-  CHECK_FOR_ERROR(pnminfo->xres<=0, pnminfo->jmpbuf,
+  CHECK_FOR_ERROR((pnminfo->xres<=0 || pnminfo->xres>PNM_MAX_DIMENSION),
+		  pnminfo->jmpbuf,
 		  "pnm filter: invalid xres while loading\n");
 
   pnmscanner_gettoken(scan, buf, BUFLEN);
   CHECK_FOR_ERROR(pnmscanner_eof(scan), pnminfo->jmpbuf,
 		  "pnm filter: premature end of file\n");
   pnminfo->yres = isdigit(*buf)?atoi(buf):0;
-  CHECK_FOR_ERROR(pnminfo->yres<=0, pnminfo->jmpbuf,
+  CHECK_FOR_ERROR((pnminfo->yres<=0 || pnminfo->yres>PNM_MAX_DIMENSION),
+		  pnminfo->jmpbuf,
 		  "pnm filter: invalid yres while loading\n");
 
   if (pnminfo->np != 0)		/* pbm's don't have a maxval field */
@@ -506,8 +511,13 @@ pnm_load_ascii (PNMScanner *scan,
 		    d[b] = (*buf=='0')?0xff:0x00;
 		    break;
 		  default:
-		    d[b] = (unsigned char)(255.0*(((double)(isdigit(*buf)?atoi(buf):0))
-						  / (double)(info->maxval)));
+		    {
+		      /* Clamp out-of-range samples to avoid an undefined
+		       * double to unsigned char conversion */
+		      double v = 255.0*(((double)(isdigit(*buf)?atoi(buf):0))
+					/ (double)(info->maxval));
+		      d[b] = (unsigned char) CLAMP (v, 0.0, 255.0);
+		    }
 		  }
 	      }
 
@@ -554,7 +564,8 @@ pnm_load_raw (PNMScanner *scan,
 	  if (info->maxval != 255)	/* Normalize if needed */
 	    {
 	      for (x = 0; x < info->xres * info->np; x++)
-		d[x] = (unsigned char)(255.0*(double)(d[x]) / (double)(info->maxval));
+		d[x] = (d[x] >= info->maxval) ? 255 :
+		  (unsigned char)(255.0*(double)(d[x]) / (double)(info->maxval));
 	    }
 
 	  d += info->xres * info->np;
@@ -713,7 +724,9 @@ save_image (char   *filename,
   gimp_pixel_rgn_init (&pixel_rgn, drawable, 0, 0, drawable->width, drawable->height, FALSE, FALSE);
 
   /*  Make sure we're not saving an image with an alpha channel  */
-  if (gimp_drawable_has_alpha (drawable_ID))
+  if (gimp_drawable_has_alpha (drawable_ID) ||
+      (drawable_type != GRAY_IMAGE && drawable_type != RGB_IMAGE &&
+       drawable_type != INDEXED_IMAGE))
     {
       /* gimp_message ("PNM save cannot handle images with alpha channels.");  */
       return FALSE;
@@ -760,7 +773,7 @@ save_image (char   *filename,
 	  saverow = pnmsaverow_ascii_indexed;
 	}
     }
-  else if (psvals.raw == TRUE)
+  else
     {
       if (drawable_type == GRAY_IMAGE)
 	{
@@ -793,7 +806,10 @@ save_image (char   *filename,
 
       cmap = gimp_image_get_cmap (image_ID, &colors);
 
-      for (i = 0; i < colors; i++)
+      memset (red, 0, sizeof (red));
+      memset (grn, 0, sizeof (grn));
+      memset (blu, 0, sizeof (blu));
+      for (i = 0; i < colors && i < 256; i++)
 	{
 	  red[i] = *cmap++;
 	  grn[i] = *cmap++;
@@ -924,7 +940,7 @@ pnmscanner_create (int fd)
   if (!s) return(NULL);
   s->fd = fd;
   s->inbuf = 0;
-  s->eof = !read(s->fd, &(s->cur), 1);
+  s->eof = (read(s->fd, &(s->cur), 1) != 1);
   return(s);
 }
 
@@ -962,7 +978,9 @@ pnmscanner_gettoken (PNMScanner *s,
   int ctr=0;
 
   pnmscanner_eatwhitespace(s);
-  while (!(s->eof) && !isspace(s->cur) && (s->cur != '#') && (ctr<bufsize))
+  /* leave room for the terminating NUL */
+  while (!(s->eof) && !isspace((unsigned char) s->cur) && (s->cur != '#')
+	 && (ctr < bufsize - 1))
     {
       buf[ctr++] = s->cur;
       pnmscanner_getchar(s);
@@ -978,6 +996,12 @@ pnmscanner_getchar (PNMScanner *s)
 {
   if (s->inbuf)
     {
+      if (s->inbufpos >= s->inbufvalidsize)
+	{
+	  /* short or failed read: nothing valid left in the buffer */
+	  s->eof = 1;
+	  return;
+	}
       s->cur = s->inbuf[s->inbufpos++];
       if (s->inbufpos >= s->inbufvalidsize)
 	{
@@ -989,7 +1013,7 @@ pnmscanner_getchar (PNMScanner *s)
 	}
     }
   else
-    s->eof = !read(s->fd, &(s->cur), 1);
+    s->eof = (read(s->fd, &(s->cur), 1) != 1);
 }
 
 /* pnmscanner_eatwhitespace ---

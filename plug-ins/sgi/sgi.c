@@ -221,7 +221,10 @@ run(char   *name,		/* I - Name of filter program. */
       values[1].data.d_image = image_ID;
     }
     else
+    {
+      *nreturn_vals = 1;
       values[0].data.d_status = STATUS_EXECUTION_ERROR;
+    };
   }
   else if (strcmp (name, "file_sgi_save") == 0)
   {
@@ -324,9 +327,9 @@ load_image(char *filename)	/* I - File to load */
   };
 
   if (strrchr(filename, '/') != NULL)
-    sprintf(progress, "Loading %s:", strrchr(filename, '/') + 1);
+    g_snprintf(progress, sizeof(progress), "Loading %s:", strrchr(filename, '/') + 1);
   else
-    sprintf(progress, "Loading %s:", filename);
+    g_snprintf(progress, sizeof(progress), "Loading %s:", filename);
 
   gimp_progress_init(progress);
 
@@ -336,6 +339,11 @@ load_image(char *filename)	/* I - File to load */
 
   switch (sgip->zsize)
   {
+    default :	/* Unsupported number of channels */
+        g_print("unsupported number of channels (%d)\n", sgip->zsize);
+        sgiClose(sgip);
+        return (-1);
+
     case 1 :	/* Grayscale */
         image_type = GRAY;
         layer_type = GRAY_IMAGE;
@@ -395,7 +403,7 @@ load_image(char *filename)	/* I - File to load */
     pixels[i] = pixel + sgip->xsize * sgip->zsize * i;
 
   rows    = g_new(unsigned short *, sgip->zsize);
-  rows[0] = g_new(unsigned short, sgip->xsize * sgip->zsize);
+  rows[0] = g_new0(unsigned short, sgip->xsize * sgip->zsize);
 
   for (i = 1; i < sgip->zsize; i ++)
     rows[i] = rows[0] + i * sgip->xsize;
@@ -521,6 +529,19 @@ save_image(char   *filename,	/* I - File to save to */
     case RGBA_IMAGE :
         zsize = 4;
         break;
+    default :
+        return (0);
+  };
+
+ /*
+  * The SGI header stores dimensions as 16-bit values; larger images
+  * would be truncated and overflow the row buffers below.
+  */
+
+  if (drawable->width > 65535 || drawable->height > 65535)
+  {
+    g_print("image too large for SGI format\n");
+    return (0);
   };
 
  /*
@@ -536,9 +557,9 @@ save_image(char   *filename,	/* I - File to save to */
   };
 
   if (strrchr(filename, '/') != NULL)
-    sprintf(progress, "Saving %s:", strrchr(filename, '/') + 1);
+    g_snprintf(progress, sizeof(progress), "Saving %s:", strrchr(filename, '/') + 1);
   else
-    sprintf(progress, "Saving %s:", filename);
+    g_snprintf(progress, sizeof(progress), "Saving %s:", filename);
 
   gimp_progress_init(progress);
 

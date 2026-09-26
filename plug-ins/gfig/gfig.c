@@ -906,17 +906,27 @@ plug_in_parse_gfig_path()
 void
 gfig_name_encode (gchar *dest, gchar *src)
 {
+  /* at most MAX_LOAD_LINE - 1 output bytes (plus the terminator) */
   int	cnt = MAX_LOAD_LINE - 1;
 
-  while (*src && cnt--)
+  while (*src && cnt > 0)
     {
-      if (iscntrl (*src) || isspace (*src) || *src == '\\')
+      guchar c = (guchar) *src;
+
+      if (iscntrl (c) || isspace (c) || c == '\\')
 	{
-	  sprintf (dest, "\\%03o", *src++);
+	  if (cnt < 4)
+	    break;
+	  g_snprintf (dest, 5, "\\%03o", c);
 	  dest += 4;
+	  cnt -= 4;
+	  src++;
 	}
       else
-	*dest++ = *src++;
+	{
+	  *dest++ = *src++;
+	  cnt--;
+	}
     }
   *dest = '\0';
 }
@@ -1116,6 +1126,38 @@ gfig_new(void)
   return(new);
 }
 
+/* The drawing code dereferences a fixed number of points for most
+ * object types; make sure objects loaded from a file have them. */
+static gint
+gfig_obj_has_enough_points(DOBJECT *obj)
+{
+  gint needed;
+  gint count = 0;
+  DOBJPOINTS *pnt;
+
+  switch(obj->type)
+    {
+    case CIRCLE:
+    case ELLIPSE:
+    case POLY:
+    case SPIRAL:
+      needed = 2;
+      break;
+    case ARC:
+    case STAR:
+      needed = 3;
+      break;
+    default:
+      needed = 1;
+      break;
+    }
+
+  for(pnt = obj->points; pnt && count < needed; pnt = pnt->next)
+    count++;
+
+  return(count >= needed);
+}
+
 void
 gfig_load_objs(GFIGOBJ *gfig,gint load_count,FILE *fp)
 {
@@ -1128,8 +1170,9 @@ gfig_load_objs(GFIGOBJ *gfig,gint load_count,FILE *fp)
   while(load_count-- > 0)
     {
       obj = NULL;
-      get_line(load_buf,MAX_LOAD_LINE,fp,0);
-      
+      if(!get_line(load_buf,MAX_LOAD_LINE,fp,0))
+	break; /* EOF - the object count check will catch it */
+
       if(!strcmp(load_buf,"<LINE>"))
 	{
 	  obj = d_load_line(fp);
@@ -1167,6 +1210,13 @@ gfig_load_objs(GFIGOBJ *gfig,gint load_count,FILE *fp)
 	  g_warning("Unknown obj type file %s line %d\n",gfig->filename,line_no);
 	}
       
+      if(obj && !gfig_obj_has_enough_points(obj))
+	{
+	  g_warning("Too few points for object in file %s line %d\n",
+		    gfig->filename,line_no);
+	  obj = NULL;
+	}
+
       if(obj)
 	{
 	  add_to_all_obj(gfig,obj);
@@ -1214,12 +1264,14 @@ gfig_load (gchar *filename, gchar *name)
   if(strncmp(GFIG_HEADER,load_buf,strlen(load_buf)))
     {
       gchar err[256];
-      sprintf(err,"File '%s' is not a gfig file",gfig->filename);
+      g_snprintf(err,sizeof(err),"File '%s' is not a gfig file",gfig->filename);
+      fclose(fp);
       create_warn_dialog(err);
       return(NULL);
     }
   
   get_line(load_buf,MAX_LOAD_LINE,fp,0);
+  str_buf[0] = 0;
   sscanf(load_buf,"Name: %100s",str_buf);
   gfig_name_decode(load_buf,str_buf);
   gfig->draw_name = g_strdup(load_buf);
@@ -1234,7 +1286,8 @@ gfig_load (gchar *filename, gchar *name)
     {
       /* waste some mem */
       gchar err[256];
-      sprintf(err,
+      fclose(fp);
+      g_snprintf(err,sizeof(err),
 	      "File '%s' corrupt file - Line %d Option section incorrect",
 	      filename,
 	      line_no);
@@ -1254,7 +1307,8 @@ gfig_load (gchar *filename, gchar *name)
     {
       /* waste some mem */
       gchar err[256];
-      sprintf(err,"File '%s' corrupt file - Line %d Object count to small",
+      fclose(fp);
+      g_snprintf(err,sizeof(err),"File '%s' corrupt file - Line %d Object count to small",
 	      filename,
 	      line_no);
       create_warn_dialog(err);
@@ -1403,6 +1457,7 @@ load_options(GFIGOBJ *gfig,FILE *fp)
   while(strcmp(load_buf,"</OPTIONS>"))
     {
       /* Get option name */
+      str_buf[0] = opt_buf[0] = 0;
 #ifdef DEBUG
       printf("num = %d\n",sscanf(load_buf,"%s %s",str_buf,opt_buf));
 
@@ -1457,7 +1512,8 @@ load_options(GFIGOBJ *gfig,FILE *fp)
 	    return(-1);
 	}
 
-      get_line(load_buf,MAX_LOAD_LINE,fp,0);
+      if(!get_line(load_buf,MAX_LOAD_LINE,fp,0))
+	return(-1); /* EOF inside the option section */
 #ifdef DEBUG
       printf("opt line '%s'\n",load_buf);
 #endif /* DEBUG */
@@ -6797,7 +6853,14 @@ get_line(gchar *buf,gint s,FILE * from,gint init)
   do
     {
       ret = fgets(buf,s,from);
-    } while(!ferror(from) && buf[0] == '#');
+    } while(ret && !ferror(from) && buf[0] == '#');
+
+  if(!ret)
+    {
+      /* EOF or error: don't hand back stale data */
+      buf[0] = 0;
+      return(NULL);
+    }
 
   slen = strlen(buf);
 
@@ -8680,6 +8743,12 @@ d_load_poly(FILE *from)
 			    line_no);
 		  return(NULL);
 		}
+	      if(nsides < 3 || nsides > 200)
+		{
+		  g_warning("[%d] Invalid value while loading poly",
+			    line_no);
+		  return(NULL);
+		}
 	      new_obj->type_data = GINT_TO_POINTER(nsides);
 	      get_line(buf,MAX_LOAD_LINE,from,0);
 	      if(strcmp("</EXTRA>",buf))
@@ -10151,6 +10220,12 @@ d_load_star(FILE *from)
 			    line_no);
 		  return(NULL);
 		}
+	      if(nsides < 3 || nsides > 200)
+		{
+		  g_warning("[%d] Invalid value while loading star",
+			    line_no);
+		  return(NULL);
+		}
 	      new_obj->type_data = GINT_TO_POINTER(nsides);
 	      get_line(buf,MAX_LOAD_LINE,from,0);
 	      if(strcmp("</EXTRA>",buf))
@@ -10717,6 +10792,12 @@ d_load_spiral(FILE *from)
 	      if(sscanf(buf,"%d",&nsides) != 1)
 		{
 		  g_warning("[%d] Internal load error while loading spiral (extra area scanf)",
+			    line_no);
+		  return(NULL);
+		}
+	      if(nsides == 0 || nsides < -20 || nsides > 20)
+		{
+		  g_warning("[%d] Invalid value while loading spiral",
 			    line_no);
 		  return(NULL);
 		}

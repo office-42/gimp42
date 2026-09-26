@@ -256,6 +256,14 @@ static gint32 load_image (char *filename) {
  
 	/* Now there's just raw data left. */
 
+	/* Reject absurd sizes before multiplying them */
+	if (ph.width == 0 || ph.width > 262144 ||
+			ph.height == 0 || ph.height > 262144 ||
+			ph.bytes == 0 || ph.bytes > 4) {
+		close(fd);
+		return -1;
+	}
+
  	 /*
 	  * Create a new image of the proper size and 
           * associate the filename with it.
@@ -275,7 +283,7 @@ static gint32 load_image (char *filename) {
 	buffer = g_malloc(ph.width * ph.bytes);
 
 	for (line = 0; line < ph.height; line++) {
-		if (read(fd, buffer, ph.width * ph.bytes) != ph.width * ph.bytes) {
+		if (read(fd, buffer, ph.width * ph.bytes) != (int) (ph.width * ph.bytes)) {
 			close(fd);
 			g_free(buffer);
 			return -1;
@@ -283,6 +291,9 @@ static gint32 load_image (char *filename) {
 		gimp_pixel_rgn_set_row(&pixel_rgn, (guchar *)buffer, 0, line, ph.width);
 		gimp_progress_update((double) line / (double) ph.height);
 	}
+
+	g_free(buffer);
+	close(fd);
 
 	gimp_drawable_flush(drawable);
 

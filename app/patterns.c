@@ -36,6 +36,10 @@
 #include "gimprc.h"
 #include "menus.h"
 
+/*  sanity limits for pattern files  */
+#define GPATTERN_MAX_SIZE  262144   /*  max width or height of a pattern  */
+#define GPATTERN_MAX_NAME  65536    /*  max length of a pattern name      */
+
 
 /*  global variables  */
 GPatternP           active_pattern = NULL;
@@ -207,13 +211,27 @@ load_pattern (char *filename)
       return;
     }
 
+  /*  Sanity check the header before trusting any sizes in it  */
+  if (header.width == 0 || header.width > GPATTERN_MAX_SIZE ||
+      header.height == 0 || header.height > GPATTERN_MAX_SIZE ||
+      header.bytes < 1 || header.bytes > 4 ||
+      (guint64) header.width * header.height * header.bytes > G_MAXINT ||
+      header.header_size < sz_PatternHeader ||
+      header.header_size - sz_PatternHeader > GPATTERN_MAX_NAME)
+    {
+      g_message ("Invalid header data in GIMP pattern file \"%s\"", filename);
+      fclose (fp);
+      free_pattern (pattern);
+      return;
+    }
+
   /*  Get a new pattern mask  */
   pattern->mask = temp_buf_new (header.width, header.height, header.bytes, 0, 0, NULL);
 
   /*  Read in the pattern name  */
   if ((bn_size = (header.header_size - sz_PatternHeader)))
     {
-      pattern->name = (char *) g_malloc (sizeof (char) * bn_size);
+      pattern->name = (char *) g_malloc0 (sizeof (char) * (bn_size + 1));
       if ((fread (pattern->name, 1, bn_size, fp)) < bn_size)
 	{
 	  g_message ("Error in GIMP pattern file...aborting.");
@@ -221,16 +239,24 @@ load_pattern (char *filename)
 	  free_pattern (pattern);
 	  return;
 	}
+      /* the stored name should be terminated, but don't rely on it */
+      pattern->name[bn_size] = '\0';
     }
   else
     pattern->name = g_strdup ("Unnamed");
 
   /*  Read the pattern mask data  */
   /*  Read the image data  */
-  if ((fread (temp_buf_data (pattern->mask), 1,
-	      header.width * header.height * header.bytes, fp)) <
-      header.width * header.height * header.bytes)
-    g_message ("GIMP pattern file appears to be truncated.");
+  {
+    size_t n = (size_t) header.width * header.height * header.bytes;
+    size_t got = fread (temp_buf_data (pattern->mask), 1, n, fp);
+
+    if (got < n)
+      {
+	g_message ("GIMP pattern file appears to be truncated.");
+	memset (temp_buf_data (pattern->mask) + got, 0, n - got);
+      }
+  }
 
   /*  Clean up  */
   fclose (fp);
@@ -241,7 +267,7 @@ load_pattern (char *filename)
 
   /* Check if the current pattern is the default one */
 
-  if (strcmp(default_pattern, prune_filename(filename)) == 0) {
+  if (default_pattern && strcmp(default_pattern, prune_filename(filename)) == 0) {
 	  active_pattern = pattern;
 	  have_default_pattern = 1;
   } /* if */

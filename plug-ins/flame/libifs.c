@@ -65,7 +65,8 @@ void iterate(cp, n, fuse, points)
    t = cp->xform[0].density;
    r = 0.0;
    for (i = 0; i < CHOOSE_XFORM_GRAIN; i++) {
-      while (r >= t) {
+      /* bounded: densities from a loaded file may be zero or negative */
+      while (r >= t && j < NXFORMS - 1) {
 	 j++;
 	 t += cp->xform[j].density;
       }
@@ -660,6 +661,9 @@ void interpolate(cps, ncps, time, result)
  * split a string passed in ss into tokens on whitespace.
  * # comments to end of line.  ; terminates the record
  */
+/* argv[] must have room for MAXARGS entries; extra tokens are ignored */
+#define MAXARGS 1000
+
 void tokenize(ss, argv, argc)
    char **ss;
    char *argv[];
@@ -668,19 +672,20 @@ void tokenize(ss, argv, argc)
    char *s = *ss;
    int i = 0, state = 0;
 
-   while (*s != ';') {
+   /* stop at the end of the string too, not only at ';' */
+   while (*s && *s != ';') {
       char c = *s;
       switch (state) {
        case 0:
 	 if ('#' == c)
 	    state = 2;
-	 else if (!isspace(c)) {
-	    argv[i] = s;
-	    i++;
+	 else if (!isspace((unsigned char) c)) {
+	    if (i < MAXARGS)
+	       argv[i++] = s;
 	    state = 1;
 	 }
        case 1:
-	 if (isspace(c)) {
+	 if (isspace((unsigned char) c)) {
 	    *s = 0;
 	    state = 0;
 	 }
@@ -690,8 +695,11 @@ void tokenize(ss, argv, argc)
       }
       s++;
    }
-   *s = 0;
-   *ss = s+1;
+   if (*s) {
+      *s = 0;
+      *ss = s+1;
+   } else
+      *ss = s;
    *argc = i;
 }
 
@@ -717,7 +725,6 @@ int compare_xforms(a, b)
    return 0;
 }
 
-#define MAXARGS 1000
 #define streql(x,y) (!strcmp(x,y))
 
 /*
@@ -736,6 +743,7 @@ void parse_control_point(ss, cp)
    int set_spatial_oversample = 0;
    double *slot = NULL, xf = 0.0, cm, t, nbatches, white_level, spatial_oversample, cmap_inter;
    double image_size[2];
+   int nslots = 0;
 
    for (i = 0; i < NXFORMS; i++) {
       cp->xform[i].density = 0.0;
@@ -759,59 +767,67 @@ void parse_control_point(ss, cp)
    
    tokenize(ss, argv, &argc);
    for (i = 0; i < argc; i++) {
-      if (streql("xform", argv[i]))
-	 slot = &xf;
-      else if (streql("time", argv[i]))
-	 slot = &cp->time;
-      else if (streql("brightness", argv[i]))
-	 slot = &cp->brightness;
-      else if (streql("contrast", argv[i]))
-	 slot = &cp->contrast;
-      else if (streql("gamma", argv[i]))
-	 slot = &cp->gamma;
-      else if (streql("zoom", argv[i]))
-	 slot = &cp->zoom;
-      else if (streql("image_size", argv[i])) {
-	 slot = image_size;
+      /* the xform index comes from the file: make sure it is in range */
+      int xi = (int) xf;
+      int xf_ok = (xf >= 0.0 && xi < NXFORMS);
+
+      if (streql("xform", argv[i])) {
+	 slot = &xf; nslots = 1;
+      } else if (streql("time", argv[i])) {
+	 slot = &cp->time; nslots = 1;
+      } else if (streql("brightness", argv[i])) {
+	 slot = &cp->brightness; nslots = 1;
+      } else if (streql("contrast", argv[i])) {
+	 slot = &cp->contrast; nslots = 1;
+      } else if (streql("gamma", argv[i])) {
+	 slot = &cp->gamma; nslots = 1;
+      } else if (streql("zoom", argv[i])) {
+	 slot = &cp->zoom; nslots = 1;
+      } else if (streql("image_size", argv[i])) {
+	 slot = image_size; nslots = 2;
 	 set_image_size = 1;
-      } else if (streql("center", argv[i]))
-	 slot = cp->center;
-      else if (streql("pulse", argv[i]))
-	 slot = (double *) cp->pulse;
-      else if (streql("wiggle", argv[i]))
-	 slot = (double *) cp->wiggle;
-      else if (streql("pixels_per_unit", argv[i]))
-	 slot = &cp->pixels_per_unit;
-      else if (streql("spatial_filter_radius", argv[i]))
-	 slot = &cp->spatial_filter_radius;
-      else if (streql("sample_density", argv[i]))
-	 slot = &cp->sample_density;
-      else if (streql("nbatches", argv[i])) {
-	 slot = &nbatches;
+      } else if (streql("center", argv[i])) {
+	 slot = cp->center; nslots = 2;
+      } else if (streql("pulse", argv[i])) {
+	 slot = (double *) cp->pulse; nslots = 4;
+      } else if (streql("wiggle", argv[i])) {
+	 slot = (double *) cp->wiggle; nslots = 4;
+      } else if (streql("pixels_per_unit", argv[i])) {
+	 slot = &cp->pixels_per_unit; nslots = 1;
+      } else if (streql("spatial_filter_radius", argv[i])) {
+	 slot = &cp->spatial_filter_radius; nslots = 1;
+      } else if (streql("sample_density", argv[i])) {
+	 slot = &cp->sample_density; nslots = 1;
+      } else if (streql("nbatches", argv[i])) {
+	 slot = &nbatches; nslots = 1;
 	 set_nbatches = 1;
       } else if (streql("white_level", argv[i])) {
-	 slot = &white_level;
+	 slot = &white_level; nslots = 1;
 	 set_white_level = 1;
       } else if (streql("spatial_oversample", argv[i])) {
-	 slot = &spatial_oversample;
+	 slot = &spatial_oversample; nslots = 1;
 	 set_spatial_oversample = 1;
       } else if (streql("cmap", argv[i])) {
-	 slot = &cm;
+	 slot = &cm; nslots = 1;
 	 set_cm = 1;
-      } else if (streql("density", argv[i]))
-	 slot = &cp->xform[(int)xf].density;
-      else if (streql("color", argv[i]))
-	 slot = &cp->xform[(int)xf].color;
-      else if (streql("coefs", argv[i])) {
-	 slot = cp->xform[(int)xf].c[0];
-	 cp->xform[(int)xf].density = 1.0;
-       } else if (streql("var", argv[i]))
-	 slot = cp->xform[(int)xf].var;
-      else if (streql("cmap_inter", argv[i])) {
-	slot = &cmap_inter;
+      } else if (streql("density", argv[i])) {
+	 slot = xf_ok ? &cp->xform[xi].density : NULL; nslots = 1;
+      } else if (streql("color", argv[i])) {
+	 slot = xf_ok ? &cp->xform[xi].color : NULL; nslots = 1;
+      } else if (streql("coefs", argv[i])) {
+	 slot = xf_ok ? cp->xform[xi].c[0] : NULL; nslots = 6;
+	 if (xf_ok)
+	    cp->xform[xi].density = 1.0;
+      } else if (streql("var", argv[i])) {
+	 slot = xf_ok ? cp->xform[xi].var : NULL; nslots = NVARS;
+      } else if (streql("cmap_inter", argv[i])) {
+	slot = &cmap_inter; nslots = 1;
 	set_cmap_inter = 1;
       } else
-	 if (slot) *slot++ = atof(argv[i]);
+	 if (slot && nslots > 0) {
+	    *slot++ = atof(argv[i]);
+	    nslots--;
+	 }
    }
    if (set_cm) {
       cp->cmap_index = (int) cm;

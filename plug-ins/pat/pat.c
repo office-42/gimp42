@@ -163,7 +163,9 @@ run (char    *name,
 				if (nparams != 6)
 					status = STATUS_CALLING_ERROR;
 		      else
-					 strcpy(description, param[5].data.d_string);
+					 g_strlcpy(description, param[5].data.d_string,
+						   sizeof(description));
+				break;
 			case RUN_WITH_LAST_VALS:
 				gimp_get_data ("file_pat_save", description);
 				break;
@@ -225,6 +227,14 @@ static gint32 load_image (char *filename) {
 	}
 
 	/* Now there's just raw data left. */
+
+	/* Reject absurd sizes before multiplying them */
+	if (ph.width == 0 || ph.width > 262144 ||
+			ph.height == 0 || ph.height > 262144 ||
+			ph.bytes == 0 || ph.bytes > 4) {
+		close(fd);
+		return -1;
+	}
 
   /*
 	 * Create a new image of the proper size and associate the filename with it.

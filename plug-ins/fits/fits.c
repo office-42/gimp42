@@ -38,6 +38,9 @@ static char ident[] = "@(#) GIMP FITS file-plugin v1.05  20-Dec-97";
 #include "libgimp/gimpui.h"
 #include "fitsrw.h"
 
+/* Largest width or height accepted when loading */
+#define FITS_MAX_DIMENSION 262144
+
 /* Load info */
 typedef struct
 {
@@ -538,6 +541,14 @@ load_fits (char *filename,
  width = hdulist->naxisn[0];  /* Set the size of the FITS image */
  height = hdulist->naxisn[1];
 
+ /* Reject absurd sizes; the tile buffer below is sized from them */
+ if ((width < 1) || (width > FITS_MAX_DIMENSION) ||
+     (height < 1) || (height > FITS_MAX_DIMENSION))
+ {
+   show_message ("invalid image dimensions");
+   return (-1);
+ }
+
  if (ncompose == 2) { itype = GRAY; dtype = GRAYA_IMAGE; }
  else if (ncompose == 3) { itype = RGB; dtype = RGB_IMAGE; }
  else if (ncompose == 4) { itype = RGB; dtype = RGBA_IMAGE; }
@@ -758,8 +769,9 @@ save_direct  (FITS_FILE *ofp,
   tile_height = gimp_tile_height ();
   gimp_pixel_rgn_init (&pixel_rgn, drawable, 0, 0, width, height, FALSE, FALSE);
 
-  /* allocate a buffer for retrieving information from the pixel region  */
-  src = data = (unsigned char *)g_malloc (width * height * bpp);
+  /* allocate a buffer for retrieving information from the pixel region.
+     Only one row of tiles is fetched at a time; gsize avoids overflow. */
+  src = data = (unsigned char *)g_malloc ((gsize) tile_height * width * bpp);
 
   hdu = create_fits_header (ofp, width, height, bpp);
   if (hdu == NULL) return (FALSE);
@@ -849,8 +861,9 @@ save_index (FITS_FILE *ofp,
   tile_height = gimp_tile_height ();
   gimp_pixel_rgn_init (&pixel_rgn, drawable, 0, 0, width, height, FALSE, FALSE);
 
-  /* allocate a buffer for retrieving information from the pixel region  */
-  src = data = (unsigned char *)g_malloc (width * height * bpp);
+  /* allocate a buffer for retrieving information from the pixel region.
+     Only one row of tiles is fetched at a time; gsize avoids overflow. */
+  src = data = (unsigned char *)g_malloc ((gsize) tile_height * width * bpp);
 
   cmapptr = cmap = gimp_image_get_cmap (image_ID, &ncols);
   if (ncols > sizeof (red)) ncols = sizeof (red);

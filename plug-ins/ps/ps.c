@@ -737,7 +737,7 @@ static char *ftoa (char *format,
 {static char buffer[32];
  register int n;
 
- sprintf (buffer, format, r);
+ g_snprintf (buffer, sizeof (buffer), format, r);
  n = strlen (buffer)-1;
  while ((n >= 0) && (buffer[n] == ' '))
    buffer[n--] = '\0';
@@ -936,7 +936,7 @@ ps_open (char *filename,
          int *urx,
          int *ury)
 
-{gchar *gs, *driver, *output, *resopt;
+{gchar *gs, *driver, *output, *resopt, *infile;
  const char *gs_opts;
  GPtrArray *argv;
  GSubprocess *proc;
@@ -991,11 +991,11 @@ ps_open (char *filename,
    return (NULL);
  }
 
- gs_opts = g_getenv ("GS_OPTIONS");
- if (gs_opts == NULL)
-   gs_opts = "-dSAFER";
- else
-   gs_opts = NULL;  /* Ghostscript will add these options */
+ /* A PostScript file is a program: without -dSAFER it can read, write */
+ /* and delete files, and run commands through %pipe%.  -dSAFER is     */
+ /* always given, whatever GS_OPTIONS (which Ghostscript reads itself) */
+ /* holds.                                                              */
+ gs_opts = "-dSAFER";
 
  /* Ghostscript renders into a temporary PNM-file that is read back */
  /* when it has finished. ps_close() removes it again.              */
@@ -1025,7 +1025,20 @@ ps_open (char *filename,
 
  driver = g_strdup_printf ("-sDEVICE=%s", driver);
  resopt = g_strdup_printf ("-r%d", resolution);
- output = g_strdup_printf ("-sOutputFile=%s", ps_pnmfile);
+ /* '%' in OutputFile is a page number format: double it */
+ {gchar **parts = g_strsplit (ps_pnmfile, "%", -1);
+  gchar *escaped = g_strjoinv ("%%", parts);
+
+   output = g_strdup_printf ("-sOutputFile=%s", escaped);
+   g_free (escaped);
+   g_strfreev (parts);
+ }
+ /* A file name starting with '-' or '@' would be taken as an option or */
+ /* a response file by Ghostscript.                                     */
+ if ((filename[0] == '-') || (filename[0] == '@'))
+   infile = g_build_filename (".", filename, NULL);
+ else
+   infile = g_strdup (filename);
 
  argv = g_ptr_array_new ();
  g_ptr_array_add (argv, gs);
@@ -1037,9 +1050,9 @@ ps_open (char *filename,
  g_ptr_array_add (argv, "-q");
  g_ptr_array_add (argv, "-dNOPAUSE");
  g_ptr_array_add (argv, "-dBATCH");
- if (gs_opts) g_ptr_array_add (argv, (gpointer) gs_opts);
+ g_ptr_array_add (argv, (gpointer) gs_opts);
  g_ptr_array_add (argv, output);
- g_ptr_array_add (argv, filename);
+ g_ptr_array_add (argv, infile);
  g_ptr_array_add (argv, "-c");
  g_ptr_array_add (argv, "quit");
  g_ptr_array_add (argv, NULL);
@@ -1061,6 +1074,7 @@ ps_open (char *filename,
  g_free (driver);
  g_free (resopt);
  g_free (output);
+ g_free (infile);
 
  ifp = NULL;
  if (proc == NULL)
@@ -1141,6 +1155,10 @@ read_pnmraw_type (FILE *ifp,
    if (line[0] != '#') break;
  }
  if (sscanf (line, "%d%d", width, height) != 2) return (-1);
+ /* The size comes from the document (a PDF MediaBox, say): keep the */
+ /* line buffers (width*3) and tile buffers free of overflow.        */
+ if ((*width <= 0) || (*height <= 0) || (*width > 65535) || (*height > 65535))
+   return (-1);
  *maxval = 255;
 
  if (pnmtype != 4)  /* Read maxval */

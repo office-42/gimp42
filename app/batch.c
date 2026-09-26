@@ -28,6 +28,14 @@ batch_init ()
   int i;
 
   eval_proc = procedural_db_lookup ("extension_script_fu_eval");
+  if (eval_proc &&
+      (eval_proc->num_args < 2 ||
+       eval_proc->args[0].arg_type != PDB_INT32 ||
+       eval_proc->args[1].arg_type != PDB_STRING))
+    {
+      /*  whatever installed itself under that name is not script-fu  */
+      eval_proc = NULL;
+    }
   if (!eval_proc)
     {
       g_message ("script-fu not available: batch mode disabled\n");
@@ -50,6 +58,7 @@ batch_init ()
 #else
 		channel = g_io_channel_unix_new (0);
 #endif
+		g_io_channel_set_encoding (channel, NULL, NULL);
 		g_io_add_watch (channel, G_IO_IN | G_IO_HUP, batch_read, NULL);
 	      }
 	      read_from_stdin = TRUE;
@@ -84,6 +93,12 @@ batch_run_cmd (char *cmd)
   args[1].value.pdb_pointer = cmd;
 
   vals = procedural_db_execute ("extension_script_fu_eval", args);
+  if (!vals)
+    {
+      g_print ("batch command: experienced an execution error.\n");
+      g_free (args);
+      return;
+    }
   switch (vals[0].value.pdb_int)
     {
     case PDB_EXECUTION_ERROR:
@@ -112,60 +127,55 @@ batch_read (GIOChannel   *channel,
 	    gpointer      data)
 {
   static GString *string;
-  char buf[32], *t;
+  char buf[32];
   gsize nread = 0;
-  int done;
+  gsize i;
 
   if (condition & (G_IO_IN | G_IO_HUP))
     {
       GIOStatus status;
 
       do {
-	status = g_io_channel_read_chars (channel, buf, sizeof (char) * 31,
+	status = g_io_channel_read_chars (channel, buf, sizeof (buf),
 					  &nread, NULL);
       } while (status == G_IO_STATUS_AGAIN);
-
-      if ((nread == 0) && (!string || (string->len == 0)))
-	{
-	  app_exit (FALSE);
-	  return G_SOURCE_REMOVE;
-	}
-
-      buf[nread] = '\0';
 
       if (!string)
 	string = g_string_new ("");
 
-      t = buf;
-      if (string->len == 0)
+      /*  one command per line; leading white space is skipped  */
+      for (i = 0; i < nread; i++)
 	{
-	  while (*t)
+	  if ((buf[i] == '\n') || (buf[i] == '\r'))
 	    {
-	      if (isspace (*t))
-		t++;
-	      else
-		break;
+	      if (string->len > 0)
+		{
+		  batch_run_cmd (string->str);
+		  g_string_truncate (string, 0);
+		}
+	    }
+	  else if (buf[i] == '\0' ||
+		   (string->len == 0 && isspace ((guchar) buf[i])))
+	    {
+	      /*  skip  */
+	    }
+	  else
+	    {
+	      g_string_append_c (string, buf[i]);
 	    }
 	}
 
-      g_string_append (string, t);
-
-      done = FALSE;
-
-      while (*t)
+      if (nread == 0 || status == G_IO_STATUS_EOF ||
+	  status == G_IO_STATUS_ERROR)
 	{
-	  if ((*t == '\n') || (*t == '\r'))
+	  /*  run what is left of an unterminated last line, then stop  */
+	  if (string->len > 0)
 	    {
-	      *t = '\0';
-	      done = TRUE;
+	      batch_run_cmd (string->str);
+	      g_string_truncate (string, 0);
 	    }
-	  t++;
-	}
-
-      if (done)
-	{
-	  batch_run_cmd (string->str);
-	  g_string_truncate (string, 0);
+	  app_exit (FALSE);
+	  return G_SOURCE_REMOVE;
 	}
     }
 

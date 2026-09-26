@@ -165,6 +165,12 @@ static void add_gimp_directory_token (char *gimp_dir);
 static char* open_backup_file (char *filename, FILE **fp_new, FILE **fp_old);
 
 static ParseInfo parse_info;
+static int transform_depth = 0;  /* nesting of ${token} expansion */
+
+/*  sanity limit on the number of arguments / return values of a
+ *  procedure described in pluginrc
+ */
+#define PLUG_IN_RC_MAX_ARGS 10000
 
 static GList *unknown_tokens = NULL;
 
@@ -348,8 +354,11 @@ parse_gimprc ()
   char *filename;
   char *gimp_dir;
 
-  parse_info.buffer = g_new (char, 4096);
-  parse_info.tokenbuf = parse_info.buffer + 2048;
+  /* the token buffer is separately allocated: get_token () grows it
+   * for long tokens
+   */
+  parse_info.buffer = g_new (char, 2048);
+  parse_info.tokenbuf = g_new (char, 2048);
   parse_info.buffer_size = 2048;
   parse_info.tokenbuf_size = 2048;
 
@@ -457,7 +466,7 @@ save_gimprc (GList **updated_options,
   error_msg = open_backup_file (name, &fp_new, &fp_old);
   if (error_msg != NULL)
     {
-      g_message (error_msg);
+      g_message ("%s", error_msg);
       return;
     }
 
@@ -467,11 +476,9 @@ save_gimprc (GList **updated_options,
   /* copy the old .gimprc into the new one, modifying it as needed */
   prev_line = NULL;
   cur_line = g_new (char, 1024);
-  while (!feof (fp_old))
+  while (fgets (cur_line, 1024, fp_old))
     {
-      if (!fgets (cur_line, 1024, fp_old))
-	continue;
-      
+
       /* special case: save lines starting with '#-' (added by GIMP) */
       if ((cur_line[0] == '#') && (cur_line[1] == '-'))
 	{
@@ -1255,6 +1262,11 @@ parse_proc_def (PlugInProcDef **proc_def)
     goto error;
   token = get_next_token ();
 
+  /* the counts come from the file: reject nonsense before using them
+   * as allocation sizes and loop bounds
+   */
+  if (token_int < 0 || token_int > PLUG_IN_RC_MAX_ARGS)
+    goto error;
   pd->db_info.num_args = token_int;
   pd->db_info.args = g_new0 (ProcArg, pd->db_info.num_args);
 
@@ -1263,10 +1275,13 @@ parse_proc_def (PlugInProcDef **proc_def)
     goto error;
   token = get_next_token ();
 
+  if (token_int < 0 || token_int > PLUG_IN_RC_MAX_ARGS)
+    goto error;
   pd->db_info.num_values = token_int;
   pd->db_info.values = NULL;
   if (pd->db_info.num_values > 0)
-    pd->db_info.values = g_new (ProcArg, pd->db_info.num_values);
+    /* zeroed: the error path frees the names of all entries */
+    pd->db_info.values = g_new0 (ProcArg, pd->db_info.num_values);
 
   for (i = 0; i < pd->db_info.num_args; i++)
     if (!parse_proc_arg (&pd->db_info.args[i]))
@@ -1340,6 +1355,9 @@ parse_proc_arg (ProcArg *arg)
     return ERROR;
   token = get_next_token ();
 
+  /* used as an index into tables of PDB types */
+  if (token_int < 0 || token_int >= PDB_END)
+    return ERROR;
   arg->arg_type = token_int;
 
   token = peek_next_token ();
@@ -1364,8 +1382,11 @@ parse_proc_arg (ProcArg *arg)
   return OK;
 
 error:
+  /* the caller frees the names of all args on error as well */
   g_free (arg->name);
   g_free (arg->description);
+  arg->name = NULL;
+  arg->description = NULL;
 
   return ERROR;
 }
@@ -1468,7 +1489,14 @@ transform_path (char *path,
 		  terminate("gimprc token referenced but not defined: %s", token);
 		}
 	    }
+	  /* guard against self-referencing tokens (${a} -> ${a}), which
+	   * would otherwise recurse until the stack overflows
+	   */
+	  if (transform_depth >= 32)
+	    terminate ("gimprc token references nest too deeply: %s", token);
+	  transform_depth++;
 	  tmp2 = transform_path (tmp2, FALSE);
+	  transform_depth--;
 	  if (is_env)
 	    {
 	      /* then add to list of unknown tokens */
@@ -1502,56 +1530,58 @@ transform_path (char *path,
   if ((length == strlen (path)) && !substituted)
     return path;
 
-  new_path = g_new (char, length + 1);
+  /* Build the result dynamically: a token's value may have been
+   * changed (re-transformed) since its length was counted above,
+   * so the length computed there cannot be trusted as a bound.
+   */
+  {
+    GString *str = g_string_sized_new (length + 1);
 
-  tmp = path;
-  tmp2 = new_path;
+    tmp = path;
 
-  while (*tmp)
-    {
-      if (*tmp == '~')
-	{
-	  *tmp2 = '\0';
-	  strcat (tmp2, home);
-	  tmp2 += strlen (home);
-	  tmp += 1;
-	}
-      else if (*tmp == '$')
-	{
-	  tmp += 1;
-	  if (!*tmp || (*tmp != '{'))
-	    {
-	      g_free (new_path);
-	      return path;
-	    }
-	  tmp += 1;
-
-	  token = tmp;
-	  while (*tmp && (*tmp != '}'))
+    while (*tmp)
+      {
+	if (*tmp == '~')
+	  {
+	    g_string_append (str, home);
+	    tmp += 1;
+	  }
+	else if (*tmp == '$')
+	  {
+	    tmp += 1;
+	    if (!*tmp || (*tmp != '{'))
+	      {
+		g_string_free (str, TRUE);
+		return path;
+	      }
 	    tmp += 1;
 
-	  if (!*tmp)
-	    {
-	      g_free (new_path);
-	      return path;
-	    }
+	    token = tmp;
+	    while (*tmp && (*tmp != '}'))
+	      tmp += 1;
 
-	  *tmp = '\0';
-	  token = gimprc_find_token (token);
-	  *tmp = '}';
+	    if (!*tmp)
+	      {
+		g_string_free (str, TRUE);
+		return path;
+	      }
 
-	  *tmp2 = '\0';
-	  strcat (tmp2, token);
-	  tmp2 += strlen (token);
-	  tmp += 1;
-	}
-      else
-	{
-	  *tmp2++ = *tmp++;
-	}
-    }
+	    *tmp = '\0';
+	    token = gimprc_find_token (token);
+	    *tmp = '}';
 
-  *tmp2 = '\0';
+	    if (token)
+	      g_string_append (str, token);
+	    tmp += 1;
+	  }
+	else
+	  {
+	    g_string_append_c (str, *tmp++);
+	  }
+      }
+
+    new_path = g_string_free (str, FALSE);
+  }
 
   if (destroy)
     g_free (path);
@@ -1657,8 +1687,7 @@ string_to_str (gpointer val1p,
 {
   char *str;
 
-  str = g_malloc (strlen (*((char **)val1p)) + 3);
-  sprintf (str, "%c%s%c", '"', *((char **)val1p), '"');
+  str = g_strdup_printf ("%c%s%c", '"', *((char **)val1p), '"');
   return str;
 }
 
@@ -1675,8 +1704,7 @@ double_to_str (gpointer val1p,
 {
   char *str;
 
-  str = g_malloc (20);
-  sprintf (str, "%f", *((double *)val1p));
+  str = g_strdup_printf ("%f", *((double *)val1p));
   return str;
 }
 
@@ -1686,8 +1714,7 @@ int_to_str (gpointer val1p,
 {
   char *str;
 
-  str = g_malloc (20);
-  sprintf (str, "%d", *((int *)val1p));
+  str = g_strdup_printf ("%d", *((int *)val1p));
   return str;
 }
 
@@ -1713,8 +1740,7 @@ position_to_str (gpointer val1p,
 {
   char *str;
 
-  str = g_malloc (40);
-  sprintf (str, "%d %d", *((int *)val1p), *((int *)val2p));
+  str = g_strdup_printf ("%d %d", *((int *)val1p), *((int *)val2p));
   return str;
 }
 
@@ -1726,13 +1752,12 @@ mem_size_to_str (gpointer val1p,
   char *str;
 
   size = *((int *)val1p);
-  str = g_malloc (20);
   if (size % 1048576 == 0)
-    sprintf (str, "%dM", size / 1048576);
+    str = g_strdup_printf ("%dM", size / 1048576);
   else if (size % 1024 == 0)
-    sprintf (str, "%dK", size / 1024);
+    str = g_strdup_printf ("%dK", size / 1024);
   else
-    sprintf (str, "%dB", size);
+    str = g_strdup_printf ("%dB", size);
   return str;
 }
 
@@ -1755,8 +1780,7 @@ color_cube_to_str (gpointer val1p,
 {
   char *str;
 
-  str = g_malloc (40);
-  sprintf (str, "%d %d %d  %d",
+  str = g_strdup_printf ("%d %d %d  %d",
 	   color_cube_shades[0], color_cube_shades[1],
 	   color_cube_shades[2], color_cube_shades[3]);
   return str;

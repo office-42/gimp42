@@ -35,21 +35,21 @@
  */
 static unsigned char fli_read_char(FILE *f)
 {
-	unsigned char b;
+	unsigned char b=0;
 	fread(&b,1,1,f);
 	return b;
 }
 
 static unsigned short fli_read_short(FILE *f)
 {
-	unsigned char b[2];
+	unsigned char b[2]={0,0};
 	fread(&b,1,2,f);
 	return (unsigned short)(b[1]<<8) | b[0];
 }
 
 static unsigned long fli_read_long(FILE *f)
 {
-	unsigned char b[4];
+	unsigned char b[4]={0,0,0,0};
 	fread(&b,1,4,f);
 	return (unsigned long)(b[3]<<24) | (b[2]<<16) | (b[1]<<8) | b[0];
 }
@@ -404,7 +404,7 @@ int fli_write_color_2(FILE *f, s_fli_header *fli_header, unsigned char *old_cmap
  */
 void fli_read_black(FILE *f, s_fli_header *fli_header, unsigned char *framebuf)
 {
-	memset(framebuf, 0, fli_header->width * fli_header->height);
+	memset(framebuf, 0, (size_t)fli_header->width * fli_header->height);
 }
 
 void fli_write_black(FILE *f, s_fli_header *fli_header, unsigned char *framebuf)
@@ -452,27 +452,32 @@ void fli_read_brun(FILE *f, s_fli_header *fli_header, unsigned char *framebuf)
 {
 	unsigned short yc;
 	unsigned char *pos;
+	unsigned int width = fli_header->width;
 	for (yc=0; yc < fli_header->height; yc++) {
-		unsigned short xc, pc, pcnt;
+		unsigned int xc;
+		unsigned short pc, pcnt;
 		pc=fli_read_char(f);
 		xc=0;
-		pos=framebuf+(fli_header->width * yc);
+		pos=framebuf+((size_t)width * yc);
 		for (pcnt=pc; pcnt>0; pcnt--) {
 			unsigned short ps;
 			ps=fli_read_char(f);
 			if (ps & 0x80) {
-				unsigned short len; 
+				unsigned short len;
 				for (len=-(signed char)ps; len>0; len--) {
-					pos[xc++]=fli_read_char(f);
-				} 
+					unsigned char val=fli_read_char(f);
+					if (xc < width) pos[xc]=val;
+					xc++;
+				}
 			} else {
 				unsigned char val;
 				val=fli_read_char(f);
-				memset(&(pos[xc]), val, ps);
+				if (xc < width)
+					memset(&(pos[xc]), val, (ps > width-xc) ? width-xc : ps);
 				xc+=ps;
 			}
 		}
-	} 
+	}
 }
 
 void fli_write_brun(FILE *f, s_fli_header *fli_header, unsigned char *framebuf)
@@ -553,14 +558,20 @@ void fli_read_lc(FILE *f, s_fli_header *fli_header, unsigned char *old_framebuf,
 {
 	unsigned short yc, firstline, numline;
 	unsigned char *pos;
-	memcpy(framebuf, old_framebuf, fli_header->width * fli_header->height);
+	memcpy(framebuf, old_framebuf, (size_t)fli_header->width * fli_header->height);
+	unsigned int width = fli_header->width;
 	firstline = fli_read_short(f);
 	numline = fli_read_short(f);
 	for (yc=0; yc < numline; yc++) {
-		unsigned short xc, pc, pcnt;
+		unsigned int xc, row;
+		unsigned short pc, pcnt;
+		/* lines outside the frame are parsed but not stored */
+		int row_ok;
 		pc=fli_read_char(f);
 		xc=0;
-		pos=framebuf+(fli_header->width * (firstline+yc));
+		row=(unsigned int)firstline+yc;
+		row_ok=(row < fli_header->height);
+		pos=row_ok ? framebuf+((size_t)width * row) : NULL;
 		for (pcnt=pc; pcnt>0; pcnt--) {
 			unsigned short ps,skip;
 			skip=fli_read_char(f);
@@ -570,14 +581,18 @@ void fli_read_lc(FILE *f, s_fli_header *fli_header, unsigned char *old_framebuf,
 				unsigned char val;
 				ps=-(signed char)ps;
 				val=fli_read_char(f);
-				memset(&(pos[xc]), val, ps);
+				if (row_ok && xc < width)
+					memset(&(pos[xc]), val, (ps > width-xc) ? width-xc : ps);
 				xc+=ps;
 			} else {
-				fread(&(pos[xc]), ps, 1, f);
-				xc+=ps;
+				for (; ps>0; ps--) {
+					unsigned char val=fli_read_char(f);
+					if (row_ok && xc < width) pos[xc]=val;
+					xc++;
+				}
 			}
 		}
-	} 
+	}
 }
 
 void fli_write_lc(FILE *f, s_fli_header *fli_header, unsigned char *old_framebuf, unsigned char *framebuf)
@@ -592,7 +607,7 @@ void fli_write_lc(FILE *f, s_fli_header *fli_header, unsigned char *old_framebuf
 
 	/* first check, how many lines are unchanged at the beginning */
 	firstline=0;
-	while ((memcmp(old_framebuf+(firstline*fli_header->width), framebuf+(firstline*fli_header->width), fli_header->width)==0) && (firstline<fli_header->height)) firstline++;
+	while ((firstline<fli_header->height) && (memcmp(old_framebuf+(firstline*fli_header->width), framebuf+(firstline*fli_header->width), fli_header->width)==0)) firstline++;
 	
 	/* then check from the end, how many lines are unchanged */
 	if (firstline<fli_header->height) {
@@ -618,12 +633,18 @@ void fli_write_lc(FILE *f, s_fli_header *fli_header, unsigned char *old_framebuf
 		xc=0;
 		while (xc < fli_header->width) {
 			sc=0;
-			while ((linebuf[xc]==old_linebuf[xc]) && (xc<fli_header->width) && (sc<255)) {
+			while ((xc<fli_header->width) && (linebuf[xc]==old_linebuf[xc]) && (sc<255)) {
 				xc++; sc++;
 			}
 			fli_write_char(f, sc);
+			if (xc>=fli_header->width) {
+				/* only skipped pixels left: empty literal packet */
+				bc++;
+				fli_write_char(f, 0);
+				break;
+			}
 			cc=1;
-			while ((linebuf[xc]==linebuf[xc+cc]) && ((xc+cc)<fli_header->width) && (cc<120)) {
+			while (((xc+cc)<fli_header->width) && (linebuf[xc]==linebuf[xc+cc]) && (cc<120)) {
 				cc++;
 			}
 			if (cc>2) {
@@ -635,11 +656,11 @@ void fli_write_lc(FILE *f, s_fli_header *fli_header, unsigned char *old_framebuf
 				tc=0;
 				do {
 					sc=0;
-					while ((linebuf[tc+xc+sc]==old_linebuf[tc+xc+sc]) && ((tc+xc+sc)<fli_header->width) && (sc<5)) {
+					while (((tc+xc+sc)<fli_header->width) && (linebuf[tc+xc+sc]==old_linebuf[tc+xc+sc]) && (sc<5)) {
 						sc++;
 					}
 					cc=1;
-					while ((linebuf[tc+xc]==linebuf[tc+xc+cc]) && ((tc+xc+cc)<fli_header->width) && (cc<10)) {
+					while (((tc+xc+cc)<fli_header->width) && (linebuf[tc+xc]==linebuf[tc+xc+cc]) && (cc<10)) {
 						cc++;
 					}
 					tc++;
@@ -675,13 +696,18 @@ void fli_write_lc(FILE *f, s_fli_header *fli_header, unsigned char *old_framebuf
  */
 void fli_read_lc_2(FILE *f, s_fli_header *fli_header, unsigned char *old_framebuf, unsigned char *framebuf)
 {
-	unsigned short yc, lc, numline;
+	unsigned int yc;
+	unsigned short lc, numline;
+	unsigned int width = fli_header->width;
 	unsigned char *pos;
-	memcpy(framebuf, old_framebuf, fli_header->width * fli_header->height);
+	memcpy(framebuf, old_framebuf, (size_t)fli_header->width * fli_header->height);
 	yc=0;
 	numline = fli_read_short(f);
 	for (lc=0; lc < numline; lc++) {
-		unsigned short xc, pc, pcnt, lpf, lpn;
+		unsigned int xc;
+		unsigned short pc, pcnt, lpf, lpn;
+		/* lines outside the frame are parsed but not stored */
+		int row_ok;
 		pc=fli_read_short(f);
 		lpf=0; lpn=0;
 		while (pc & 0x8000) {
@@ -690,10 +716,13 @@ void fli_read_lc_2(FILE *f, s_fli_header *fli_header, unsigned char *old_framebu
 			} else {
 				lpf=1;lpn=pc&0xFF;
 			}
+			if (feof(f))
+				return;
 			pc=fli_read_short(f);
 		}
 		xc=0;
-		pos=framebuf+(fli_header->width * yc);
+		row_ok=(yc < fli_header->height);
+		pos=row_ok ? framebuf+((size_t)width * yc) : NULL;
 		for (pcnt=pc; pcnt>0; pcnt--) {
 			unsigned short ps,skip;
 			skip=fli_read_char(f);
@@ -705,16 +734,21 @@ void fli_read_lc_2(FILE *f, s_fli_header *fli_header, unsigned char *old_framebu
 				v1=fli_read_char(f);
 				v2=fli_read_char(f);
 				while (ps>0) {
-					pos[xc++]=v1;
-					pos[xc++]=v2;
+					if (row_ok && xc < width) pos[xc]=v1;
+					xc++;
+					if (row_ok && xc < width) pos[xc]=v2;
+					xc++;
 					ps--;
 				}
 			} else {
-				fread(&(pos[xc]), ps, 2, f);
-				xc+=ps << 1;
+				for (ps<<=1; ps>0; ps--) {
+					unsigned char val=fli_read_char(f);
+					if (row_ok && xc < width) pos[xc]=val;
+					xc++;
+				}
 			}
 		}
-		if (lpf) pos[xc]=lpn;
+		if (lpf && row_ok && xc < width) pos[xc]=lpn;
 		yc++;
-	} 
+	}
 }

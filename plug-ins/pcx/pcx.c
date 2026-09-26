@@ -194,7 +194,7 @@ static gint32 load_image (char *filename) {
   GDrawable *drawable;
   GPixelRgn pixel_rgn;
   gchar *message;
-  gint offset_x, offset_y, height, width;
+  gint offset_x, offset_y, height, width, bytes, min_bytes;
   gint32 image, layer;
   guchar *dest, cmap[768];
 
@@ -223,6 +223,24 @@ static gint32 load_image (char *filename) {
   offset_y = qtohs (pcx_header.y1);
   width = qtohs (pcx_header.x2) - offset_x + 1;
   height = qtohs (pcx_header.y2) - offset_y + 1;
+  bytes = qtohs (pcx_header.bytesperline);
+
+  if (width <= 0 || height <= 0) {
+    g_message("%s\nhas invalid image dimensions", filename);
+    fclose (fd);
+    return -1;
+  }
+
+  /* Each scanline must hold at least one full row of pixels */
+  if (pcx_header.bpp == 1)
+    min_bytes = (width + 7) / 8;
+  else
+    min_bytes = width;
+  if (bytes < min_bytes) {
+    g_message("%s\nhas an invalid bytes-per-line value", filename);
+    fclose (fd);
+    return -1;
+  }
 
   if (pcx_header.planes == 3 && pcx_header.bpp == 8) {
     image= gimp_image_new (width, height, RGB);
@@ -239,26 +257,29 @@ static gint32 load_image (char *filename) {
   drawable = gimp_drawable_get (layer);
 
   if (pcx_header.planes == 1 && pcx_header.bpp == 1) {
-  dest = (guchar *) g_malloc (width * height);
-    load_1(fd, width, height, dest, qtohs (pcx_header.bytesperline));
+  dest = (guchar *) g_malloc ((gsize) width * height);
+    load_1(fd, width, height, dest, bytes);
     gimp_image_set_cmap (image, mono, 2);
   } else if (pcx_header.planes == 4 && pcx_header.bpp == 1) {
-  dest = (guchar *) g_malloc (width * height);
-    load_4(fd, width, height, dest, qtohs (pcx_header.bytesperline));
+  dest = (guchar *) g_malloc ((gsize) width * height);
+    load_4(fd, width, height, dest, bytes);
     gimp_image_set_cmap (image, pcx_header.colormap, 16);
   } else if (pcx_header.planes == 1 && pcx_header.bpp == 8) {
-  dest = (guchar *) g_malloc (width * height);
-    load_8(fd, width, height, dest, qtohs (pcx_header.bytesperline));
-    fseek(fd, -768L, SEEK_END);
-    fread(cmap, 768, 1, fd);
+  dest = (guchar *) g_malloc ((gsize) width * height);
+    load_8(fd, width, height, dest, bytes);
+    memset (cmap, 0, sizeof (cmap));
+    if (fseek(fd, -768L, SEEK_END) == 0)
+      fread(cmap, 768, 1, fd);
     gimp_image_set_cmap (image, cmap, 256);
   } else if (pcx_header.planes == 3 && pcx_header.bpp == 8) {
-  dest = (guchar *) g_malloc (width * height * 3);
-    load_24(fd, width, height, dest, qtohs (pcx_header.bytesperline));
+  dest = (guchar *) g_malloc ((gsize) width * height * 3);
+    load_24(fd, width, height, dest, bytes);
   } else {
     g_message("Unusual PCX flavour, giving up");
+    fclose (fd);
     return -1;
   }
+  fclose (fd);
 
   gimp_pixel_rgn_init (&pixel_rgn, drawable, 0, 0, width, height, TRUE, FALSE);
   gimp_pixel_rgn_set_rect (&pixel_rgn, dest, 0, 0, width, height);
@@ -424,7 +445,7 @@ gint save_image (char *filename, gint32 image, gint32 layer) {
     return -1;
   }
 
-  pixels= (guchar *) g_malloc(width * height * pcx_header.planes);
+  pixels= (guchar *) g_malloc((gsize) width * height * pcx_header.planes);
   gimp_pixel_rgn_get_rect(&pixel_rgn, pixels, 0, 0, width, height);
 
   pcx_header.x1 = htoqs (offset_x);

@@ -46,6 +46,14 @@ static WireIOFunc wire_write_func = NULL;
 static WireFlushFunc wire_flush_func = NULL;
 static int wire_error_val = FALSE;
 
+/*  Upper bound for one string on the wire (including the NUL).  What is
+ *  read from the pipe comes from another process and is not trusted: a
+ *  bogus length must not make us allocate gigabytes.
+ */
+#define WIRE_MAX_STRING_LENGTH  (64 * 1024 * 1024)
+
+void wire_set_error (void);
+
 
 void
 wire_register (guint32         type,
@@ -205,6 +213,13 @@ wire_clear_error ()
   wire_error_val = FALSE;
 }
 
+/*  Marks the stream as broken, for a message that does not make sense.  */
+void
+wire_set_error ()
+{
+  wire_error_val = TRUE;
+}
+
 int
 wire_read_msg (GIOChannel *channel,
 	       WireMessage *msg)
@@ -214,12 +229,19 @@ wire_read_msg (GIOChannel *channel,
   if (wire_error_val)
     return !wire_error_val;
 
+  msg->data = NULL;
+
   if (!wire_read_int32 (channel, &msg->type, 1))
     return FALSE;
 
   handler = g_hash_table_lookup (wire_ht, &msg->type);
   if (!handler)
-    g_error ("could not find handler for message: %d\n", msg->type);
+    {
+      /*  the other side is broken or hostile: fail instead of aborting  */
+      g_print ("wire_read_msg: unknown message type: %u\n", msg->type);
+      wire_error_val = TRUE;
+      return FALSE;
+    }
 
   (* handler->read_func) (channel, msg);
 
@@ -264,6 +286,12 @@ wire_read_int32 (GIOChannel *channel,
 		 guint32 *data,
 		 gint     count)
 {
+  if (count < 0 || count > G_MAXINT / 4)
+    {
+      wire_error_val = TRUE;
+      return FALSE;
+    }
+
   if (count > 0)
     {
       if (!wire_read_int8 (channel, (guint8*) data, count * 4))
@@ -284,6 +312,12 @@ wire_read_int16 (GIOChannel *channel,
 		 guint16 *data,
 		 gint     count)
 {
+  if (count < 0 || count > G_MAXINT / 2)
+    {
+      wire_error_val = TRUE;
+      return FALSE;
+    }
+
   if (count > 0)
     {
       if (!wire_read_int8 (channel, (guint8*) data, count * 2))
@@ -304,6 +338,12 @@ wire_read_int8 (GIOChannel *channel,
 		guint8 *data,
 		gint    count)
 {
+  if (count < 0)
+    {
+      wire_error_val = TRUE;
+      return FALSE;
+    }
+
   return wire_read (channel, data, count);
 }
 
@@ -320,7 +360,7 @@ wire_read_double (GIOChannel *channel,
       if (!wire_read_string (channel, &str, 1))
 	return FALSE;
       /*  always '.' as the decimal point, whatever the locale  */
-      data[i] = g_ascii_strtod (str, NULL);
+      data[i] = str ? g_ascii_strtod (str, NULL) : 0.0;
       g_free (str);
     }
 
@@ -337,25 +377,47 @@ wire_read_string (GIOChannel *channel,
 
   for (i = 0; i < count; i++)
     {
+      data[i] = NULL;
+
       if (!wire_read_int32 (channel, &tmp, 1))
-	return FALSE;
+	goto fail;
+
+      if (tmp > WIRE_MAX_STRING_LENGTH)
+	{
+	  g_print ("wire_read_string: string too long (%u bytes)\n", tmp);
+	  wire_error_val = TRUE;
+	  goto fail;
+	}
 
       if (tmp > 0)
 	{
-	  data[i] = g_new (gchar, tmp);
+	  data[i] = g_try_malloc (tmp);
+	  if (!data[i])
+	    {
+	      wire_error_val = TRUE;
+	      goto fail;
+	    }
 	  if (!wire_read_int8 (channel, (guint8*) data[i], tmp))
 	    {
 	      g_free (data[i]);
-	      return FALSE;
+	      data[i] = NULL;
+	      goto fail;
 	    }
-	}
-      else
-	{
-	  data[i] = NULL;
+	  /*  the length includes the NUL, but don't trust the sender  */
+	  data[i][tmp - 1] = '\0';
 	}
     }
 
   return TRUE;
+
+ fail:
+  /*  leave nothing behind for the caller to free  */
+  while (i-- > 0)
+    {
+      g_free (data[i]);
+      data[i] = NULL;
+    }
+  return FALSE;
 }
 
 int

@@ -54,6 +54,7 @@ int  wire_write        (GIOChannel *channel,
 			gulong           count);
 int  wire_flush        (GIOChannel *channel);
 int  wire_error        (void);
+void wire_set_error    (void);
 void wire_clear_error  (void);
 int  wire_read_msg     (GIOChannel *channel,
 		        WireMessage     *msg);

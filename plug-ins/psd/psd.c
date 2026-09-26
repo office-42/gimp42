@@ -111,6 +111,11 @@
 /* the max number of channels that this plugin should let a layer have */
 #define MAX_CHANNELS 30
 
+/* sanity limits for values read from the file */
+#define PSD_MAX_DIMENSION 262144
+#define PSD_MAX_FILE_CHANNELS 56
+#define PSD_MAX_COORD (1 << 28)
+
 /* *** END OF DEFINES *** */
 
 
@@ -274,7 +279,9 @@ static void unpack_pb_channel(FILE *fd, guchar *dst, gint32 unpackedlen,
 				  guint32 *offset);
 static void decode(long clen, long uclen, gchar *src, gchar *dst, int step);
 static void packbitsdecode(long *clenp, long uclen,
-			   gchar *src, gchar *dst, int step);
+			   gchar *src, gchar *src_end, gchar *dst, int step);
+static gsize psd_checked_size(gsize a, gsize b, gsize c);
+static const gchar *aux_channel_name(gint i);
 static void cmyk2rgb(guchar *src, guchar *destp,
 		     long width, long height, int alpha);
 static void cmykp2rgb(guchar *src, guchar *destp,
@@ -526,6 +533,13 @@ dispatch_resID(guint ID, FILE *fd, guint32 *offset, guint32 Size)
 		  guchar slen;
 		  gchar* sname;
 
+		  if (psd_image.num_aux_channels >= MAX_CHANNELS)
+		    {
+		      g_message ("PSD: Sorry - this image has too many "
+				 "aux channels.\n");
+		      gimp_quit();
+		    }
+
 		  slen = getguchar (fd, "alpha channel name length");
 		  (*offset)++;
 		  remaining--;
@@ -562,31 +576,21 @@ dispatch_resID(guint ID, FILE *fd, guint32 *offset, guint32 Size)
 
 		  if (psd_image.aux_channel[psd_image.num_aux_channels].name)
 		    {
-		      guint32 alpha_name_len;
-		  
-		      alpha_name_len =
-			strlen(psd_image.aux_channel[psd_image.num_aux_channels].name);
-		      
 		      IFDBG printf("\t\t\tname: \"%s\"\n",
 				   psd_image.aux_channel[psd_image.num_aux_channels].name);
-		  
-		      (*offset) += alpha_name_len;
-		      remaining -= alpha_name_len;
+
+		      /* count the bytes actually read, even if the name
+			 contains embedded NULs */
+		      (*offset) += slen;
+		      remaining -= slen;
 		    }
 
 		  psd_image.num_aux_channels++;
-
-		  if (psd_image.num_aux_channels > MAX_CHANNELS)
-		    {
-		      printf("\nPSD: Sorry - this image has too many "
-			     "aux channels.  Tell Adam!\n");
-		      gimp_quit();
-		    }
 		}
 	      while (remaining > 0);
 	    }
 
-	  if (remaining)
+	  if (remaining > 0)
 	    {
 	      dumpchunk(remaining, fd, "alphaname padding 0 throw");
 	      (*offset) += remaining;
@@ -744,11 +748,30 @@ do_layer_record(FILE *fd, guint32 *offset, gint layernum)
   right = getglong (fd, "layer right");
   (*offset)+=4;
 
+  if (top < -PSD_MAX_COORD || top > PSD_MAX_COORD ||
+      left < -PSD_MAX_COORD || left > PSD_MAX_COORD ||
+      bottom < top || right < left ||
+      (gint64) bottom - top > PSD_MAX_DIMENSION ||
+      (gint64) right - left > PSD_MAX_DIMENSION)
+    {
+      g_message ("PSD: Error - invalid layer extents.\n");
+      gimp_quit();
+    }
+
+  psd_image.layer[layernum].lm_x = 0;
+  psd_image.layer[layernum].lm_y = 0;
+  psd_image.layer[layernum].lm_width = 0;
+  psd_image.layer[layernum].lm_height = 0;
+
   psd_image.layer[layernum].x = left;
   psd_image.layer[layernum].y = top;
   psd_image.layer[layernum].width = right-left;
   psd_image.layer[layernum].height = bottom-top;
-  
+
+  /* make sure width*height*4 fits in an int for the code below */
+  psd_checked_size (psd_image.layer[layernum].width,
+		    psd_image.layer[layernum].height, 4);
+
   IFDBG printf("\t\t\t\tLayer extents: (%d,%d) -> (%d,%d)\n",left,top,right,bottom);
   
   psd_image.layer[layernum].num_channels =
@@ -851,10 +874,23 @@ do_layer_record(FILE *fd, guint32 *offset, gint layernum)
       right  = getglong(fd, "lmask right");
       (*offset) += 4;
 
+      if (top < -PSD_MAX_COORD || top > PSD_MAX_COORD ||
+	  left < -PSD_MAX_COORD || left > PSD_MAX_COORD ||
+	  bottom < top || right < left ||
+	  (gint64) bottom - top > PSD_MAX_DIMENSION ||
+	  (gint64) right - left > PSD_MAX_DIMENSION)
+	{
+	  g_message ("PSD: Error - invalid layer mask extents.\n");
+	  gimp_quit();
+	}
+
       psd_image.layer[layernum].lm_x = left;
       psd_image.layer[layernum].lm_y = top;
       psd_image.layer[layernum].lm_width = right-left;
       psd_image.layer[layernum].lm_height = bottom-top;
+
+      psd_checked_size (psd_image.layer[layernum].lm_width,
+			psd_image.layer[layernum].lm_height, 1);
 
       getglong(fd, "lmask data throw");
       (*offset) += 4;
@@ -883,7 +919,7 @@ do_layer_record(FILE *fd, guint32 *offset, gint layernum)
       IFDBG printf("\t\t\t\t\t\tLAYER NAME: '%s'\n",psd_image.layer[layernum].name);
     }
   
-  if (totaloff-(*offset) > 0)
+  if (totaloff > (*offset))
     {
       IFDBG 
 	{
@@ -963,6 +999,13 @@ do_layer_pixeldata(FILE *fd, guint32 *offset)
 	      height = psd_image.layer[layeri].height;
 	    }
 
+	  /* extents were validated when the layer record was read */
+	  if (width < 0 || height < 0)
+	    {
+	      g_message ("PSD: Error - invalid channel size.\n");
+	      gimp_quit();
+	    }
+
 	  tmpline = xmalloc(width + 1);
 
 	  compression = getgshort(fd, "layer channel compression type");
@@ -983,7 +1026,7 @@ do_layer_pixeldata(FILE *fd, guint32 *offset)
 			width*height);fflush(stdout);}
 	      
 	  psd_image.layer[layeri].channel[channeli].data =
-	    xmalloc (width * height);
+	    xmalloc (psd_checked_size (width, height, 1));
 	      
 	  switch (compression)
 	    {
@@ -1378,7 +1421,7 @@ void extract_data_and_channels(guchar* src, gint gimpstep, gint psstep,
 	  }
 	
 	channel_ID = gimp_channel_new(image_ID,
-				      psd_image.aux_channel[chan-gimpstep].name,
+				      (char *) aux_channel_name (chan-gimpstep),
 				      width, height,
 				      100.0, colour);
 	gimp_image_add_channel(image_ID, channel_ID, 0);
@@ -1428,7 +1471,7 @@ void extract_channels(guchar* src, gint num_wanted, gint psstep,
 	  }
 	
 	channel_ID = gimp_channel_new(image_ID,
-				      psd_image.aux_channel[chan-(psstep-num_wanted)].name,
+				      (char *) aux_channel_name (chan-(psstep-num_wanted)),
 				      width, height,
 				      100.0, colour);
 	gimp_image_add_channel(image_ID, channel_ID, 0);
@@ -1551,7 +1594,46 @@ load_image(char *name)
 	  numc = psd_image.layer[lnum].num_channels;
 
 	  IFDBG printf("Hey, it's a LAYER with %d channels!\n", numc);
-	  
+
+	  if (psd_image.layer[lnum].width == 0 ||
+	      psd_image.layer[lnum].height == 0)
+	    {
+	      /* empty layer: nothing to load */
+	      for (iter=0; iter<numc; iter++)
+		if (psd_image.layer[lnum].channel[iter].data)
+		  {
+		    g_free(psd_image.layer[lnum].channel[iter].data);
+		    psd_image.layer[lnum].channel[iter].data = NULL;
+		  }
+	      continue;
+	    }
+
+	  {
+	    /* The channels merged below must exist and be layer-sized
+	       colour/alpha channels (not layer masks, which have their
+	       own size). */
+	    gint needed;
+
+	    needed = (gimagetype == GRAY) ? 1 : 3;
+	    if (psd_layer_has_alpha(&psd_image.layer[lnum]))
+	      needed++;
+
+	    if (numc < needed)
+	      {
+		g_message ("PSD: Error - layer has too few channels.\n");
+		gimp_quit();
+	      }
+	    for (iter=0; iter<needed; iter++)
+	      {
+		if (psd_image.layer[lnum].channel[iter].type == -2 ||
+		    psd_image.layer[lnum].channel[iter].data == NULL)
+		  {
+		    g_message ("PSD: Error - unsupported layer channel layout.\n");
+		    gimp_quit();
+		  }
+	      }
+	  }
+
 	  switch (gimagetype)
 	    {
 	    case GRAY:
@@ -1586,7 +1668,8 @@ load_image(char *name)
 					   psd_image.layer[lnum].name,
 					   psd_image.layer[lnum].width,
 					   psd_image.layer[lnum].height,
-					   (numc==1) ? GRAY_IMAGE:GRAYA_IMAGE,
+					   psd_layer_has_alpha(&psd_image.layer[lnum]) ?
+					   GRAYA_IMAGE : GRAY_IMAGE,
 					   (100.0*(double)psd_image.layer[lnum].opacity)/255.0,
 					   psd_lmode_to_gimp_lmode(psd_image.layer[lnum].blendkey));
 
@@ -1634,7 +1717,8 @@ load_image(char *name)
 					   psd_image.layer[lnum].name,
 					   psd_image.layer[lnum].width,
 					   psd_image.layer[lnum].height,
-					   (numc==3) ? RGB_IMAGE:RGBA_IMAGE,
+					   psd_layer_has_alpha(&psd_image.layer[lnum]) ?
+					   RGBA_IMAGE : RGB_IMAGE,
 					   (100.0*(double)psd_image.layer[lnum].opacity)/255.0,
 					   psd_lmode_to_gimp_lmode(psd_image.layer[lnum].blendkey));
 
@@ -1885,10 +1969,18 @@ load_image(char *name)
       else
 	{
 	  channels = gimp_drawable_bpp(drawable->id);
+
+	  if (!cmyk && channels > step)
+	    {
+	      g_message ("PSD: Error - image has too few channels "
+			 "for its colour mode.\n");
+	      return(-1);
+	    }
 	}
 
 
-      dest = xmalloc( step * PSDheader.columns * PSDheader.rows );
+      dest = xmalloc (psd_checked_size (step, PSDheader.columns,
+					PSDheader.rows));
 
       
       gimp_progress_update ((double)0.0);
@@ -1919,17 +2011,25 @@ load_image(char *name)
 	}
       else
 	{
+	  /* never read more than fits into the image buffer */
+	  long rawlen = PSDheader.imgdatalen;
+	  long maxlen = (long) psd_checked_size (step, PSDheader.columns,
+						 PSDheader.rows);
+
+	  if (rawlen > maxlen)
+	    rawlen = maxlen;
+
 	  if (!cmyk)
 	    {
 	      gimp_progress_update ((double)0.50);
-	      xfread_interlaced(fd, dest, PSDheader.imgdatalen,
+	      xfread_interlaced(fd, dest, rawlen,
 				"raw image data", step);
 	    }
 	  else
-	    {	  
+	    {
 	      gimp_progress_update ((double)0.25);
-	      cmykbuf = xmalloc(PSDheader.imgdatalen);
-	      xfread_interlaced(fd, cmykbuf, PSDheader.imgdatalen,
+	      cmykbuf = g_malloc0 (maxlen);
+	      xfread_interlaced(fd, cmykbuf, rawlen,
 				"raw cmyk image data", step);
 
 	      gimp_progress_update ((double)0.50);
@@ -2011,6 +2111,7 @@ decode(long clen, long uclen, char * src, char * dst, int step)
     gint i, j;
     gint32 l;
     gushort * w;
+    gchar * src_end;
 
     l = clen;
     for (i = 0; i < PSDheader.rows*PSDheader.channels; ++i)
@@ -2019,12 +2120,20 @@ decode(long clen, long uclen, char * src, char * dst, int step)
 	g_warning("decode: %ld should be zero\n", (long)l);
 
     w = PSDheader.rowlength;
-    
-    packbitsdecode(&clen, uclen, src, dst++, step);
+    src_end = src + clen;
+
+    packbitsdecode(&clen, uclen, src, src_end, dst++, step);
     for (j = 0; j < step-1; ++j) {
 	for (i = 0; i < PSDheader.rows; ++i)
+	  {
+	    if (*w > src_end - src)
+	      {
+		printf("%s: corrupt RLE row lengths\n", prog_name);
+		gimp_quit();
+	      }
 	    src += *w++;
-	packbitsdecode(&clen, uclen, src, dst++, step);
+	  }
+	packbitsdecode(&clen, uclen, src, src_end, dst++, step);
     }
     IFDBG printf("clen %ld\n", clen);
 }
@@ -2035,31 +2144,41 @@ decode(long clen, long uclen, char * src, char * dst, int step)
  * Decode a PackBits data stream.
  */
 static void
-packbitsdecode(long * clenp, long uclen, char * src, char * dst, int step)
+packbitsdecode(long * clenp, long uclen, char * src, char * src_end,
+	       char * dst, int step)
 {
-    gint n, b;
+    gint n, b, len;
     gint32 clen = *clenp;
-    
+
     while ((clen > 0) && (uclen > 0)) {
-	n = (int) *src++;
-	if (n >= 128)
-	    n -= 256;
+	if (src >= src_end)
+	    break;
+	n = (int) (signed char) *src++;
 	if (n < 0) {		/* replicate next guchar -n+1 times */
 	    clen -= 2;
 	    if (n == -128)	/* nop */
 		continue;
+	    if (src >= src_end)
+		break;
 	    n = -n + 1;
+	    if (n > uclen)
+		n = uclen;
 	    uclen -= n;
 	    for (b = *src++; n > 0; --n) {
 		*dst = b;
 		dst += step;
 	    }
 	} else {		/* copy next n+1 guchars literally */
-	    for (b = ++n; b > 0; --b) {
+	    ++n;
+	    if (n > src_end - src)
+		break;
+	    len = (n > uclen) ? uclen : n;
+	    for (b = len; b > 0; --b) {
 		*dst = *src++;
 		dst += step;
 	    }
-	    uclen -= n;
+	    src += n - len;
+	    uclen -= len;
 	    clen -= n+1;
 	}
     }
@@ -2099,8 +2218,8 @@ unpack_pb_channel(FILE *fd, guchar *dst, gint32 unpackedlen, guint32 *offset)
 	    (*offset)++;
 	    for (; n > 0; --n)
 	      {
-		*dst = b;
-		dst ++;
+		if (upremain > 0)
+		  *dst++ = b;
 		upremain--;
 	      }
 	  }
@@ -2108,9 +2227,11 @@ unpack_pb_channel(FILE *fd, guchar *dst, gint32 unpackedlen, guint32 *offset)
 	  {		/* copy next n+1 guchars literally */
 	    for (b = ++n; b > 0; --b)
 	      {
-		*dst = getguchar(fd, "packbits3");;
+		guchar c = getguchar(fd, "packbits3");
+
+		if (upremain > 0)
+		  *dst++ = c;
 		(*offset)++;
-		dst ++;
 		upremain--;
 	      }
 	    /*	    upremain -= n;*/
@@ -2241,16 +2362,42 @@ dumpchunk(size_t n, FILE * fd, gchar *why)
 void
 throwchunk(size_t n, FILE * fd, gchar *why)
 {
-  guchar *tmpchunk;
+  guchar tmpchunk[4096];
 
-  if (n==0)
+  /* read in pieces so that a huge bogus length can't exhaust memory */
+  while (n > 0)
     {
-      return;
+      size_t len = (n > sizeof (tmpchunk)) ? sizeof (tmpchunk) : n;
+
+      xfread(fd, tmpchunk, len, why);
+      n -= len;
+    }
+}
+
+
+/* Multiply a*b*c, aborting the load if the result is larger than
+ * G_MAXINT (the code below indexes buffers with ints). */
+static gsize
+psd_checked_size (gsize a, gsize b, gsize c)
+{
+  if ((b != 0 && a > G_MAXINT / b) ||
+      (c != 0 && a * b > G_MAXINT / c))
+    {
+      g_message ("PSD: Error - image is too large.\n");
+      gimp_quit();
     }
 
-  tmpchunk = xmalloc(n);
-  xfread(fd, tmpchunk, n, why);
-  g_free(tmpchunk);
+  return a * b * c;
+}
+
+
+static const gchar *
+aux_channel_name (gint i)
+{
+  if (i >= 0 && i < (gint) psd_image.num_aux_channels)
+    return psd_image.aux_channel[i].name;
+
+  return NULL;
 }
 
 
@@ -2417,6 +2564,26 @@ read_whole_file(FILE * fd)
     PSDheader.bpp = getgshort(fd, "depth");
     PSDheader.mode = getgshort(fd, "mode");
 
+    if (strncmp(PSDheader.signature, "8BPS", 4) != 0)
+      {
+	printf("%s: not an Adobe Photoshop PSD file\n", prog_name);
+	gimp_quit();
+      }
+    if (PSDheader.version != 1)
+      {
+	printf("%s: bad version number '%d', not 1\n",
+	       prog_name, PSDheader.version);
+	gimp_quit();
+      }
+    if (PSDheader.channels < 1 ||
+	PSDheader.channels > PSD_MAX_FILE_CHANNELS ||
+	PSDheader.rows < 1 || PSDheader.rows > PSD_MAX_DIMENSION ||
+	PSDheader.columns < 1 || PSDheader.columns > PSD_MAX_DIMENSION)
+      {
+	g_message ("PSD: Error - invalid image dimensions or channel count.\n");
+	gimp_quit();
+      }
+
 
     psd_image.num_layers = 0;
     psd_image.type = PSDheader.mode;
@@ -2425,6 +2592,12 @@ read_whole_file(FILE * fd)
 
 
     psd_image.colmaplen = getglong(fd, "color data length");
+
+    if (psd_image.colmaplen > (1 << 24))
+      {
+	g_message ("PSD: Error - invalid colour data length.\n");
+	gimp_quit();
+      }
 
     if (psd_image.colmaplen > 0)
       {

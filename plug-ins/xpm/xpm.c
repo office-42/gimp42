@@ -186,20 +186,24 @@ xpm_read_file (const char *filename,
   strings = xpm_read_strings (contents, length);
   g_free (contents);
 
+  /* gsize arithmetic: ncolors + h must not wrap around */
   if (strings->len < 1 ||
       sscanf (g_ptr_array_index (strings, 0), "%u %u %u %u",
 	      &w, &h, &ncolors, &cpp) != 4 ||
       w == 0 || h == 0 || ncolors == 0 || cpp == 0 || cpp > 8 ||
       w > 65536 || h > 65536 ||
-      strings->len < 1 + ncolors + h)
+      (gsize) strings->len < 1 + (gsize) ncolors + (gsize) h)
+    goto out;
+
+  image->colorTable = g_try_new0 (XpmColor, ncolors);
+  image->data       = g_try_new0 (unsigned int, (gsize) w * h);
+  if (image->colorTable == NULL || image->data == NULL)
     goto out;
 
   image->width      = w;
   image->height     = h;
   image->ncolors    = ncolors;
   image->cpp        = cpp;
-  image->colorTable = g_new0 (XpmColor, ncolors);
-  image->data       = g_new0 (unsigned int, (gsize) w * h);
 
   if (cpp == 1)
     for (i = 0; i < 256; i++)
@@ -311,7 +315,10 @@ xpm_write_file (const char *filename,
 
       fputc ('"', fp);
       for (x = 0; x < image->width; x++)
-	fputs (image->colorTable[src[x]].string, fp);
+	/* an out-of-range index (e.g. a pixel beyond the colormap)
+	 * is written as the first color rather than read past the table */
+	fputs (image->colorTable[src[x] < image->ncolors ? src[x] : 0].string,
+	       fp);
       fprintf (fp, "\"%s\n", (y + 1 < image->height) ? "," : "");
     }
 
@@ -573,14 +580,10 @@ run (char    *name,
 
 	case RUN_NONINTERACTIVE:
 	  /*  Make sure all the arguments are there!  */
-	  if (nparams != 4)
-	    status = STATUS_CALLING_ERROR;
-	  if (status == STATUS_SUCCESS)
-	    {
-	      xpmvals.threshold = param[4].data.d_float;
-	    }
-	  if (status == STATUS_SUCCESS &&
-	      (xpmvals.threshold < 0.0 || xpmvals.threshold > 1.0))
+	  /* file_xpm_save has no threshold argument: param[4] is the
+	   * raw filename, so never read it as a float (and with fewer
+	   * arguments it would be past the end of the array) */
+	  if (nparams < 4)
 	    status = STATUS_CALLING_ERROR;
 
 	case RUN_WITH_LAST_VALS:
@@ -592,6 +595,11 @@ run (char    *name,
 	  break;
 	}
       *nreturn_vals = 1;
+      if (status != STATUS_SUCCESS)
+	{
+	  values[0].data.d_status = status;
+	  return;
+	}
       if (save_image (param[3].data.d_string,
                       param[1].data.d_int32,
                       param[2].data.d_int32))
@@ -912,7 +920,7 @@ save_image (char   *filename,
 
   /* allocate buffers making the assumption that ibuff and mbuff
      are 32 bit aligned... */
-  if ((ibuff = g_new(guint, width*height)) == NULL)
+  if ((ibuff = g_try_new(guint, (gsize) width * height)) == NULL)
     goto cleanup;
 
   /*if ((mbuff = g_new(guint, width*height)) == NULL)

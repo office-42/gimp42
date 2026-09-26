@@ -111,6 +111,9 @@ typedef struct {
  PMAP pmap[256];
 } PIXEL_MAP;
 
+#define XWD_MAX_DIMENSION 262144  /* Largest width/height accepted on load */
+#define XWD_MAX_COLORS    65536   /* Largest colour table accepted on load */
+
 #define XWDHDR_PAD   0  /* Total number of padding bytes for XWD header */
 #define XWDCOL_PAD   0  /* Total number of padding bytes for each XWD color */
 
@@ -134,6 +137,7 @@ static gint32 create_new_image (char *filename, guint width, guint height,
 static int set_pixelmap (int, L_XWDCOLOR *,PIXEL_MAP *);
 static int get_pixelmap (L_CARD32, PIXEL_MAP *,unsigned char *,
                          unsigned char *, unsigned char *);
+static int mask_is_valid (unsigned long, int);
 static void set_bw_color_table (gint32);
 static void set_color_table (gint32, L_XWDFILEHEADER *, L_XWDCOLOR *);
 
@@ -342,13 +346,40 @@ load_image (char *filename)
     }
   }
 
+  /* Reject header values the loaders cannot cope with safely */
+  if (   (xwdhdr.l_pixmap_width < 1)
+      || (xwdhdr.l_pixmap_width > XWD_MAX_DIMENSION)
+      || (xwdhdr.l_pixmap_height < 1)
+      || (xwdhdr.l_pixmap_height > XWD_MAX_DIMENSION)
+      || (xwdhdr.l_pixmap_depth < 1) || (xwdhdr.l_pixmap_depth > 32)
+      || (xwdhdr.l_bytes_per_line > XWD_MAX_DIMENSION * 8)
+      || (xwdhdr.l_ncolors > XWD_MAX_COLORS)
+      || (xwdhdr.l_colormap_entries > XWD_MAX_COLORS))
+  {
+    show_message ("invalid or unsupported XWD header");
+    fclose (ifp);
+    return (-1);
+  }
+
+  /* Bitmap loaders need at least one bit per pixel in each scanline */
+  if (   (xwdhdr.l_bits_per_pixel == 1)
+      && (xwdhdr.l_bytes_per_line < (xwdhdr.l_pixmap_width + 7) / 8))
+  {
+    show_message ("invalid bytes per line in XWD header");
+    fclose (ifp);
+    return (-1);
+  }
+
   /* Position to start of XWDColor structures */
   fseek (ifp, (long)xwdhdr.l_header_size, SEEK_SET);
 
-  if (xwdhdr.l_colormap_entries > 0)
+  if ((xwdhdr.l_colormap_entries > 0) || (xwdhdr.l_ncolors > 0))
   {
-    xwdcolmap = (L_XWDCOLOR *)g_malloc (sizeof (L_XWDCOLOR)
-                                        * xwdhdr.l_colormap_entries);
+    /* read_xwd_cols () reads l_ncolors entries, while the loaders use */
+    /* up to l_colormap_entries: make room for both */
+    xwdcolmap = (L_XWDCOLOR *)g_malloc0 (sizeof (L_XWDCOLOR)
+                                         * MAX (xwdhdr.l_colormap_entries,
+                                                xwdhdr.l_ncolors));
     if (xwdcolmap == NULL)
     {
       show_message ("cant get memory for colormap");
@@ -853,7 +884,7 @@ static int set_pixelmap (int ncols,
    if ((k < maxcols) && (pixel_val == pixelmap->pmap[k].pixel_val))
      break;   /* It was already in list */
 
-   if (k >= 256) break;
+   if (k >= 256 || maxcols >= 256) break;   /* pmap is full */
 
    if (k < maxcols)   /* Must move entries to the back ? */
    {
@@ -916,6 +947,24 @@ static int get_pixelmap (L_CARD32 pixelval,
    return (1);
  }
  return (0);
+}
+
+
+/* Check that a colour mask is non-zero, has contiguous bits and that */
+/* the right aligned component has at most maxbits bits. The loaders */
+/* size their lookup tables from this. */
+
+static int mask_is_valid (unsigned long mask,
+                          int maxbits)
+
+{int shift = 0;
+
+ mask &= 0xffffffffUL;
+ if (mask == 0) return (0);
+ while (((mask >> shift) & 1) == 0) shift++;
+ mask >>= shift;
+ if ((mask & (mask + 1)) != 0) return (0);   /* Not contiguous */
+ return (mask < (1UL << maxbits));
 }
 
 
@@ -1288,6 +1337,21 @@ load_xwd_f2_d16_b16 (char *filename,
  greenmask = xwdhdr->l_green_mask;
  bluemask  = xwdhdr->l_blue_mask;
 
+ /* The masks must be non-empty, contiguous, disjoint and within 16 bits, */
+ /* or the loops below run away and index outside ColorMap */
+ if (   !mask_is_valid (redmask, 16) || !mask_is_valid (greenmask, 16)
+     || !mask_is_valid (bluemask, 16)
+     || ((redmask | greenmask | bluemask) > 0xffff)
+     || (redmask & greenmask) || (redmask & bluemask)
+     || (greenmask & bluemask))
+ {
+   show_message ("invalid colour masks");
+   g_free (data);
+   g_free (ColorMap);
+   gimp_image_delete (image_ID);
+   return (-1);
+ }
+
  /* How to shift RGB to be right aligned ? */
  /* (We rely on the the mask bits are grouped and not mixed) */
  redshift = greenshift = blueshift = 0;
@@ -1332,6 +1396,8 @@ load_xwd_f2_d16_b16 (char *filename,
 
  for (j = 0; j < ncols; j++)
  {
+   if (xwdcolmap[j].l_pixel > 0xffff)   /* Not a 16 bit pixel value */
+     continue;
    cm = ColorMap + xwdcolmap[j].l_pixel * 3;
    *(cm++) = (xwdcolmap[j].l_red >> 8);
    *(cm++) = (xwdcolmap[j].l_green >> 8);
@@ -1445,6 +1511,16 @@ load_xwd_f2_d24_b32 (char *filename,
  if (redmask == 0) redmask = 0xff0000;
  if (greenmask == 0) greenmask = 0x00ff00;
  if (bluemask == 0) bluemask = 0x0000ff;
+
+ /* Each component indexes a 256 entry map */
+ if (   !mask_is_valid (redmask, 8) || !mask_is_valid (greenmask, 8)
+     || !mask_is_valid (bluemask, 8))
+ {
+   show_message ("invalid colour masks");
+   g_free (data);
+   gimp_image_delete (image_ID);
+   return (-1);
+ }
 
  /* How to shift RGB to be right aligned ? */
  /* (We rely on the the mask bits are grouped and not mixed) */
@@ -1671,8 +1747,20 @@ load_xwd_f1_d24_b1 (char *filename,
                 && (bluemask == 0x0000ff);
  redshift = greenshift = blueshift = 0;
 
- if (!standard_rgb)   /* Do we need to re-map the pixel-values ? */
+ /* Indexed images are mapped by the colour table, not by the masks */
+ if (!standard_rgb && !indexed)  /* Do we need to re-map the pixel-values ? */
  {
+   /* Each component indexes a 256 entry map */
+   if (   !mask_is_valid (redmask, 8) || !mask_is_valid (greenmask, 8)
+       || !mask_is_valid (bluemask, 8))
+   {
+     show_message ("invalid colour masks");
+     g_free (data);
+     g_free (xwddata);
+     gimp_image_delete (image_ID);
+     return (-1);
+   }
+
    /* How to shift RGB to be right aligned ? */
    /* (We rely on the the mask bits are grouped and not mixed) */
 
@@ -1900,6 +1988,7 @@ save_index (FILE *ofp,
   {
     vclass = 3;
     cmap = gimp_image_get_cmap (image_ID, &ncolors);
+    if (ncolors > 256) ncolors = 256;   /* xwdcolmap holds 256 entries */
 
     for (j = 0; j < ncolors; j++)
     {
@@ -2066,7 +2155,7 @@ static void show_message (char *message)
  /* If there would be a simple message box like the one */
  /* used in ../app/interface.h, I would like to use it. */
  if (l_run_mode == RUN_INTERACTIVE)
-   g_warning (message);
+   g_warning ("%s", message);
  else
    fprintf (stderr, "xwd: %s\n", message);
 }

@@ -1054,7 +1054,7 @@ file_proc_find (GSList *procs,
 
 	  while (*p1 && *p2)
 	    {
-	      if (tolower (*p1) != tolower (*p2))
+	      if (tolower ((unsigned char) *p1) != tolower ((unsigned char) *p2))
 		break;
 	      p1 += 1;
 	      p2 += 1;
@@ -1128,7 +1128,7 @@ file_check_single_magic (char *offset,
 
 { /* Return values are 0: no match, 1: magic match, 2: size match */
   long offs;
-  unsigned long num_testval, num_operatorval;
+  unsigned long num_testval, num_operatorval = 0;
   unsigned long fileval;
   int numbytes, k, c = 0, found = 0;
   char *num_operator_ptr, num_operator, num_test;
@@ -1137,6 +1137,7 @@ file_check_single_magic (char *offset,
   /* Check offset */
   if (sscanf (offset, "%ld", &offs) != 1) return (0);
   if (offs < 0) return (0);
+  if (headsize < 0) headsize = 0;
 
   /* Check type of test */
   num_operator_ptr = NULL;
@@ -1170,7 +1171,7 @@ file_check_single_magic (char *offset,
   /* Check numerical operator value if present */
   if (num_operator_ptr && (*num_operator_ptr == '&'))
     {
-      if (isdigit (num_operator_ptr[1]))
+      if (isdigit ((unsigned char) num_operator_ptr[1]))
         {
           if (num_operator_ptr[1] != '0')      /* decimal */
             sscanf (num_operator_ptr+1, "%ld", &num_operatorval);
@@ -1190,7 +1191,7 @@ file_check_single_magic (char *offset,
         num_test = value[0];
         value++;
       }
-      if (!isdigit (value[0])) return (0);
+      if (!isdigit ((unsigned char) value[0])) return (0);
 
       if (value[0] != '0')      /* decimal */
         num_testval = strtol(value, NULL, 10);
@@ -1206,8 +1207,9 @@ file_check_single_magic (char *offset,
           if (fstat (fileno (ifp), &buf) < 0) return (0);
           fileval = buf.st_size;
         }
-      else if (offs + numbytes <= headsize)  /* We have it in memory ? */
-        {
+      /* (written so that a huge offset cannot overflow the test) */
+      else if (numbytes <= headsize && offs <= headsize - numbytes)
+        { /* We have it in memory */
           for (k = 0; k < numbytes; k++)
           fileval = (fileval << 8) | (long)file_head[offs+k];
         }
@@ -1236,8 +1238,9 @@ file_check_single_magic (char *offset,
                            sizeof (mem_testval), &numbytes);
       if (numbytes <= 0) return (0);
 
-      if (offs + numbytes <= headsize)  /* We have it in memory ? */
-        {
+      /* (written so that a huge offset cannot overflow the test) */
+      if (numbytes <= headsize && offs <= headsize - numbytes)
+        { /* We have it in memory */
           found = (memcmp (mem_testval, file_head+offs, numbytes) == 0);
         }
       else   /* Read it from file */
@@ -1337,21 +1340,34 @@ file_temp_name_invoker (Argument *args)
   static gint id = 0;
   Argument *return_args;
   const char *dir;
+  const char *extension;
+  char *safe_extension;
+  char *p;
   char *name;
 
   /*  temp-path from gimprc, if it exists, otherwise the system's  */
   dir = temp_path;
   if (!dir || !g_file_test (dir, G_FILE_TEST_IS_DIR))
     {
-      if (dir && g_mkdir_with_parents (dir, 0755) == 0)
+      if (dir && g_mkdir_with_parents (dir, 0700) == 0)
 	;
       else
 	dir = g_get_tmp_dir ();
     }
 
+  /*  The extension comes from a plug-in: keep it to a plain file name
+   *  extension, so it cannot lead out of the temporary folder.
+   */
+  extension = args[0].value.pdb_pointer;
+  safe_extension = g_strndup (extension ? extension : "", 16);
+  for (p = safe_extension; *p; p++)
+    if (!g_ascii_isalnum (*p) && *p != '_' && *p != '-')
+      *p = '_';
+
   name = g_strdup_printf ("gimp_temp.%lu%d.%s",
 			  (unsigned long) g_get_real_time () % 100000,
-			  id++, (char*)args[0].value.pdb_pointer);
+			  id++, safe_extension);
+  g_free (safe_extension);
 
   return_args = procedural_db_return_args (&file_temp_name_proc, TRUE);
 

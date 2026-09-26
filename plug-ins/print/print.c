@@ -528,14 +528,24 @@ run(char   *name,		/* I - Name of print program. */
 	  values[0].data.d_status = STATUS_CALLING_ERROR;
 	else
 	{
-	  strcpy(vars.output_to, param[3].data.d_string);
-	  strcpy(vars.short_name, param[4].data.d_string);
-	  strcpy(vars.ppd_file, param[5].data.d_string);
+	 /*
+	  * The strings come from the caller: truncate them to the buffers.
+	  */
+
+#define PRINT_COPY_PARAM(dst, n) \
+	  g_strlcpy((dst), param[n].data.d_string ? param[n].data.d_string : "", \
+	            sizeof(dst))
+
+	  PRINT_COPY_PARAM(vars.output_to, 3);
+	  PRINT_COPY_PARAM(vars.short_name, 4);
+	  PRINT_COPY_PARAM(vars.ppd_file, 5);
 	  vars.output_type = param[6].data.d_int32;
-	  strcpy(vars.resolution, param[7].data.d_string);
-	  strcpy(vars.media_size, param[8].data.d_string);
-	  strcpy(vars.media_type, param[9].data.d_string);
-	  strcpy(vars.media_source, param[10].data.d_string);
+	  PRINT_COPY_PARAM(vars.resolution, 7);
+	  PRINT_COPY_PARAM(vars.media_size, 8);
+	  PRINT_COPY_PARAM(vars.media_type, 9);
+	  PRINT_COPY_PARAM(vars.media_source, 10);
+
+#undef PRINT_COPY_PARAM
 
           if (nparams > 11)
 	    vars.brightness = param[11].data.d_int32;
@@ -1965,6 +1975,42 @@ printrc_filename(void)
 }
 
 
+#if defined(LPC_COMMAND) || defined(LPSTAT_COMMAND)
+/*
+ * 'print_quote_name()' - Quote a queue name for a print command, which is
+ *                        split with g_shell_parse_argv(), if it needs it.
+ */
+
+static char *
+print_quote_name(const char *name)	/* I - Queue name */
+{
+  if (strpbrk(name, " \t\n'\"\\") != NULL)
+    return (g_shell_quote(name));
+  else
+    return (g_strdup(name));
+}
+#endif
+
+
+/*
+ * 'printrc_copy_field()' - Copy one field of a printrc line, truncating
+ *                          it to the size of the destination.
+ */
+
+static void
+printrc_copy_field(char       *dst,	/* O - Destination */
+                   size_t     dstsize,	/* I - Size of destination */
+                   const char *src,	/* I - Start of field */
+                   size_t     len)	/* I - Length of field */
+{
+  if (len > dstsize - 1)
+    len = dstsize - 1;
+
+  memcpy(dst, src, len);
+  dst[len] = '\0';
+}
+
+
 /*
  * 'printrc_load()' - Load the printer resource configuration file.
  */
@@ -2015,29 +2061,25 @@ printrc_load(void)
       if ((commaptr = strchr(line, ',')) == NULL)
         continue;	/* Skip old printer definitions */
 
-      strncpy(key.name, line, commaptr - line);
-      key.name[commaptr - line] = '\0';
+      printrc_copy_field(key.name, sizeof(key.name), line, commaptr - line);
       lineptr = commaptr + 1;
 
       if ((commaptr = strchr(lineptr, ',')) == NULL)
         continue;	/* Skip bad printer definitions */
 
-      strncpy(key.command, lineptr, commaptr - lineptr);
-      key.command[commaptr - lineptr] = '\0';
+      printrc_copy_field(key.command, sizeof(key.command), lineptr, commaptr - lineptr);
       lineptr = commaptr + 1;
 
       if ((commaptr = strchr(lineptr, ',')) == NULL)
         continue;	/* Skip bad printer definitions */
 
-      strncpy(key.driver, lineptr, commaptr - lineptr);
-      key.driver[commaptr - lineptr] = '\0';
+      printrc_copy_field(key.driver, sizeof(key.driver), lineptr, commaptr - lineptr);
       lineptr = commaptr + 1;
 
       if ((commaptr = strchr(lineptr, ',')) == NULL)
         continue;	/* Skip bad printer definitions */
 
-      strncpy(key.ppd_file, lineptr, commaptr - lineptr);
-      key.ppd_file[commaptr - lineptr] = '\0';
+      printrc_copy_field(key.ppd_file, sizeof(key.ppd_file), lineptr, commaptr - lineptr);
       lineptr = commaptr + 1;
 
       if ((commaptr = strchr(lineptr, ',')) == NULL)
@@ -2049,22 +2091,19 @@ printrc_load(void)
       if ((commaptr = strchr(lineptr, ',')) == NULL)
         continue;	/* Skip bad printer definitions */
 
-      strncpy(key.resolution, lineptr, commaptr - lineptr);
-      key.resolution[commaptr - lineptr] = '\0';
+      printrc_copy_field(key.resolution, sizeof(key.resolution), lineptr, commaptr - lineptr);
       lineptr = commaptr + 1;
 
       if ((commaptr = strchr(lineptr, ',')) == NULL)
         continue;	/* Skip bad printer definitions */
 
-      strncpy(key.media_size, lineptr, commaptr - lineptr);
-      key.media_size[commaptr - lineptr] = '\0';
+      printrc_copy_field(key.media_size, sizeof(key.media_size), lineptr, commaptr - lineptr);
       lineptr = commaptr + 1;
 
       if ((commaptr = strchr(lineptr, ',')) == NULL)
         continue;	/* Skip bad printer definitions */
 
-      strncpy(key.media_type, lineptr, commaptr - lineptr);
-      key.media_type[commaptr - lineptr] = '\0';
+      printrc_copy_field(key.media_type, sizeof(key.media_type), lineptr, commaptr - lineptr);
       lineptr = commaptr + 1;
 
       g_strlcpy(key.media_source, lineptr, sizeof(key.media_source));
@@ -2161,6 +2200,7 @@ get_printers(void)
   char	*output,
 	**lines,
 	*line,
+	*quoted,
 	name[17];
   int	j;
 #endif
@@ -2195,9 +2235,12 @@ get_printers(void)
         *strchr(line, ':') = '\0';
         g_strlcpy(plist[plist_count].name, line,
                   sizeof(plist[plist_count].name));
+        /* the command is split with g_shell_parse_argv: quote the name */
+        quoted = print_quote_name(plist[plist_count].name);
         g_snprintf(plist[plist_count].command,
                    sizeof(plist[plist_count].command),
-                   LPR_COMMAND " -P%s -l", plist[plist_count].name);
+                   LPR_COMMAND " -P%s -l", quoted);
+        g_free(quoted);
         strcpy(plist[plist_count].driver, "ps2");
         plist[plist_count].output_type = OUTPUT_COLOR;
         plist_count ++;
@@ -2222,9 +2265,11 @@ get_printers(void)
       if (sscanf(line, "printer %16s", name) == 1)
       {
 	strcpy(plist[plist_count].name, name);
+	quoted = print_quote_name(name);
 	g_snprintf(plist[plist_count].command,
 	           sizeof(plist[plist_count].command),
-	           LP_COMMAND " -s -d%s", name);
+	           LP_COMMAND " -s -d%s", quoted);
+	g_free(quoted);
         strcpy(plist[plist_count].driver, "ps2");
         plist[plist_count].output_type = OUTPUT_COLOR;
         plist_count ++;

@@ -151,6 +151,7 @@ static	int  rs;		/* read buffer size */
 
 #define MAX_ROWS 4300
 #define MAX_COLS 1728		/* !! FIXME - command line parameter */
+#define MAX_ROWS_LIMIT 262144	/* never allocate more rows than this */
 
 static gint32
 load_image (char *filename)
@@ -186,6 +187,8 @@ load_image (char *filename)
   init_byte_tab( 0, byte_tab );
 
   fd = open(filename, O_RDONLY | O_BINARY );
+  if ( fd < 0 )
+    return -1;
 
   hibit = 0;
   data = 0;
@@ -199,7 +202,7 @@ load_image (char *filename)
   lseek(fd, 0L, 0);
 
   rs = read( fd, rbuf, sizeof(rbuf) );
-  if ( rs < 0 ) { perror( "read" ); close( rs ); exit(8); }
+  if ( rs < 0 ) { perror( "read" ); close( fd ); return -1; }
   rr += rs;
   gimp_progress_update ((float)rr/rsize/2.0);
 
@@ -234,7 +237,7 @@ load_image (char *filename)
       if ( rp >= rs )
       {
         rs = read( fd, rbuf, sizeof( rbuf ) );
-        if ( rs < 0 ) { perror( "read2"); break; }
+        if ( rs < 0 ) { perror( "read2"); goto do_write; }
         rr += rs;
         gimp_progress_update ((float)rr/rsize/2.0);
         rp = 0;
@@ -272,7 +275,7 @@ load_image (char *filename)
 
 		    if ( rp >= rs )	/* buffer underrun */
 		    {   rs = read( fd, rbuf, sizeof( rbuf ) );
-			if ( rs < 0 ) { perror( "read4"); break; }
+			if ( rs < 0 ) { perror( "read4"); goto do_write; }
         		rr += rs;
       			gimp_progress_update ((float)rr/rsize/2.0);
 			rp = 0;
@@ -319,7 +322,7 @@ load_image (char *filename)
 
 		    if ( rp >= rs )	/* buffer underrun */
 		    {   rs = read( fd, rbuf, sizeof( rbuf ) );
-			if ( rs < 0 ) { perror( "read3"); break; }
+			if ( rs < 0 ) { perror( "read3"); goto do_write; }
         		rr += rs;
       			gimp_progress_update ((float)rr/rsize/2.0);
 			rp = 0;
@@ -343,6 +346,13 @@ load_image (char *filename)
 		row++;
 
 		/* bitmap memory full? make it larger! */
+		if ( row >= max_rows && max_rows >= MAX_ROWS_LIMIT )
+		{
+		    /* refuse to grow without bound (and overflow the
+		       size computation below) */
+		    perror( "too many rows, page truncated" );
+		    goto do_write;
+		}
 		if ( row >= max_rows )
 		{
 		    char * p = (char *) realloc( bitmap,
@@ -417,6 +427,12 @@ gint32 emitgimp ( int hcol, int row, char *bitmap, int bperrow, char *filename )
   /* initialize */
 
   tmp = 0;
+
+  if ( hcol <= 0 || row <= 0 )
+    {
+      free (bitmap);
+      return -1;
+    }
 
 #ifdef DEBUG
   fprintf( stderr, "emit gimp: %d x %d\n", hcol, row);

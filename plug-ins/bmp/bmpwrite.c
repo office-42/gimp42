@@ -106,6 +106,8 @@ WriteBMP (filename,image,drawable_ID)
       break;
     case INDEXED_IMAGE:
       cmap = gimp_image_get_cmap (image, &colors);
+      if (colors > MAXCOLORS)
+        colors = MAXCOLORS;
       MapSize = 4*colors;
       channels = 1;
       if (colors>16) BitsPerPixel=8; else if (colors>2) BitsPerPixel=4;
@@ -140,7 +142,7 @@ WriteBMP (filename,image,drawable_ID)
   
   /* fetch the image */
   
-  pixels = (guchar *) g_malloc(drawable->width*drawable->height*channels);
+  pixels = (guchar *) g_malloc ((gsize) drawable->width * drawable->height * channels);
   gimp_pixel_rgn_get_rect(&pixel_rgn, pixels, 0, 0, drawable->width, drawable->height);
   
   /* And let's begin the progress */
@@ -265,7 +267,7 @@ void WriteImage(f, src, width, height, encoded, channels, bpp, spzeile, MapSize)
       {
         for (i=0;i<width;i++)			/* for each pixel */
         {
-          temp = src + (ypos * rowstride) + (xpos * channels);
+          temp = src + ((gsize) ypos * rowstride) + (xpos * channels);
           buf[2]=(unsigned char) *temp;
           temp++;
           buf[1]=(unsigned char) *temp;
@@ -293,7 +295,7 @@ void WriteImage(f, src, width, height, encoded, channels, bpp, spzeile, MapSize)
             v=0;
             for (i=1;(i<=(8/bpp)) && (xpos<width);i++,xpos++)	/* for each pixel */
               {
-              temp = src + (ypos * rowstride) + (xpos * channels);
+              temp = src + ((gsize) ypos * rowstride) + (xpos * channels);
               v=v | ((unsigned char) *temp << (8-(i*bpp)));
               }
             Write(f,&v,1);
@@ -317,13 +319,13 @@ void WriteImage(f, src, width, height, encoded, channels, bpp, spzeile, MapSize)
           {
           for (xpos=0;xpos<width;)		/* loop for one row    */
             {
-              temp = src + (ypos * rowstride) + (xpos * channels);
+              temp = src + ((gsize) ypos * rowstride) + (xpos * channels);
               buf[1] = (unsigned char) *temp;
               j=0;
               while (((unsigned char) *temp == (unsigned char) buf[1]) && (j<255) && (xpos<width))
                 {
                 xpos++;
-                if (xpos<width) temp = src + (ypos * rowstride) + (xpos * channels);
+                if (xpos<width) temp = src + ((gsize) ypos * rowstride) + (xpos * channels);
                 j++;
                 }
               if (1) /* (j>2) */
@@ -341,17 +343,17 @@ void WriteImage(f, src, width, height, encoded, channels, bpp, spzeile, MapSize)
                 xpos-=j;
                 j=3;
                 xpos+=j;
-                v=*(src + (ypos * rowstride) + ((xpos-1) * channels));
+                v=*(src + ((gsize) ypos * rowstride) + ((xpos-1) * channels));
                 buf[0]=0;
                 Write(f,buf,1);
                 laenge++;
-                temp = src + (ypos * rowstride) + (xpos * channels);
+                temp = src + ((gsize) ypos * rowstride) + (xpos * channels);
                 while ((j<255) && (xpos<width) && ((unsigned char) v != ((unsigned char) *temp)))
                   {
                   v=(unsigned char) *temp;
                   xpos++;
                   j++;
-                  temp = src + (ypos * rowstride) + (xpos * channels);
+                  temp = src + ((gsize) ypos * rowstride) + (xpos * channels);
                   }
                 xpos-=j;
                 buf[0]=(unsigned char) j;
@@ -359,7 +361,7 @@ void WriteImage(f, src, width, height, encoded, channels, bpp, spzeile, MapSize)
                 laenge++;
                 for (i=0;i<j;i+=(8/bpp),xpos+=(8/bpp))
                   {
-                  temp = src + (ypos * rowstride) + (xpos * channels);
+                  temp = src + ((gsize) ypos * rowstride) + (xpos * channels);
                   v=(unsigned char) *temp;
                   temp++;
                   g=(unsigned char) *temp;

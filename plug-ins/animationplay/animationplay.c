@@ -426,7 +426,21 @@ static void do_playback(void)
   imagetype = gimp_image_base_type(image_id);
 
   if (imagetype == INDEXED)
-    palette = gimp_image_get_cmap(image_id, &ncolours);
+    {
+      /* Pixel values may exceed the colourmap size, so always keep a
+	 full 256-entry palette to index into. */
+      guchar *cmap = gimp_image_get_cmap(image_id, &ncolours);
+
+      palette = g_malloc0(768);
+      if (cmap != NULL)
+	{
+	  if (ncolours > 256)
+	    ncolours = 256;
+	  if (ncolours > 0)
+	    memcpy(palette, cmap, ncolours * 3);
+	  g_free(cmap);
+	}
+    }
   else if (imagetype == GRAY)
     {
       /* This is a bit sick, until this plugin ever gets

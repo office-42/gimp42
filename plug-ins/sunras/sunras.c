@@ -65,6 +65,9 @@ typedef struct {
 /* Sun-raster magic */
 #define RAS_MAGIC 0x59a66a95
 
+/* Largest width or height accepted when loading */
+#define SUNRAS_MAX_DIMENSION 262144
+
 #define RAS_TYPE_STD 1    /* Standard uncompressed format */
 #define RAS_TYPE_RLE 2    /* Runlength compression format */
 
@@ -353,6 +356,16 @@ load_image (char *filename)
   if ((sunhdr.l_ras_type < 0) || (sunhdr.l_ras_type > 5))
   {
     show_message ("the type of this SUN-rasterfile\nis not supported");
+    fclose (ifp);
+    return (-1);
+  }
+
+  /* Reject absurd dimensions; the row buffers are sized from them */
+  if ((sunhdr.l_ras_width < 1) || (sunhdr.l_ras_width > SUNRAS_MAX_DIMENSION)
+      || (sunhdr.l_ras_height < 1)
+      || (sunhdr.l_ras_height > SUNRAS_MAX_DIMENSION))
+  {
+    show_message ("invalid image dimensions");
     fclose (ifp);
     return (-1);
   }
@@ -829,12 +842,15 @@ static void set_color_table (gint32 image_ID,
  ncols = sunhdr->l_ras_maplength / 3;
  if (ncols <= 0) return;
 
- for (j = 0; j < ncols; j++)
+ /* The planes in suncolmap are ncols apart, but ColorMap only has
+    room for 256 entries */
+ for (j = 0; j < ncols && j < 256; j++)
  {
    ColorMap[j*3] = suncolmap[j];
    ColorMap[j*3+1] = suncolmap[j+ncols];
    ColorMap[j*3+2] = suncolmap[j+2*ncols];
  }
+ if (ncols > 256) ncols = 256;
 
 #ifdef DEBUG
  printf ("Set GIMP colortable:\n");
@@ -1296,6 +1312,7 @@ save_index (FILE *ofp,
   else
   {
     cmap = gimp_image_get_cmap (image_ID, &ncols);
+    if (ncols > 256) ncols = 256;   /* sun_colormap holds 256 entries */
 
     for (j = 0; j < ncols; j++)
     {

@@ -181,7 +181,8 @@ static gint32 load_image(char *file, char *brief) {
   guchar	header[32];	/* File header */
   int		height, width,	/* Dimensions of image */
   		offx, offy,	/* Layer offets */
-  		colours;	/* Number of colours */
+  		colours,	/* Number of colours */
+  		image_colours;	/* Number of colours in the image */
 
   gint32	image,		/* Image */
 		layer;		/* Layer */
@@ -208,6 +209,7 @@ static gint32 load_image(char *file, char *brief) {
 
  /* Get the image dimensions and create the image... */
 
+  memset(header, 0, sizeof(header));
   fread(header, 4, 1, fp);
 
   if (strncmp((char *) header, "KiSS", 4)) {
@@ -218,11 +220,20 @@ static gint32 load_image(char *file, char *brief) {
     offy= 0;
   } else { /* New-style image file, read full header */
     fread(header, 28, 1, fp);
+    if (header[1] != 4 && header[1] != 8) {
+      g_message("Unsupported number of colours (bpp %d)", header[1]);
+      gimp_quit();
+    }
     colours= (1 << header[1]);
     width= header[4] + (256 * header[5]);
     height= header[6] + (256 * header[7]);
     offx= header[8] + (256 * header[9]);
     offy= header[10] + (256 * header[11]);
+  }
+
+  if (width == 0 || height == 0) {
+    g_message("CEL: invalid image size");
+    gimp_quit();
   }
 
   image = gimp_image_new(width + offx, height + offy, INDEXED);
@@ -250,8 +261,8 @@ static gint32 load_image(char *file, char *brief) {
 
  /* Read the image in and give it to the GIMP a line at a time */
 
-  buffer = g_new(guchar, width);
-  line = g_new(guchar, (width+1) * 2);
+  buffer = g_new0(guchar, width);
+  line = g_new0(guchar, (width+1) * 2);
 
   for (i = 0; i < height && !feof(fp); ++i) {
 
@@ -301,9 +312,11 @@ static gint32 load_image(char *file, char *brief) {
   fclose(fp);
   g_free(buffer);
   g_free(line);
+  image_colours= colours;
 
  /* Use palette from file or otherwise default grey palette */
-  palette = g_new(guchar, colours*3);
+  /* room for the largest palette a palette file can supply */
+  palette = g_new0(guchar, 256*3);
 
  /* Open the file for reading if user picked one */
   if (palette_file == NULL) {
@@ -314,7 +327,9 @@ static gint32 load_image(char *file, char *brief) {
 
   if (fp != NULL) {
     colours= load_palette(fp, palette);
-  } else {
+  }
+  if (fp == NULL || colours < 1) {
+    colours= image_colours;
     for (i= 0; i < colours; ++i) {
       palette[i*3]= palette[i*3+1]= palette[i*3+2]= i * 256 / colours;
     }
@@ -337,7 +352,7 @@ static gint32 load_image(char *file, char *brief) {
 }
 
 static gint load_palette(FILE *fp, guchar palette[]) {
-  guchar	header[32];	/* File header */
+  guchar	header[32] = { 0 };	/* File header */
   guchar	buffer[2];
   int		i, bpp, colours= 0;
 
@@ -346,6 +361,9 @@ static gint load_palette(FILE *fp, guchar palette[]) {
     fread(header+4, 28, 1, fp);
     bpp= header[5];
     colours= header[8] + header[9] * 256;
+    /* palette[] holds at most 256 entries */
+    if (colours > 256)
+      colours= 256;
     if (bpp == 12) {
       for (i= 0; i < colours; ++i) {
         fread(buffer, 1, 2, fp);
@@ -436,14 +454,14 @@ static gint save_image(char *file, char *brief, gint32 image, gint32 layer) {
   gimp_pixel_rgn_init(&pixel_rgn, drawable, 0, 0, drawable->width,
                       drawable->height, TRUE, FALSE);
   buffer = g_new(guchar, drawable->width);
-  line = g_new(guchar, (drawable->width+1) * 2);
+  line = g_new0(guchar, (drawable->width+1) * 2);
 
  /* Get the image from the GIMP one line at a time and write it out */
   for (i = 0; i < drawable->height; ++i) {
     gimp_pixel_rgn_get_rect(&pixel_rgn, line, 0, i, drawable->width, 1);
     memset(buffer, 0, drawable->width);
 
-    if (colours > 16) {
+    if (colours > 15) {
       for (j = 0, k = 0; j < drawable->width*2; j+= 2, ++k) {
         if (line[j+1] > 127) {
           buffer[k]= line[j] + 1;
