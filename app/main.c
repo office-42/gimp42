@@ -97,6 +97,17 @@ add_program_folder_to_path (void)
 		      : g_strdup (bindir);
   g_setenv ("PATH", new_path, TRUE);
 
+  /*  libheif looks for its codec plug-ins where it was built unless told
+   *  otherwise; a bundle carries them in lib/libheif/plugins.
+   */
+  {
+    char *heif_plugins = g_build_filename (prefix, "lib", "libheif", "plugins", NULL);
+
+    if (g_file_test (heif_plugins, G_FILE_TEST_IS_DIR))
+      g_setenv ("LIBHEIF_PLUGIN_PATH", heif_plugins, FALSE);
+    g_free (heif_plugins);
+  }
+
   g_free (new_path);
   g_free (bindir);
   g_free (prefix);

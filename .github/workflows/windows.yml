@@ -51,6 +51,9 @@ jobs:
             libjpeg-turbo:p
             libpng:p
             libtiff:p
+            libwebp:p
+            libheif:p
+            libjxl:p
             zlib:p
             bzip2:p
             librsvg:p

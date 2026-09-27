@@ -32,7 +32,8 @@ jobs:
       - name: Install dependencies
         run: |
           brew install meson ninja pkg-config gtk4 pango cairo glib gdk-pixbuf \
-            jpeg-turbo libpng libtiff ccache dylibbundler
+            jpeg-turbo libpng libtiff webp libheif jpeg-xl sane-backends \
+            ccache dylibbundler
 
       - name: Restore ccache
         uses: actions/cache@v6

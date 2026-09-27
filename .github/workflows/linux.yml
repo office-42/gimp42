@@ -31,6 +31,7 @@ jobs:
             ccache gcc pkg-config meson ninja-build \
             libgtk-4-dev libglib2.0-dev libcairo2-dev libpango1.0-dev \
             libgdk-pixbuf-2.0-dev libjpeg-dev libpng-dev libtiff-dev \
+            libwebp-dev libheif-dev libjxl-dev libsane-dev \
             zlib1g-dev libbz2-dev xvfb
 
       - name: Restore ccache
