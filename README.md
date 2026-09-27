@@ -23,8 +23,9 @@ dialogs, plug-ins and Script-Fu) but moves it onto today's platform:
 - Drag image files onto a window to open them, and File > Open Recent
 - The mouse wheel scrolls, and Ctrl + wheel zooms
 - Text is rendered with Pango, using any font on the system
-- More file formats: WebP (with animations), HEIF/HEIC and AVIF, JPEG XL
-  and QOI
+- More file formats: WebP (with animations), HEIF/HEIC and AVIF, JPEG XL,
+  Windows icons and cursors, QOI, and whatever else GDK-Pixbuf reads,
+  such as SVG
 - File > Print uses the system's print dialog, with an Image Settings
   tab to size and place the image on the page, and File > Page Setup;
   the original PostScript, PCL and ESC/P2 drivers are still there
