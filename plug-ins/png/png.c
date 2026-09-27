@@ -712,13 +712,13 @@ load_image(char *filename)	/* I - File to load */
       if (pass != 0) /* to handle interlaced PiNGs */
       {
         gimp_pixel_rgn_get_rect(&pixel_rgn, pixel, 0, begin, drawable->width, num);
-        if (layer_bpp == 2)
+        if (layer_type == INDEXEDA_IMAGE)
           png_pack_indices(pixel, pixels, num, width);
       }
 
       png_read_rows(pp, pixels, NULL, num);
 
-      if (layer_bpp == 2)
+      if (layer_type == INDEXEDA_IMAGE)
         png_add_palette_alpha(pixels, num, width, trans_alpha);
 
       gimp_pixel_rgn_set_rect(&pixel_rgn, pixel, 0, begin, drawable->width, num);
