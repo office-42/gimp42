@@ -1296,7 +1296,9 @@ file_load_invoker (Argument *args)
   PlugInProcDef *file_proc;
   ProcRecord *proc;
 
-  file_proc = file_proc_find (load_procs, args[2].value.pdb_pointer);
+  /*  by the file's contents, as file_open does: raw_filename is only the
+   *  name as entered, which need not be a path that opens  */
+  file_proc = file_proc_find (load_procs, args[1].value.pdb_pointer);
   if (!file_proc)
     return procedural_db_return_args (&file_load_proc, FALSE);
 
