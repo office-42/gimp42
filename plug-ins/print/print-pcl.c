@@ -883,12 +883,12 @@ pcl_print(int       model,		/* I - Model */
 
 	if (output_type == OUTPUT_GRAY)
 	{
-          dither_black(out, x, drawable->width, out_width, black);
+          dither_black(out, y, drawable->width, out_width, black);
           (*writefunc)(prn, black, length, 1);
 	}
 	else
 	{
-          dither_cmyk(out, x, drawable->width, out_width, cyan, magenta,
+          dither_cmyk(out, y, drawable->width, out_width, cyan, magenta,
                       yellow, black);
 
           if (black != NULL)

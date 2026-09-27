@@ -132,13 +132,16 @@
  */
 
 /*
- * gimp42: ported to GTK 4 and GLib 2.  There is no popen() on Windows,
- * and on every platform a job now goes out in one of three ways:
+ * gimp42: ported to GTK 4 and GLib 2.  File > Print... is now the system
+ * print dialog ("file_print_gtk" and "file_page_setup", print-gtk.c);
+ * this dialog, with its own PostScript, PCL and ESC/P2 drivers, stays as
+ * File > Print with Built-in Drivers... ("file_print", whose arguments
+ * scripts use).  There is no popen() on Windows, and on every platform
+ * a job goes out in one of three ways:
  *
  *   - "File": the printer-language output is written to a file.
- *   - "System Printer": the image is printed through GtkPrintOperation,
- *     i.e. the native print dialog and printer drivers (print-gtk.c).
- *     This is the entry that makes printing work on Windows.
+ *   - "System Printer": the dialog hands its settings over to the system
+ *     print dialog (GtkPrintOperation, print-gtk.c).
  *   - spooler queues found with lpstat/lpc (UNIX): the driver output is
  *     written to a temporary file and fed to the queue's command
  *     (lp/lpr) on its standard input with GSubprocess.
@@ -406,7 +409,7 @@ query(void)
     { PARAM_INT32,	"run_mode",	"Interactive, non-interactive" },
     { PARAM_IMAGE,	"image",	"Input image" },
     { PARAM_DRAWABLE,	"drawable",	"Input drawable" },
-    { PARAM_STRING,	"output_to",	"Print command or filename (| to pipe to command)" },
+    { PARAM_STRING,	"output_to",	"Print command or filename (| to pipe to command, \"<system printer>\" for the default system printer)" },
     { PARAM_STRING,	"driver",	"Printer driver short name" },
     { PARAM_STRING,	"ppd_file",	"PPD file" },
     { PARAM_INT32,	"output_type",	"Output type (0 = gray, 1 = color)" },
@@ -430,13 +433,15 @@ query(void)
       "Michael Sweet <mike@easysw.com>",
       "Copyright 1997-1998 by Michael Sweet",
       PLUG_IN_VERSION,
-      "<Image>/File/Print",
+      "<Image>/File/Print with Built-in Drivers...",
       "RGB*,GRAY*,INDEXED*",
       PROC_PLUG_IN,
       nargs,
       0,
       args,
       NULL);
+
+  gtkprint_query();
 }
 
 
@@ -456,20 +461,24 @@ run(char   *name,		/* I - Name of print program. */
   FILE		*prn;		/* Print file/command */
   printer_t	*printer;	/* Printer driver entry */
   int		i;		/* Looping var */
-  float		brightness,	/* Computed brightness */
-		screen_gamma,	/* Screen gamma correction */
-		print_gamma,	/* Printer gamma correction */
-		density,	/* Printer density */
-		pixel;		/* Pixel value */
   char		*tmpname;	/* Temporary file for print commands */
   int		fd,		/* Temporary file descriptor */
 		media_width,	/* Media width, points */
 		media_length;	/* Media length, points */
   guchar	lut[256];	/* Lookup table for brightness */
   guchar	*cmap;		/* Colormap (indexed images only) */
-  int		ncolors;	/* Number of colors in colormap */
   GParam	*values;	/* Return values */
 
+
+ /*
+  * The system printing procedures are in print-gtk.c...
+  */
+
+  if (strcmp(name, "file_print") != 0)
+  {
+    gtkprint_run(name, nparams, param, nreturn_vals, return_vals);
+    return;
+  };
 
  /*
   * Initialize parameter data...
@@ -635,109 +644,89 @@ run(char   *name,		/* I - Name of print program. */
       gimp_tile_cache_ntiles((drawable->width + gimp_tile_width() - 1) /
                              gimp_tile_width() + 1);
 
-   /*
-    * Open the file, or a temporary file for the print command...
-    */
-
-    tmpname = NULL;
+    printer = printers + current_printer;
 
     if (plist_current == PLIST_SYSTEM)
-      prn = NULL;
-    else if (plist_current == PLIST_FILE)
-      prn = g_fopen(vars.output_to, "wb");
-    else if ((fd = g_file_open_tmp("gimp-print-XXXXXX", &tmpname, NULL)) >= 0)
     {
-      g_close(fd, NULL);
-      prn = g_fopen(tmpname, "wb");
+     /*
+      * The system printer: hand the settings over to the system print
+      * dialog (print-gtk.c), which converts the image itself and leaves
+      * the printer calibration to the system's printer driver...
+      */
+
+      (*printer->media_size)(printer->model, vars.ppd_file, vars.media_size,
+                             &media_width, &media_length);
+
+      if (!gtkprint_legacy(param[1].data.d_image, drawable,
+                           run_mode == RUN_INTERACTIVE, vars.media_size,
+                           media_width, media_length, vars.orientation,
+                           &vars.output_type, &vars.brightness,
+                           &vars.scaling, &vars.left, &vars.top))
+        values[0].data.d_status = STATUS_EXECUTION_ERROR;
     }
     else
-      prn = NULL;
-
-    if (prn != NULL || plist_current == PLIST_SYSTEM)
     {
      /*
-      * Got an output file/command, now compute a brightness lookup table...
-      * (the system printer's own driver does the printer calibration)
+      * Open the file, or a temporary file for the print command...
       */
 
-      printer      = printers + current_printer;
-      brightness   = 100.0 / vars.brightness;
-      screen_gamma = gimp_gamma() * brightness / 1.7;
-      print_gamma  = 1.0 / printer->gamma;
-      density      = printer->density;
+      tmpname = NULL;
 
-      if (plist_current == PLIST_SYSTEM)
+      if (plist_current == PLIST_FILE)
+        prn = g_fopen(vars.output_to, "wb");
+      else if ((fd = g_file_open_tmp("gimp-print-XXXXXX", &tmpname,
+                                     NULL)) >= 0)
       {
-        print_gamma = 1.0;
-        density     = 1.0;
-      };
-
-      for (i = 0; i < 256; i ++)
-      {
-        pixel = 1.0 - pow((float)i / 255.0, screen_gamma);
-        pixel = 255.5 - 255.0 * density *
-  	        	pow(brightness * pixel, print_gamma);
-
-	if (pixel <= 0.0)
-	  lut[i] = 0;
-	else if (pixel >= 255.0)
-	  lut[i] = 255;
-	else
-	  lut[i] = (int)pixel;
-      };
-
-     /*
-      * Is the image an Indexed type?  If so we need the colormap...
-      */
-
-      if (gimp_image_base_type(param[1].data.d_image) == INDEXED)
-        cmap = gimp_image_get_cmap(param[1].data.d_image, &ncolors);
-      else
-      {
-        cmap    = NULL;
-        ncolors = 0;
-      };
-
-     /*
-      * Finally, call the print driver to send the image to the printer and
-      * close the output file/command...
-      */
-
-      if (plist_current == PLIST_SYSTEM)
-      {
-        (*printer->media_size)(printer->model, vars.ppd_file, vars.media_size,
-                               &media_width, &media_length);
-
-        if (run_mode != RUN_INTERACTIVE)
-          gtk_init();
-
-        if (!gtkprint_print(vars.media_size, media_width, media_length,
-                            vars.output_type, vars.orientation, vars.scaling,
-                            vars.left, vars.top, run_mode == RUN_INTERACTIVE,
-                            drawable, lut, cmap))
-          values[0].data.d_status = STATUS_EXECUTION_ERROR;
+        g_close(fd, NULL);
+        prn = g_fopen(tmpname, "wb");
       }
       else
+        prn = NULL;
+
+      if (prn != NULL)
       {
+       /*
+        * Got an output file/command, now compute a brightness lookup
+        * table...
+        */
+
+        compute_lut(lut, vars.brightness, gimp_gamma() / 1.7,
+                    1.0 / printer->gamma, printer->density);
+
+       /*
+        * Is the image an Indexed type?  If so we need the colormap...
+        */
+
+        if (gimp_image_base_type(param[1].data.d_image) == INDEXED)
+          cmap = print_get_cmap(param[1].data.d_image);
+        else
+          cmap = NULL;
+
+       /*
+        * Finally, call the print driver to send the image to the printer
+        * and close the output file/command...
+        */
+
         (*printer->print)(printer->model, vars.ppd_file, vars.resolution,
                           vars.media_size, vars.media_type, vars.media_source,
                           vars.output_type, vars.orientation, vars.scaling,
                           vars.left, vars.top, 1, prn, drawable, lut, cmap);
 
         fclose(prn);
+        g_free(cmap);
 
         if (tmpname != NULL &&
             !run_print_command(vars.output_to, tmpname))
           values[0].data.d_status = STATUS_EXECUTION_ERROR;
-      };
-    }
-    else
-      values[0].data.d_status = STATUS_EXECUTION_ERROR;
+      }
+      else
+        values[0].data.d_status = STATUS_EXECUTION_ERROR;
 
-    if (tmpname != NULL)
-    {
-      g_unlink(tmpname);
-      g_free(tmpname);
+      if (tmpname != NULL)
+      {
+        g_unlink(tmpname);
+        g_free(tmpname);
+      };
     };
 
    /*
@@ -1954,27 +1943,6 @@ preview_motion_callback(GtkGestureDrag *gesture,
 }
 
 
-/*
- * 'printrc_filename()' - Get the name of the printrc file (g_free it).
- *
- * The file lives in the user's GIMP directory, next to its gtkrc.
- */
-
-static char *
-printrc_filename(void)
-{
-  char		*dir,		/* GIMP directory */
-		*filename;	/* printrc file */
-
-
-  dir      = g_path_get_dirname(gimp_gtkrc());
-  filename = g_build_filename(dir, "printrc", NULL);
-  g_free(dir);
-
-  return (filename);
-}
-
-
 #if defined(LPC_COMMAND) || defined(LPSTAT_COMMAND)
 /*
  * 'print_quote_name()' - Quote a queue name for a print command, which is
@@ -2038,7 +2006,7 @@ printrc_load(void)
   * Generate the filename for the current user...
   */
 
-  filename = printrc_filename();
+  filename = print_user_filename("printrc");
   fp       = g_fopen(filename, "r");
   g_free(filename);
 
@@ -2153,7 +2121,7 @@ printrc_save(void)
   * Generate the filename for the current user...
   */
 
-  filename = printrc_filename();
+  filename = print_user_filename("printrc");
   fp       = g_fopen(filename, "w");
   g_free(filename);
 

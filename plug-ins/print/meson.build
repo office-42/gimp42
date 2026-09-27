@@ -1,7 +1,8 @@
-# The print plug-in writes PostScript, PCL or ESC/P2 itself.  It sends
-# the job to a file, to a spooler command (lp/lpr, where the system has
-# one) or, on every platform, to the system's printers through
-# GtkPrintOperation ("System Printer" in the printer menu).
+# The print plug-in: File > Print... and File > Page Setup... print
+# through the system's print dialog (GtkPrintOperation, print-gtk.c) on
+# every platform.  File > Print with Built-in Drivers... writes
+# PostScript, PCL or ESC/P2 itself and sends the job to a file or to a
+# spooler command (lp/lpr, where the system has one).
 
 print_args = []
 if not is_windows
