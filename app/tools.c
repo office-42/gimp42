@@ -636,6 +636,29 @@ tools_options_free (void)
   options_title = NULL;
 }
 
+/*  The options were laid out for GTK 1 sliders, which drew their value
+ *  above a slim trough, with the slider's label aligned to the bottom
+ *  to line up with the trough.  In the toolbox, a value to the right of
+ *  the slider and labels centred on it make tidier rows.
+ */
+static void
+tools_options_tidy (GtkWidget *widget)
+{
+  GtkWidget *child;
+
+  if (GTK_IS_SCALE (widget) &&
+      gtk_scale_get_value_pos (GTK_SCALE (widget)) == GTK_POS_TOP)
+    gtk_scale_set_value_pos (GTK_SCALE (widget), GTK_POS_RIGHT);
+  else if (GTK_IS_LABEL (widget) &&
+	   gtk_label_get_yalign (GTK_LABEL (widget)) == 1.0)
+    gtk_label_set_yalign (GTK_LABEL (widget), 0.5);
+
+  for (child = gtk_widget_get_first_child (widget);
+       child;
+       child = gtk_widget_get_next_sibling (child))
+    tools_options_tidy (child);
+}
+
 static void
 tools_options_add_page (GtkWidget *options)
 {
@@ -650,6 +673,7 @@ tools_options_add_page (GtkWidget *options)
       gtk_widget_set_visible (first, FALSE);
     }
 
+  tools_options_tidy (options);
   gtk_stack_add_child (GTK_STACK (options_stack), options);
 }
 
