@@ -65,6 +65,9 @@
 #define PLUG_IN_PRINT_NAME  "Screen Shot"
 #define PLUG_IN_VERSION     "v0.9 (98/06/06)"
 #define PLUG_IN_MENU_PATH   "<Toolbox>/File/Acquire/Screen Shot..."
+/*  the same from an image window, whose menu procedures take an image  */
+#define PLUG_IN_IMAGE_NAME  "plug_in_screenshot"
+#define PLUG_IN_IMAGE_MENU_PATH "<Image>/File/Acquire/Screen Shot..."
 #define PLUG_IN_AUTHOR      "Sven Neumann (neumanns@uni-duesseldorf.de)"
 #define PLUG_IN_COPYRIGHT   "Sven Neumann"
 #define PLUG_IN_DESCRIBTION "Create a screenshot of a single window or the whole screen"
@@ -150,6 +153,13 @@ static void query (void)
 {
   static GParamDef args[] = { IN_ARGS };
   static gint nargs = NUMBER_IN_ARGS;
+  static GParamDef image_args[] =
+  {
+    { PARAM_INT32,    "run_mode",  "Interactive, non-interactive" },
+    { PARAM_IMAGE,    "image",     "Input image (unused)" },
+    { PARAM_DRAWABLE, "drawable",  "Input drawable (unused)" }
+  };
+  static gint nimage_args = sizeof (image_args) / sizeof (image_args[0]);
   static GParamDef return_vals[] = { OUT_ARGS };
   static gint nreturn_vals = NUMBER_OUT_ARGS;
 
@@ -166,6 +176,22 @@ static void query (void)
 			  nargs,
 			  nreturn_vals,
 			  args,
+			  return_vals);
+
+  gimp_install_procedure (PLUG_IN_IMAGE_NAME,
+			  PLUG_IN_DESCRIBTION,
+			  "Does what extension_screenshot does, from an image "
+			  "window's menu; the image is not used.  When called "
+			  "non-interactively it grabs the whole screen.",
+			  PLUG_IN_AUTHOR,
+			  PLUG_IN_COPYRIGHT,
+			  PLUG_IN_VERSION,
+			  PLUG_IN_IMAGE_MENU_PATH,
+			  "",
+			  PROC_PLUG_IN,
+			  nimage_args,
+			  nreturn_vals,
+			  image_args,
 			  return_vals);
 }
 
@@ -224,7 +250,14 @@ run (gchar *name,		/* name of plugin */
       break;
 
     case RUN_NONINTERACTIVE:
-      if (nparams == NUMBER_IN_ARGS)
+      if (strcmp (name, PLUG_IN_IMAGE_NAME) == 0)
+	{
+	  shootvals.root      = TRUE;
+	  shootvals.window_id = NULL;
+	  shootvals.delay     = 0;
+	  shootvals.decor     = FALSE;
+	}
+      else if (nparams == NUMBER_IN_ARGS)
 	{
 	  shootvals.root      = (gint) param[1].data.d_int32;
 	  shootvals.window_id = (gchar*) param[2].data.d_string;
