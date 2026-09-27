@@ -47,8 +47,22 @@ jpeg_dep = dependency('libjpeg',  required: get_option('jpeg'))
 png_dep  = dependency('libpng',   required: get_option('png'))
 tiff_dep = dependency('libtiff-4', required: get_option('tiff'))
 zlib_dep = dependency('zlib',     required: false)
+webp_dep      = dependency('libwebp',      version: '>= 0.6', required: get_option('webp'))
+webpdemux_dep = dependency('libwebpdemux', version: '>= 0.6', required: get_option('webp'))
+webpmux_dep   = dependency('libwebpmux',   version: '>= 0.6', required: get_option('webp'))
+heif_dep      = dependency('libheif',      version: '>= 1.10', required: get_option('heif'))
+jxl_dep         = dependency('libjxl',         version: '>= 0.7', required: get_option('jxl'))
+jxl_threads_dep = dependency('libjxl_threads', version: '>= 0.7', required: get_option('jxl'))
 
 is_windows = host_machine.system() == 'windows'
+
+# Scanners: SANE where there is one; Windows scans through WIA, which is
+# part of the system.
+if is_windows
+  sane_dep = dependency('', required: false)
+else
+  sane_dep = dependency('sane-backends', required: get_option('sane'))
+endif
 
 prefix     = get_option('prefix')
 datadir    = get_option('datadir') / 'gimp42' / (gimp_major + '.' + gimp_minor)
@@ -98,6 +112,14 @@ subdir('app')
 subdir('plug-ins')
 subdir('data')
 
+if is_windows
+  scanner_backend = 'WIA'
+elif sane_dep.found()
+  scanner_backend = 'SANE'
+else
+  scanner_backend = 'none'
+endif
+
 summary({
     'prefix'  : prefix,
     'GTK'     : gtk_dep.version(),
@@ -105,4 +127,8 @@ summary({
     'JPEG'    : jpeg_dep.found(),
     'PNG'     : png_dep.found(),
     'TIFF'    : tiff_dep.found(),
+    'WebP'    : webp_dep.found() and webpdemux_dep.found() and webpmux_dep.found(),
+    'HEIF/AVIF' : heif_dep.found(),
+    'JPEG XL' : jxl_dep.found() and jxl_threads_dep.found(),
+    'Scanner' : scanner_backend,
   }, section: 'gimp42 ' + meson.project_version())

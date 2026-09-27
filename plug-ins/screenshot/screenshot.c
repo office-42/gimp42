@@ -64,7 +64,7 @@
 #define PLUG_IN_NAME        "extension_screenshot"
 #define PLUG_IN_PRINT_NAME  "Screen Shot"
 #define PLUG_IN_VERSION     "v0.9 (98/06/06)"
-#define PLUG_IN_MENU_PATH   "<Toolbox>/Xtns/Screen Shot"
+#define PLUG_IN_MENU_PATH   "<Toolbox>/File/Acquire/Screen Shot..."
 #define PLUG_IN_AUTHOR      "Sven Neumann (neumanns@uni-duesseldorf.de)"
 #define PLUG_IN_COPYRIGHT   "Sven Neumann"
 #define PLUG_IN_DESCRIBTION "Create a screenshot of a single window or the whole screen"
