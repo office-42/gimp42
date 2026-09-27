@@ -281,10 +281,14 @@ run (char    *name,
 	case RUN_INTERACTIVE:
 	  gimp_get_data ("file_cur_save", &cursor_vals);
 	  /*  Rather no dialog than one for a file that can't be saved.  */
-	  if (! layers_fit (image, "Windows Cursor") ||
-	      ! cur_save_dialog (image))
+	  if (! layers_fit (image, "Windows Cursor"))
 	    {
 	      values[0].data.d_status = STATUS_EXECUTION_ERROR;
+	      return;
+	    }
+	  if (! cur_save_dialog (image))
+	    {
+	      values[0].data.d_status = STATUS_CANCEL;
 	      return;
 	    }
 	  break;

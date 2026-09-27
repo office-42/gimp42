@@ -55,6 +55,9 @@ typedef struct
 } RenderVals;
 
 
+/*  Set when the user cancels the size dialog  */
+static gboolean  load_cancelled = FALSE;
+
 static void     query          (void);
 static void     run            (char    *name,
 				int      nparams,
@@ -412,7 +415,8 @@ run (char    *name,
       values[1].data.d_image  = image_ID;
     }
   else
-    values[0].data.d_status = STATUS_EXECUTION_ERROR;
+    values[0].data.d_status = load_cancelled ? STATUS_CANCEL
+					     : STATUS_EXECUTION_ERROR;
 }
 
 
@@ -564,6 +568,7 @@ load_image (const gchar     *filename,
 	  gimp_get_data ("file_pixbuf_load", &vals.keep_aspect);
 	  if (! render_dialog (description, natural_w, natural_h, &vals))
 	    {
+	      load_cancelled = TRUE;
 	      g_free (description);
 	      g_free (basename);
 	      return -1;
