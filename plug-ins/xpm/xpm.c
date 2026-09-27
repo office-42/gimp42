@@ -523,9 +523,11 @@ query ()
                           nsave_args, 0,
                           save_args, NULL);
 
-  gimp_register_magic_load_handler ("file_xpm_load", "xpm", "<Load>/Xpm",
-		  "0,string,/* XPM */");
-  gimp_register_save_handler ("file_xpm_save", "xpm", "<Save>/Xpm");
+  /*  (magics are split at spaces; the third argument is file name
+   *  prefixes, not a menu path)  */
+  gimp_register_magic_load_handler ("file_xpm_load", "xpm", "",
+		  "0,string,/*\\040XPM\\040*/");
+  gimp_register_save_handler ("file_xpm_save", "xpm", "");
 }
 
 static void

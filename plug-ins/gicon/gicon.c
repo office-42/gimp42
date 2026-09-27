@@ -197,7 +197,7 @@ run (char    *name,
 	  /*  Make sure all the arguments are there!  */
 	  if (nparams != 6)
 	    status = STATUS_CALLING_ERROR;
-	  else
+	  else if (param[5].data.d_string)	/*  (none from gimp-file-save)  */
 	    g_strlcpy (givals.icon_name, param[5].data.d_string,
 		       sizeof (givals.icon_name));
 	  break;
