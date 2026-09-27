@@ -230,7 +230,7 @@ run (char    *name,
 	  if (!save_dialog (param[1].data.d_int32))
 	    {
 	      /*  Cancelled: nothing was saved.  */
-	      values[0].data.d_status = STATUS_EXECUTION_ERROR;
+	      values[0].data.d_status = STATUS_CANCEL;
 	      return;
 	    }
 	  break;
