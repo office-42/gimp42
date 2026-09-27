@@ -244,6 +244,9 @@ gimp_tile_put (GTile *tile)
   else
     tile_data.data = tile->data;
 
+  /*  done with the reply; msg is read again below  */
+  wire_destroy (&msg);
+
   if (!gp_tile_data_write (_writechannel, &tile_data))
     gimp_quit ();
 
