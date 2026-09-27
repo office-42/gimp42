@@ -411,9 +411,13 @@ run (gchar   *name,
   /* The page counter, and the settings the dialog left.  */
   scanner_vals_save ();
 
+  /*  Interactively, no image means the user closed the dialog without
+   *  scanning (any error has been shown to them already).
+   */
   if (image == -1)
     {
-      values[0].data.d_status = STATUS_EXECUTION_ERROR;
+      values[0].data.d_status = (run_mode == RUN_INTERACTIVE) ?
+				STATUS_CANCEL : STATUS_EXECUTION_ERROR;
       return;
     }
 
