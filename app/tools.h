@@ -181,9 +181,9 @@ extern ToolInfo tool_info[];
 
 void     tools_select              (ToolType);
 void     tools_initialize          (ToolType, GDisplay *);
-void     tools_options_dialog_new  (void);
-void     tools_options_dialog_show (void);
-void     tools_options_dialog_free (void);
+GtkWidget * tools_options_panel_new (void);
+void     tools_options_show        (void);
+void     tools_options_free        (void);
 void     tools_register_options    (ToolType, GtkWidget *);
 void *   tools_register_no_options (ToolType, char *);
 void     active_tool_control       (int, void *);

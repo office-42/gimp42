@@ -61,7 +61,7 @@ Layer * active_tool_layer = NULL;
 
 /* Local Data */
 
-static GtkWidget *options_shell = NULL;
+static GtkWidget *options_title = NULL;
 static GtkWidget *options_stack = NULL;
 static ToolType active_tool_type = -1;
 
@@ -110,25 +110,31 @@ ToolInfo tool_info[] =
 
 /*  Local function declarations  */
 
-static void tools_options_dialog_callback (GtkWidget *, gpointer);
-static gboolean tools_options_delete_callback (GtkWidget *, gpointer);
+static void tools_options_add_page (GtkWidget *options);
 static void tools_options_show_active (void);
 
 
 /* Function definitions */
 
-/*  Shows the active tool's page in the Tool Options dialog.  */
+/*  Shows the active tool's page in the tool options panel.  */
 static void
 tools_options_show_active (void)
 {
   GtkWidget *options;
+  const char *title;
 
   if (! active_tool || ! options_stack)
     return;
 
   options = tool_info[(int) active_tool->type].tool_options;
   if (options && gtk_widget_get_parent (options) == options_stack)
-    gtk_stack_set_visible_child (GTK_STACK (options_stack), options);
+    {
+      gtk_stack_set_visible_child (GTK_STACK (options_stack), options);
+
+      title = g_object_get_data (G_OBJECT (options), "gimp-options-title");
+      gtk_label_set_text (GTK_LABEL (options_title),
+			  title ? title : tool_info[(int) active_tool->type].tool_name);
+    }
 }
 
 static void
@@ -559,67 +565,92 @@ tools_initialize (ToolType type, GDisplay *gdisp_ptr)
   active_tool_type = active_tool->type;
 }
 
-/*  The Tool Options dialog shows one tool's options at a time: every
- *  registered options widget is a page of options_stack, and selecting
- *  a tool makes its page the visible one.
+/*  The tool options live in the toolbox, below the tools: one page per
+ *  tool in options_stack, and selecting a tool shows its page.  (They
+ *  used to be a separate Tool Options dialog, which was easy to miss.)
+ *  Every options widget starts with a label naming it ("Airbrush
+ *  Options"); the panel shows that in its heading instead.
  */
-void
-tools_options_dialog_new ()
+GtkWidget *
+tools_options_panel_new (void)
 {
-  ActionAreaItem action_items[1] =
-  {
-    { "Close", tools_options_dialog_callback, NULL, NULL }
-  };
+  GtkWidget *vbox;
+  GtkWidget *scrolled;
   guint i;
 
-  /*  The shell and main vbox  */
-  options_shell = gimp_dialog_new ("Tool Options");
-  gtk_window_set_resizable (GTK_WINDOW (options_shell), TRUE);
-  gtk_window_set_hide_on_close (GTK_WINDOW (options_shell), TRUE);
+  vbox = gimp_vbox_new (FALSE, 0);
+  gtk_widget_add_css_class (vbox, "tool-options");
+
+  options_title = gtk_label_new ("Tool Options");
+  gtk_label_set_xalign (GTK_LABEL (options_title), 0.0);
+  gtk_label_set_ellipsize (GTK_LABEL (options_title), PANGO_ELLIPSIZE_END);
+  gtk_widget_add_css_class (options_title, "heading");
+  gtk_widget_set_margin_start (options_title, 6);
+  gtk_widget_set_margin_end (options_title, 6);
+  gtk_widget_set_margin_top (options_title, 6);
+  gtk_widget_set_margin_bottom (options_title, 4);
+  gtk_box_append (GTK_BOX (vbox), options_title);
+
+  scrolled = gtk_scrolled_window_new ();
+  gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scrolled),
+				  GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+  gimp_box_pack_start (vbox, scrolled, TRUE, TRUE, 0);
 
   options_stack = gtk_stack_new ();
   gtk_stack_set_hhomogeneous (GTK_STACK (options_stack), FALSE);
   gtk_stack_set_vhomogeneous (GTK_STACK (options_stack), FALSE);
-  gimp_container_set_border_width (options_stack, 2);
-  gimp_box_pack_start (gimp_dialog_get_vbox (options_shell), options_stack,
-		       TRUE, TRUE, 0);
+  gtk_widget_set_valign (options_stack, GTK_ALIGN_START);
+  gtk_widget_set_margin_start (options_stack, 6);
+  gtk_widget_set_margin_end (options_stack, 6);
+  gtk_widget_set_margin_bottom (options_stack, 6);
+  gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scrolled), options_stack);
 
-  /*  options registered before the dialog existed  */
+  /*  options registered before the panel existed  */
   for (i = 0; i < sizeof (tool_info) / sizeof (tool_info[0]); i++)
     if (tool_info[i].tool_options &&
 	gtk_widget_get_parent (tool_info[i].tool_options) == NULL)
-      gtk_stack_add_child (GTK_STACK (options_stack),
-			   tool_info[i].tool_options);
+      tools_options_add_page (tool_info[i].tool_options);
   tools_options_show_active ();
 
-  /* handle the window manager trying to close the window */
-  g_signal_connect (options_shell, "close-request",
-		    G_CALLBACK (tools_options_delete_callback),
-		    options_shell);
-
-  action_items[0].user_data = options_shell;
-  build_action_area (options_shell, action_items, 1, 0);
+  return vbox;
 }
 
-
+/*  Shows the tool options: "Tool Options..." in the menus and double
+ *  clicking a tool bring the toolbox forward.
+ */
 void
-tools_options_dialog_show ()
+tools_options_show (void)
 {
-  /* menus_activate_callback() will destroy the active tool in many
-     cases.  if the user tries to bring up the options before
-     switching tools, the dialog will be empty.  recreate the active
-     tool here if necessary to avoid this behavior */
-
-  gtk_window_present (GTK_WINDOW (options_shell));
+  if (options_stack)
+    {
+      toolbox_raise_callback (NULL, NULL);
+      tools_options_show_active ();
+    }
 }
 
-
+/*  The panel goes with the toolbox; forget it.  */
 void
-tools_options_dialog_free ()
+tools_options_free (void)
 {
-  gtk_window_destroy (GTK_WINDOW (options_shell));
-  options_shell = NULL;
   options_stack = NULL;
+  options_title = NULL;
+}
+
+static void
+tools_options_add_page (GtkWidget *options)
+{
+  GtkWidget *first = gtk_widget_get_first_child (options);
+
+  if (first && GTK_IS_LABEL (first) &&
+      ! g_object_get_data (G_OBJECT (options), "gimp-options-title"))
+    {
+      g_object_set_data_full (G_OBJECT (options), "gimp-options-title",
+			      g_strdup (gtk_label_get_text (GTK_LABEL (first))),
+			      g_free);
+      gtk_widget_set_visible (first, FALSE);
+    }
+
+  gtk_stack_add_child (GTK_STACK (options_stack), options);
 }
 
 
@@ -632,7 +663,7 @@ tools_register_options (ToolType   type,
    *  transformation tools
    */
   if (options_stack && gtk_widget_get_parent (options) == NULL)
-    gtk_stack_add_child (GTK_STACK (options_stack), options);
+    tools_options_add_page (options);
 
   tool_info [(int) type].tool_options = options;
 }
@@ -653,6 +684,8 @@ tools_register_no_options (ToolType  tool_type,
 
   /*  this tool has no special options  */
   label = gtk_label_new ("This tool has no options.");
+  gtk_label_set_xalign (GTK_LABEL (label), 0.0);
+  gtk_widget_add_css_class (label, "dim-label");
   gtk_box_append (GTK_BOX (vbox), label);
 
   /*  Register this selection options widget with the main tools options dialog  */
@@ -700,8 +733,6 @@ active_tool_control (int   action,
 	      break;
 	    case DESTROY :
               active_tool_free();
-              if (options_shell)
-                gtk_widget_set_visible (options_shell, FALSE);
               break;
 	    }
 	}
@@ -716,23 +747,4 @@ standard_arrow_keys_func (Tool        *tool,
 			  GimpKeyEvent *kevent,
 			  gpointer     gdisp_ptr)
 {
-}
-
-static gboolean
-tools_options_delete_callback (GtkWidget *w,
-			       gpointer   client_data)
-{
-  tools_options_dialog_callback (w, client_data);
-
-  return TRUE;
-}
-
-static void
-tools_options_dialog_callback (GtkWidget *w,
-			       gpointer   client_data)
-{
-  GtkWidget *shell;
-
-  shell = (GtkWidget *) client_data;
-  gtk_widget_set_visible (shell, FALSE);
 }

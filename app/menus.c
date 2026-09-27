@@ -45,7 +45,6 @@ static MenuEntry toolbox_entries[] =
   { "/File/Dialogs/Patterns...", "<control><shift>P", (MenuCallback) dialogs_patterns_cmd_callback, 0 },
   { "/File/Dialogs/Palette...", "<control>P", (MenuCallback) dialogs_palette_cmd_callback, 0 },
   { "/File/Dialogs/Gradient Editor...", "<control>G", (MenuCallback) dialogs_gradient_editor_cmd_callback, 0 },
-  { "/File/Dialogs/Tool Options...", "<control><shift>T", (MenuCallback) dialogs_tools_options_cmd_callback, 0 },
   { "/File/---", NULL, NULL, 0, "<Separator>" },
   { "/File/Quit", "<control>Q", (MenuCallback) file_quit_cmd_callback, 0 },
 };
@@ -196,7 +195,7 @@ static MenuEntry image_entries[] =
   { "/Dialogs/Gradient Editor...", "<control>G", (MenuCallback) dialogs_gradient_editor_cmd_callback, 0 },
   { "/Dialogs/Layers & Channels...", "<control>L", (MenuCallback) dialogs_lc_cmd_callback, 0 },
   { "/Dialogs/Indexed Palette...", NULL, (MenuCallback) dialogs_indexed_palette_cmd_callback, 0 },
-  { "/Dialogs/Tool Options...", NULL, (MenuCallback) dialogs_tools_options_cmd_callback, 0 },
+  { "/Dialogs/Tool Options", NULL, (MenuCallback) dialogs_tools_options_cmd_callback, 0 },
 };
 static int n_image_entries = sizeof (image_entries) / sizeof (image_entries[0]);
 
