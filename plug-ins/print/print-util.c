@@ -32,6 +32,8 @@
  *   default_media_size() - Return the size of a default page size.
  *   compute_lut()        - Compute the brightness lookup table.
  *   print_get_cmap()     - Get the colormap of an indexed image.
+ *   print_composite()    - Get a drawable showing the image as displayed.
+ *   print_composite_done() - Delete the copy print_composite() made.
  *   print_user_filename() - Get the name of a file in the GIMP directory.
  *
  * Revision History:
@@ -766,6 +768,149 @@ print_get_cmap(gint32 image_ID)		/* I - Image */
   };
 
   return (map);
+}
+
+
+/*
+ * 'print_composite()' - Get a drawable that shows the image as it is
+ *                       displayed.
+ *
+ * An image of a single layer, shown as it is (the size of the image, no
+ * offsets, mask or transparency from its opacity), prints that layer.
+ * Anything else prints the visible layers merged in a copy of the image:
+ * over a transparent layer the size of the image, so that the merged
+ * layer has that size and keeps its transparency (the conversion puts it
+ * on white).  The bottom visible layer's mode is made normal, as the
+ * display ignores it.  *copy_ID is the copy, to be deleted with
+ * print_composite_done(), or -1.
+ */
+
+gint32
+print_composite(gint32 image_ID,	/* I - Image */
+                gint32 drawable_ID,	/* I - Drawable to print */
+                gint32 *copy_ID)	/* O - Copy of the image, or -1 */
+{
+  GParam	*return_vals;		/* Duplicate's return values */
+  int		nreturn_vals;		/* Number of return values */
+  gint32	*layers,		/* Layers of the image */
+		copy,			/* Copy of the image */
+		layer,			/* Transparent bottom layer */
+		merged;			/* Merged layer */
+  int		nlayers,		/* Number of layers */
+		visible,		/* Number of visible layers */
+		width, height,		/* Size of the image */
+		x, y,			/* Layer offsets */
+		i;			/* Looping var */
+  GDrawableType	type;			/* Type of the bottom layer */
+
+
+  *copy_ID = -1;
+  width    = gimp_image_width(image_ID);
+  height   = gimp_image_height(image_ID);
+  layers   = gimp_image_get_layers(image_ID, &nlayers);
+
+  if (nlayers == 1 && layers[0] == drawable_ID)
+  {
+    gimp_drawable_offsets(drawable_ID, &x, &y);
+
+    if (x == 0 && y == 0 &&
+        gimp_drawable_width(drawable_ID) == width &&
+        gimp_drawable_height(drawable_ID) == height &&
+        gimp_layer_get_mask_id(drawable_ID) == -1 &&
+        gimp_layer_get_visible(drawable_ID) &&
+        gimp_layer_get_opacity(drawable_ID) >= 100.0)
+    {
+      g_free(layers);
+      return (drawable_ID);
+    };
+  };
+
+  g_free(layers);
+
+  return_vals = gimp_run_procedure("gimp_channel_ops_duplicate",
+                                   &nreturn_vals,
+                                   PARAM_IMAGE, image_ID,
+                                   PARAM_END);
+
+  copy = -1;
+  if (return_vals[0].data.d_status == STATUS_SUCCESS)
+    copy = return_vals[1].data.d_image;
+
+  gimp_destroy_params(return_vals, nreturn_vals);
+
+  if (copy < 0)
+    return (drawable_ID);
+
+ /*
+  * Indexed layers merge only into indexed layers of the same kind (with
+  * or without alpha): the copy is made RGB, which keeps its colors...
+  */
+
+  if (gimp_image_base_type(copy) == INDEXED)
+  {
+    return_vals = gimp_run_procedure("gimp_convert_rgb", &nreturn_vals,
+                                     PARAM_IMAGE, copy,
+                                     PARAM_END);
+    gimp_destroy_params(return_vals, nreturn_vals);
+  };
+
+  layers = gimp_image_get_layers(copy, &nlayers);
+
+  for (i = nlayers - 1, visible = 0; i >= 0; i --)
+    if (gimp_layer_get_visible(layers[i]))
+    {
+      if (visible == 0)
+        gimp_layer_set_mode(layers[i], NORMAL_MODE);
+
+      visible ++;
+    };
+
+  g_free(layers);
+
+  switch (gimp_image_base_type(copy))
+  {
+    case GRAY :
+        type = GRAYA_IMAGE;
+        break;
+    case INDEXED :
+        type = INDEXEDA_IMAGE;
+        break;
+    default :
+        type = RGBA_IMAGE;
+        break;
+  };
+
+  layer = gimp_layer_new(copy, "Print", width, height, type, 100.0,
+                         NORMAL_MODE);
+  gimp_image_add_layer(copy, layer, nlayers);
+  gimp_drawable_fill(layer, TRANS_IMAGE_FILL);
+
+  if (visible > 0)
+    merged = gimp_image_merge_visible_layers(copy, PRINT_CLIP_TO_IMAGE);
+  else
+    merged = layer;
+
+  if (merged < 0)
+  {
+    gimp_image_delete(copy);
+    return (drawable_ID);
+  };
+
+  *copy_ID = copy;
+
+  return (merged);
+}
+
+
+/*
+ * 'print_composite_done()' - Delete the copy print_composite() made.
+ */
+
+void
+print_composite_done(gint32 copy_ID)	/* I - Copy of the image, or -1 */
+{
+  if (copy_ID >= 0)
+    gimp_image_delete(copy_ID);
 }
 
 

@@ -457,6 +457,7 @@ run(char   *name,		/* I - Name of print program. */
     GParam **return_vals)	/* O - Return values */
 {
   GDrawable	*drawable;	/* Drawable for image */
+  gint32	copy_ID;	/* Copy of image with layers merged */
   GRunModeType	run_mode;	/* Current run mode */
   FILE		*prn;		/* Print file/command */
   printer_t	*printer;	/* Printer driver entry */
@@ -495,10 +496,13 @@ run(char   *name,		/* I - Name of print program. */
   *return_vals  = values;
 
  /*
-  * Get drawable...
+  * Get drawable: what the image shows, its layers merged in a copy
+  * when it has more than one...
   */
 
-  drawable = gimp_drawable_get(param[2].data.d_drawable);
+  drawable = gimp_drawable_get(print_composite(param[1].data.d_image,
+                                               param[2].data.d_drawable,
+                                               &copy_ID));
 
   image_width  = drawable->width;
   image_height = drawable->height;
@@ -525,7 +529,7 @@ run(char   *name,		/* I - Name of print program. */
         */
 
 	if (!do_print_dialog())
-          return;
+          values[0].data.d_status = STATUS_CANCEL;
         break;
 
     case RUN_NONINTERACTIVE :
@@ -657,12 +661,12 @@ run(char   *name,		/* I - Name of print program. */
       (*printer->media_size)(printer->model, vars.ppd_file, vars.media_size,
                              &media_width, &media_length);
 
-      if (!gtkprint_legacy(param[1].data.d_image, drawable,
-                           run_mode == RUN_INTERACTIVE, vars.media_size,
-                           media_width, media_length, vars.orientation,
-                           &vars.output_type, &vars.brightness,
-                           &vars.scaling, &vars.left, &vars.top))
-        values[0].data.d_status = STATUS_EXECUTION_ERROR;
+      values[0].data.d_status =
+          gtkprint_legacy(param[1].data.d_image, drawable,
+                          run_mode == RUN_INTERACTIVE, vars.media_size,
+                          media_width, media_length, vars.orientation,
+                          &vars.output_type, &vars.brightness,
+                          &vars.scaling, &vars.left, &vars.top);
     }
     else
     {
@@ -694,10 +698,11 @@ run(char   *name,		/* I - Name of print program. */
                     1.0 / printer->gamma, printer->density);
 
        /*
-        * Is the image an Indexed type?  If so we need the colormap...
+        * Is the drawable an Indexed type?  If so we need the colormap...
         */
 
-        if (gimp_image_base_type(param[1].data.d_image) == INDEXED)
+        if (gimp_drawable_type(drawable->id) == INDEXED_IMAGE ||
+            gimp_drawable_type(drawable->id) == INDEXEDA_IMAGE)
           cmap = print_get_cmap(param[1].data.d_image);
         else
           cmap = NULL;
@@ -742,6 +747,7 @@ run(char   *name,		/* I - Name of print program. */
   */
 
   gimp_drawable_detach(drawable);
+  print_composite_done(copy_ID);
 }
 
 

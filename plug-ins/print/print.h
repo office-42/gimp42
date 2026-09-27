@@ -124,6 +124,8 @@
 #define LUM_GREEN		61
 #define LUM_BLUE		8
 
+#define PRINT_CLIP_TO_IMAGE	1	/* Merge type of the application */
+
 
 /*
  * Printer driver control structure.  See "print.c" for the actual list...
@@ -172,6 +174,9 @@ extern void	default_media_size(int model, char *ppd_file, char *media_size,
 extern void	compute_lut(guchar *lut, int brightness, float gamma,
 		            float print_gamma, float density);
 extern guchar	*print_get_cmap(gint32 image_ID);
+extern gint32	print_composite(gint32 image_ID, gint32 drawable_ID,
+		                gint32 *copy_ID);
+extern void	print_composite_done(gint32 copy_ID);
 extern char	*print_user_filename(const char *name);
 
 extern char	**escp2_parameters(int model, char *ppd_file, char *name,
@@ -211,18 +216,18 @@ extern void	ps_print(int model, char *ppd_file, char *resolution,
  * "file_print_gtk" and "file_page_setup" procedures, and the "System
  * Printer" entry of file_print's own dialog, which hands its settings
  * over to the system print dialog (and gets them back when the image
- * was printed).  gtkprint_legacy() returns FALSE when printing failed.
+ * was printed).
  */
 
 extern void	gtkprint_query(void);
 extern void	gtkprint_run(char *name, int nparams, GParam *param,
 		             int *nreturn_vals, GParam **return_vals);
-extern int	gtkprint_legacy(gint32 image_ID, GDrawable *drawable,
-		                int show_dialog, char *media_size,
-		                int media_width, int media_length,
-		                int orientation, int *output_type,
-		                int *brightness, float *scaling, int *left,
-		                int *top);
+extern GStatusType gtkprint_legacy(gint32 image_ID, GDrawable *drawable,
+		                   int show_dialog, char *media_size,
+		                   int media_width, int media_length,
+		                   int orientation, int *output_type,
+		                   int *brightness, float *scaling, int *left,
+		                   int *top);
 
 
 /*

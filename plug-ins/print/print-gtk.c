@@ -26,6 +26,7 @@
  *   gtkprint_legacy()         - Print for the "System Printer" entry of
  *                               the built-in drivers' dialog.
  *   gtkprint_page_setup()     - Run the system's page setup dialog.
+ *   gtkprint_page_setup_done() - The page setup dialog was closed.
  *   gtkprint_job_init()       - Set up a print job.
  *   gtkprint_job_run()        - Run the GtkPrintOperation.
  *   gtkprint_convert()        - Convert the drawable to a cairo surface.
@@ -47,7 +48,9 @@
  * its options and the page setup are kept in "print-settings" in the
  * user's GIMP directory, the image settings with gimp_set_data().
  *
- * When printing starts, the image is converted to a cairo image surface
+ * What prints is what the image shows: an image of more than one layer
+ * has its visible layers merged in a copy (print_composite()).  When
+ * printing starts, the image is converted to a cairo image surface
  * with the drivers' conversion functions (alpha composited over white,
  * indexed images through the colormap, gray stays gray), then the
  * brightness lookup table and grayscale are applied to it.  The preview
@@ -152,6 +155,12 @@ typedef struct			/**** Print job ****/
   int			drag_moved;	/* The drag moved the image */
 } gtkprint_job_t;
 
+typedef struct			/**** Page setup dialog result ****/
+{
+  GtkPageSetup	*page_setup;	/* New page setup, NULL if cancelled */
+  int		done;		/* The dialog was closed */
+} gtkprint_setup_result_t;
+
 typedef struct			/**** Page in the preview ****/
 {
   double	scale,		/* Preview pixels per point */
@@ -171,6 +180,8 @@ typedef struct			/**** Page in the preview ****/
  */
 
 static GStatusType	gtkprint_page_setup(GRunModeType run_mode);
+static void	gtkprint_page_setup_done(GtkPageSetup *page_setup,
+		                         gpointer data);
 static void	gtkprint_get_vals(gtkprint_vals_t *vals);
 static int	gtkprint_default_unit(void);
 static void	gtkprint_load_settings(GtkPrintSettings **settings,
@@ -295,7 +306,8 @@ gtkprint_query(void)
   gimp_install_procedure(
       "file_print_gtk",
       "Prints the image with the system's print dialog.",
-      "Prints through the system's printers.  Interactively it opens the "
+      "Prints the image as it is shown (its visible layers merged) "
+      "through the system's printers.  Interactively it opens the "
       "native print dialog, with an \"Image Settings\" tab for the size and "
       "position of the image, grayscale and brightness.  Non-interactively "
       "it prints to the last used (or the default) printer, or writes a PDF "
@@ -345,6 +357,7 @@ gtkprint_run(char   *name,		/* I - Name of the procedure */
   GRunModeType		run_mode;	/* Current run mode */
   GStatusType		status;		/* Result */
   GDrawable		*drawable;	/* Drawable to print */
+  gint32		copy_ID;	/* Copy of image with layers merged */
   GtkPrintOperationAction action;	/* Dialog, printer or PDF file */
   GtkPrintOperationResult result;	/* Result of the print operation */
   gtkprint_vals_t	vals;		/* Image settings */
@@ -369,9 +382,16 @@ gtkprint_run(char   *name,		/* I - Name of the procedure */
     return;
   };
 
+ /*
+  * Print what the image shows: its layers merged in a copy when it has
+  * more than one...
+  */
+
   gtkprint_get_vals(&vals);
 
-  drawable = gimp_drawable_get(param[2].data.d_drawable);
+  drawable = gimp_drawable_get(print_composite(param[1].data.d_image,
+                                               param[2].data.d_drawable,
+                                               &copy_ID));
   filename = NULL;
   action   = GTK_PRINT_OPERATION_ACTION_PRINT;
 
@@ -448,6 +468,8 @@ gtkprint_run(char   *name,		/* I - Name of the procedure */
 
     if (result == GTK_PRINT_OPERATION_RESULT_ERROR)
       status = STATUS_EXECUTION_ERROR;
+    else if (result == GTK_PRINT_OPERATION_RESULT_CANCEL)
+      status = STATUS_CANCEL;
     else if (result == GTK_PRINT_OPERATION_RESULT_APPLY &&
              run_mode == RUN_INTERACTIVE)
     {
@@ -459,6 +481,7 @@ gtkprint_run(char   *name,		/* I - Name of the procedure */
   };
 
   gimp_drawable_detach(drawable);
+  print_composite_done(copy_ID);
 
   values[0].data.d_status = status;
 }
@@ -474,7 +497,7 @@ gtkprint_run(char   *name,		/* I - Name of the procedure */
  * the image was printed, the image settings go back to the old dialog.
  */
 
-int
+GStatusType
 gtkprint_legacy(gint32    image_ID,	/* I - Image */
                 GDrawable *drawable,	/* I - Drawable to print */
                 int       show_dialog,	/* I - Show the system print dialog */
@@ -563,7 +586,12 @@ gtkprint_legacy(gint32    image_ID,	/* I - Image */
 
   gtkprint_job_free(&job);
 
-  return (result != GTK_PRINT_OPERATION_RESULT_ERROR);
+  if (result == GTK_PRINT_OPERATION_RESULT_ERROR)
+    return (STATUS_EXECUTION_ERROR);
+  else if (result == GTK_PRINT_OPERATION_RESULT_CANCEL)
+    return (STATUS_CANCEL);
+  else
+    return (STATUS_SUCCESS);
 }
 
 
@@ -575,8 +603,8 @@ static GStatusType
 gtkprint_page_setup(GRunModeType run_mode)	/* I - Run mode */
 {
   GtkPrintSettings	*settings;	/* Printer and its options */
-  GtkPageSetup		*page_setup,	/* Current page setup */
-			*new_setup;	/* Page setup from the dialog */
+  GtkPageSetup		*page_setup;	/* Current page setup */
+  gtkprint_setup_result_t result;	/* What the dialog gave back */
 
 
   if (run_mode == RUN_NONINTERACTIVE)
@@ -586,15 +614,51 @@ gtkprint_page_setup(GRunModeType run_mode)	/* I - Run mode */
 
   gtkprint_load_settings(&settings, &page_setup);
 
-  new_setup = gtk_print_run_page_setup_dialog(NULL, page_setup, settings);
+ /*
+  * The asynchronous dialog says when it was cancelled (no page setup);
+  * the Windows one cannot, and gives back the page setup unchanged.  It
+  * may also be done before it returns...
+  */
 
-  gtkprint_save_settings(settings, new_setup);
+  result.page_setup = NULL;
+  result.done       = FALSE;
 
-  g_object_unref(new_setup);
+  gtk_print_run_page_setup_dialog_async(NULL, page_setup, settings,
+                                        gtkprint_page_setup_done, &result);
+
+  while (!result.done)
+    g_main_context_iteration(NULL, TRUE);
+
+  if (result.page_setup != NULL)
+    gtkprint_save_settings(settings, result.page_setup);
+
   g_object_unref(page_setup);
   g_object_unref(settings);
 
+  if (result.page_setup == NULL)
+    return (STATUS_CANCEL);
+
+  g_object_unref(result.page_setup);
+
   return (STATUS_SUCCESS);
+}
+
+
+/*
+ * 'gtkprint_page_setup_done()' - The page setup dialog was closed.
+ */
+
+static void
+gtkprint_page_setup_done(GtkPageSetup *page_setup,	/* I - New page setup */
+                         gpointer     data)		/* I - Result */
+{
+  gtkprint_setup_result_t *result = data;
+
+
+  if (page_setup != NULL)
+    result->page_setup = gtk_page_setup_copy(page_setup);
+
+  result->done = TRUE;
 }
 
 
