@@ -706,6 +706,9 @@ gimp_run_procedure (char *name,
   if (!wire_read_msg (_readchannel, &msg))
     gimp_quit ();
 
+  /*  The GIMP is quitting (the procedure may have been gimp_quit)  */
+  if (msg.type == GP_QUIT)
+    gimp_quit ();
   if (msg.type != GP_PROC_RETURN)
     g_error ("unexpected message: %d\n", msg.type);
 
@@ -752,6 +755,9 @@ gimp_run_procedure2 (char   *name,
   if (!wire_read_msg (_readchannel, &msg))
     gimp_quit ();
 
+  /*  The GIMP is quitting (the procedure may have been gimp_quit)  */
+  if (msg.type == GP_QUIT)
+    gimp_quit ();
   if (msg.type != GP_PROC_RETURN)
     g_error ("unexpected message: %d\n", msg.type);
 

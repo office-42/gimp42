@@ -1388,6 +1388,12 @@ plug_in_recv_message (GIOChannel   *channel,
       wire_destroy (&msg);
     }
 
+  /*  A procedure the plug-in ran may have destroyed it already (gimp_quit
+   *  from a script destroys every plug-in, and its watch with it).
+   */
+  if (current_plug_in != (PlugIn*) data)
+    return G_SOURCE_REMOVE;
+
   /*  plug_in_close has removed the watch if the plug-in is gone  */
   keep = current_plug_in->open;
 
@@ -1627,6 +1633,7 @@ plug_in_handle_proc_run (GPProcRun *proc_run)
   Argument *args;
   Argument *return_vals;
   PlugInBlocked *blocked;
+  PlugIn *caller;
 
   args = plug_in_params_to_args (proc_run->params, proc_run->nparams, FALSE);
   proc_rec = procedural_db_lookup (proc_run->name);
@@ -1663,7 +1670,25 @@ plug_in_handle_proc_run (GPProcRun *proc_run)
       return;
     }
 
+  caller = current_plug_in;
   return_vals = procedural_db_execute (proc_run->name, args);
+
+  /*  The procedure may have closed the plug-in that called it: gimp_quit
+   *  from a script closes every plug-in.  Nobody is left to answer.
+   */
+  if (current_plug_in != caller || current_writechannel == NULL)
+    {
+      plug_in_args_destroy (args, proc_run->nparams, FALSE);
+
+      /*  (on failure only the status is set, as below)  */
+      if (return_vals)
+	plug_in_args_destroy (return_vals,
+			      (return_vals[0].arg_type == PDB_STATUS &&
+			       return_vals[0].value.pdb_int == PDB_SUCCESS) ?
+			      proc_rec->num_values + 1 : 1,
+			      TRUE);
+      return;
+    }
 
   if (return_vals &&
       (return_vals[0].arg_type != PDB_STATUS ||
