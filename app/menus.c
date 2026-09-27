@@ -36,6 +36,7 @@ static MenuEntry toolbox_entries[] =
   { "/File/New", "<control>N", (MenuCallback) file_new_cmd_callback, 0 },
   { "/File/Open", "<control>O", (MenuCallback) file_open_cmd_callback, 0 },
   { "/File/Open Recent/", NULL, NULL, 0 },
+  { "/File/Acquire/", NULL, NULL, 0 },
   { "/File/About...", NULL, (MenuCallback) about_dialog_cmd_callback, 0 },
   { "/File/Preferences...", NULL, (MenuCallback) file_pref_cmd_callback, 0 },
   { "/File/Tip of the day", NULL, (MenuCallback) tips_dialog_cmd_callback, 0 },
@@ -44,7 +45,6 @@ static MenuEntry toolbox_entries[] =
   { "/File/Dialogs/Patterns...", "<control><shift>P", (MenuCallback) dialogs_patterns_cmd_callback, 0 },
   { "/File/Dialogs/Palette...", "<control>P", (MenuCallback) dialogs_palette_cmd_callback, 0 },
   { "/File/Dialogs/Gradient Editor...", "<control>G", (MenuCallback) dialogs_gradient_editor_cmd_callback, 0 },
-  { "/File/Dialogs/Tool Options...", "<control><shift>T", (MenuCallback) dialogs_tools_options_cmd_callback, 0 },
   { "/File/---", NULL, NULL, 0, "<Separator>" },
   { "/File/Quit", "<control>Q", (MenuCallback) file_quit_cmd_callback, 0 },
 };
@@ -55,8 +55,15 @@ static MenuEntry image_entries[] =
   { "/File/New", "<control>N", (MenuCallback) file_new_cmd_callback, 1 },
   { "/File/Open", "<control>O", (MenuCallback) file_open_cmd_callback, 0 },
   { "/File/Open Recent/", NULL, NULL, 0 },
+  { "/File/Acquire/", NULL, NULL, 0 },
   { "/File/Save", "<control>S", (MenuCallback) file_save_cmd_callback, 0 },
   { "/File/Save as", "<control><shift>S", (MenuCallback) file_save_as_cmd_callback, 0 },
+  { "/File/---", NULL, NULL, 0, "<Separator>" },
+  /*  the print plug-in's items  */
+  { "/File/Page Setup...", NULL, NULL, 0, "<Placeholder>" },
+  { "/File/Print...", NULL, NULL, 0, "<Placeholder>" },
+  { "/File/Print with Built-in Drivers...", NULL, NULL, 0, "<Placeholder>" },
+  { "/File/---", NULL, NULL, 0, "<Separator>" },
   { "/File/Preferences...", NULL, (MenuCallback) file_pref_cmd_callback, 0 },
   { "/File/---", NULL, NULL, 0, "<Separator>" },
   
@@ -188,7 +195,7 @@ static MenuEntry image_entries[] =
   { "/Dialogs/Gradient Editor...", "<control>G", (MenuCallback) dialogs_gradient_editor_cmd_callback, 0 },
   { "/Dialogs/Layers & Channels...", "<control>L", (MenuCallback) dialogs_lc_cmd_callback, 0 },
   { "/Dialogs/Indexed Palette...", NULL, (MenuCallback) dialogs_indexed_palette_cmd_callback, 0 },
-  { "/Dialogs/Tool Options...", NULL, (MenuCallback) dialogs_tools_options_cmd_callback, 0 },
+  { "/Dialogs/Tool Options", NULL, (MenuCallback) dialogs_tools_options_cmd_callback, 0 },
 };
 static int n_image_entries = sizeof (image_entries) / sizeof (image_entries[0]);
 
@@ -221,6 +228,7 @@ struct _MenuItemInfo
   guint          callback_action;
   gboolean       toggle;
   gboolean       sensitive;
+  gboolean       placeholder;     /*  hidden until a plug-in claims it  */
 };
 
 static void          menus_init          (void);
@@ -228,6 +236,7 @@ static MenuNode *    menus_get_node      (const char   *path);
 static void          menus_add_entry     (const char   *factory,
 					  MenuEntry    *entry);
 static void          menus_update_sensitivity (MenuItemInfo *item);
+static void          menus_claim_placeholder  (MenuItemInfo *item);
 static char *        menus_convert_accel (const char   *accel);
 
 static GHashTable         *menu_nodes = NULL;    /*  path -> MenuNode      */
@@ -625,6 +634,8 @@ menus_add_entry (const char *factory,
       item->callback        = entry->callback;
       item->callback_data   = entry->callback_data;
       item->callback_action = entry->callback_action;
+      if (item->placeholder && item->callback)
+	menus_claim_placeholder (item);
       g_free (path);
       return;
     }
@@ -637,7 +648,9 @@ menus_add_entry (const char *factory,
   item->callback_action = entry->callback_action;
   item->toggle          = (entry->item_type &&
 			   strcmp (entry->item_type, "<ToggleItem>") == 0);
-  item->sensitive       = TRUE;
+  item->placeholder     = (entry->item_type &&
+			   strcmp (entry->item_type, "<Placeholder>") == 0);
+  item->sensitive       = !item->placeholder;
   item->section         = node->section;
 
   if (item->toggle)
@@ -691,11 +704,63 @@ menus_add_entry (const char *factory,
       g_free (accel);
     }
 
+  /*  A placeholder keeps a plug-in's item in its place in the menu
+   *  (plug-ins otherwise land at the end); it stays hidden until the
+   *  plug-in registers the same path.
+   */
+  if (item->placeholder)
+    {
+      g_menu_item_set_attribute (menu_item, "hidden-when", "s",
+				 "action-disabled");
+      g_simple_action_set_enabled (item->action, FALSE);
+    }
+
   g_menu_append_item (node->section, menu_item);
   g_object_unref (menu_item);
   g_free (detailed);
 
   g_hash_table_insert (menu_items, item->path, item);
+}
+
+/*  A plug-in registered the path of a placeholder: show the item, now
+ *  without "hidden-when", so that it greys out rather than disappears
+ *  when it does not apply.
+ */
+static void
+menus_claim_placeholder (MenuItemInfo *item)
+{
+  GMenuModel *section = G_MENU_MODEL (item->section);
+  char *detailed;
+  int i, n;
+
+  item->placeholder = FALSE;
+  item->sensitive = TRUE;
+
+  detailed = g_strconcat ("gimp.", item->action_name, NULL);
+  n = g_menu_model_get_n_items (section);
+  for (i = 0; i < n; i++)
+    {
+      char *action = NULL;
+
+      if (g_menu_model_get_item_attribute (section, i,
+					   G_MENU_ATTRIBUTE_ACTION, "s",
+					   &action) &&
+	  strcmp (action, detailed) == 0)
+	{
+	  GMenuItem *menu_item = g_menu_item_new_from_model (section, i);
+
+	  g_menu_item_set_attribute_value (menu_item, "hidden-when", NULL);
+	  g_menu_remove (item->section, i);
+	  g_menu_insert_item (item->section, i, menu_item);
+	  g_object_unref (menu_item);
+	  g_free (action);
+	  break;
+	}
+      g_free (action);
+    }
+  g_free (detailed);
+
+  menus_update_sensitivity (item);
 }
 
 static void

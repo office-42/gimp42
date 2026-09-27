@@ -54,6 +54,8 @@ static gboolean  gdisplay_delete       (GtkWindow *widget,
 
 static void      toolbox_destroy       (GtkWidget *widget,
 					gpointer   data);
+static void      interface_monitor_size (int      *width,
+					 int      *height);
 static gboolean  toolbox_delete        (GtkWindow *widget,
 					gpointer   data);
 
@@ -176,9 +178,13 @@ static const guchar pixmap_colors[8] =
 };
 
 #define NUM_TOOLS (sizeof (tool_data) / sizeof (ToolButton))
-#define COLUMNS   3
-#define ROWS      7
-#define MARGIN    2
+#define NUM_TOOLBOX_TOOLS 21    /*  the ones with a button  */
+
+/*  The toolbox's initial size: wide enough for the tool options, which
+ *  sit below the tools, and the tool buttons wrap to fill the width.
+ */
+#define TOOLBOX_WIDTH  248
+#define TOOLBOX_HEIGHT 660
 
 /*  Widgets for each tool button--these are used from command.c to activate on
  *  tool selection via both menus and keyboard accelerators.
@@ -212,7 +218,7 @@ tools_double_click (GtkGestureClick *gesture,
 		    gpointer         data)
 {
   if (n_press == 2)
-    tools_options_dialog_show ();
+    tools_options_show ();
 }
 
 void
@@ -414,19 +420,25 @@ create_color_area (GtkWidget *parent)
 static void
 create_tools (GtkWidget *parent)
 {
-  GtkWidget *table;
+  GtkWidget *flowbox;
   GtkWidget *button;
   GtkWidget *pixmap;
   GtkWidget *group;
   GtkGesture *click;
   gint i;
 
-  table = gimp_table_new (ROWS, COLUMNS, TRUE);
-  gimp_box_pack_start (parent, table, FALSE, FALSE, 0);
+  /*  The buttons flow into as many columns as the toolbox is wide.  */
+  flowbox = gtk_flow_box_new ();
+  gtk_flow_box_set_selection_mode (GTK_FLOW_BOX (flowbox), GTK_SELECTION_NONE);
+  gtk_flow_box_set_homogeneous (GTK_FLOW_BOX (flowbox), TRUE);
+  gtk_flow_box_set_min_children_per_line (GTK_FLOW_BOX (flowbox), 3);
+  gtk_flow_box_set_max_children_per_line (GTK_FLOW_BOX (flowbox), NUM_TOOLBOX_TOOLS);
+  gtk_widget_add_css_class (flowbox, "toolbox-tools");
+  gimp_box_pack_start (parent, flowbox, FALSE, FALSE, 0);
 
   group = NULL;
 
-  for (i = 0; i < 21; i++)
+  for (i = 0; i < NUM_TOOLBOX_TOOLS; i++)
     {
       tool_widgets[i] = button = gtk_toggle_button_new ();
       if (group)
@@ -435,10 +447,9 @@ create_tools (GtkWidget *parent)
       else
 	group = button;
 
-      gimp_table_attach (table, button,
-			 (i % 3), (i % 3) + 1,
-			 (i / 3), (i / 3) + 1,
-			 GIMP_FILL, GIMP_FILL, 0, 0);
+      gtk_flow_box_append (GTK_FLOW_BOX (flowbox), button);
+      /*  the button takes the clicks and the focus, not its flow box child  */
+      gtk_widget_set_focusable (gtk_widget_get_parent (button), FALSE);
 
       pixmap = create_pixmap_widget (tool_data[i].icon_data, 22, 22);
       gtk_button_set_child (GTK_BUTTON (button), pixmap);
@@ -460,7 +471,7 @@ create_tools (GtkWidget *parent)
     }
 
   /*  The non-visible tool buttons  */
-  for (i = 21; i < NUM_TOOLS; i++)
+  for (i = NUM_TOOLBOX_TOOLS; i < NUM_TOOLS; i++)
     {
       tool_widgets[i] = button = gtk_toggle_button_new ();
       g_object_ref_sink (button);
@@ -473,6 +484,30 @@ create_tools (GtkWidget *parent)
     }
 }
 
+/*  Tighter spacing for the toolbox than the theme's defaults for flow
+ *  boxes, and a frame around the docked tool options.
+ */
+static void
+toolbox_add_css (void)
+{
+  static const char css[] =
+    "flowbox.toolbox-tools > flowboxchild { padding: 0; }\n"
+    "flowbox.toolbox-tools > flowboxchild > button { padding: 4px; min-width: 0; min-height: 0; }\n"
+    "box.tool-options { border-top: 1px solid alpha(currentColor, 0.15); }\n";
+  GtkCssProvider *provider;
+
+  provider = gtk_css_provider_new ();
+#if GTK_CHECK_VERSION (4, 12, 0)
+  gtk_css_provider_load_from_string (provider, css);
+#else
+  gtk_css_provider_load_from_data (provider, css, -1);
+#endif
+  gtk_style_context_add_provider_for_display (gdk_display_get_default (),
+					      GTK_STYLE_PROVIDER (provider),
+					      GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+  g_object_unref (provider);
+}
+
 
 void
 create_toolbox ()
@@ -481,10 +516,16 @@ create_toolbox ()
   GtkWidget *main_vbox;
   GtkWidget *vbox;
   GtkWidget *menubar;
+  GtkWidget *options;
+  int s_width, s_height;
+
+  toolbox_add_css ();
 
   window = gtk_window_new ();
   gtk_window_set_title (GTK_WINDOW (window), "The GIMP");
-  gtk_window_set_resizable (GTK_WINDOW (window), FALSE);
+  interface_monitor_size (&s_width, &s_height);
+  gtk_window_set_default_size (GTK_WINDOW (window), TOOLBOX_WIDTH,
+			       MIN (TOOLBOX_HEIGHT, s_height - 96));
   g_signal_connect (window, "close-request",
 		    G_CALLBACK (toolbox_delete),
 		    NULL);
@@ -494,7 +535,6 @@ create_toolbox ()
 		    NULL);
 
   main_vbox = gimp_vbox_new (FALSE, 1);
-  gimp_container_set_border_width (main_vbox, 1);
   gtk_window_set_child (GTK_WINDOW (window), main_vbox);
 
   /*  Build the menu bar with menus  */
@@ -507,10 +547,15 @@ create_toolbox ()
   interface_accept_file_drops (window);
 
   vbox = gimp_vbox_new (FALSE, 1);
-  gimp_box_pack_start (main_vbox, vbox, TRUE, TRUE, 0);
+  gimp_container_set_border_width (vbox, 2);
+  gimp_box_pack_start (main_vbox, vbox, FALSE, FALSE, 0);
 
   create_tools (vbox);
   create_color_area (vbox);
+
+  /*  The active tool's options, below the tools  */
+  options = tools_options_panel_new ();
+  gimp_box_pack_start (main_vbox, options, TRUE, TRUE, 0);
 
   gtk_window_present (GTK_WINDOW (window));
   toolbox_shell = window;
@@ -522,7 +567,7 @@ toolbox_free ()
   int i;
 
   gtk_window_destroy (GTK_WINDOW (toolbox_shell));
-  for (i = 21; i < NUM_TOOLS; i++)
+  for (i = NUM_TOOLBOX_TOOLS; i < NUM_TOOLS; i++)
     g_object_unref (tool_widgets[i]);
 }
 

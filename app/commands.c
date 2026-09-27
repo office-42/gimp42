@@ -2229,7 +2229,7 @@ void
 dialogs_tools_options_cmd_callback (GtkWidget *widget,
 				    gpointer   client_data)
 {
-  tools_options_dialog_show ();
+  tools_options_show ();
 }
 
 void

@@ -23,18 +23,28 @@ prefix=${MINGW_PREFIX:-/ucrt64}
 [ -f "$dist/bin/gimp42.exe" ] || { echo "no gimp42.exe in $dist/bin; run meson install first" >&2; exit 1; }
 
 # The GDK pixbuf loaders for the everyday formats (GTK uses them for its
-# own icons; the GIMP reads images through its plug-ins), and a cache
-# naming just those, with paths relative to the bundle.
+# own icons; the GIMP reads images through its plug-ins, and its pixbuf
+# plug-in opens what the loaders read that no other plug-in does: SVG,
+# Mac icons, animated cursors, X bitmaps, Windows metafiles...), and a
+# cache naming just those, with paths relative to the bundle.
 loaders="$dist/lib/gdk-pixbuf-2.0/2.10.0/loaders"
 mkdir -p "$loaders"
-for l in png jpeg gif bmp ico xpm; do
-  f="$prefix/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-$l.dll"
-  [ -f "$f" ] && cp "$f" "$loaders/"
+for l in png jpeg gif bmp ico xpm ani icns qtif xbm tga pnm 'gdip-*'; do
+  for f in "$prefix"/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-$l.dll; do
+    [ -f "$f" ] && cp "$f" "$loaders/"
+  done
 done
 [ -f "$prefix/lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll" ] &&
   cp "$prefix/lib/gdk-pixbuf-2.0/2.10.0/loaders/pixbufloader_svg.dll" "$loaders/"
 ( cd "$dist" && gdk-pixbuf-query-loaders lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll ) \
   | sed 's#^"[^"]*/lib/gdk-pixbuf-2.0/#"lib/gdk-pixbuf-2.0/#' > "$loaders/../loaders.cache" || true
+
+# libheif's codec plug-ins, when it has them as separate DLLs (the GIMP
+# points LIBHEIF_PLUGIN_PATH here); their DLLs are found below.
+if [ -d "$prefix/lib/libheif" ]; then
+  mkdir -p "$dist/lib"
+  cp -r "$prefix/lib/libheif" "$dist/lib/"
+fi
 
 # GLib schemas (GTK needs its own), compiled.
 mkdir -p "$dist/share/glib-2.0/schemas"

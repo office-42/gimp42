@@ -198,7 +198,10 @@ run (char    *name,
 
 	  /*  First acquire information with a dialog  */
 	  if (! save_dialog ())
-	    return;
+	    {
+	      values[0].data.d_status = STATUS_CANCEL;
+	      return;
+	    }
 	  break;
 
 	case RUN_NONINTERACTIVE:

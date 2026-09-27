@@ -852,6 +852,25 @@ file_save_by_extension_callback (GtkWidget *w,
   save_file_proc = NULL;
 }
 
+/*  What file_open and file_save return for a load or save handler's
+ *  status: TRUE when it worked, FALSE when it failed, and -1 when the
+ *  user cancelled the handler's dialog, which needs no message and must
+ *  not mark the image as saved.
+ */
+static int
+file_status (int status)
+{
+  switch (status)
+    {
+    case PDB_SUCCESS:
+      return TRUE;
+    case PDB_CANCEL:
+      return -1;
+    default:
+      return FALSE;
+    }
+}
+
 int
 file_open (char *filename, char* raw_filename)
 {
@@ -887,8 +906,8 @@ file_open (char *filename, char* raw_filename)
   args[2].value.pdb_pointer = raw_filename;
 
   return_vals = procedural_db_execute (proc->name, args);
-  return_val = (return_vals[0].value.pdb_int == PDB_SUCCESS);
-  gimage_ID = return_vals[1].value.pdb_int;
+  return_val = file_status (return_vals[0].value.pdb_int);
+  gimage_ID = (return_val == TRUE) ? return_vals[1].value.pdb_int : -1;
 
   procedural_db_destroy_args (return_vals, proc->num_values);
   g_free (args);
@@ -950,9 +969,9 @@ file_save (int   image_ID,
   args[4].value.pdb_pointer = raw_filename;
 
   return_vals = procedural_db_execute (proc->name, args);
-  return_val = (return_vals[0].value.pdb_int == PDB_SUCCESS);
+  return_val = file_status (return_vals[0].value.pdb_int);
 
-  if (return_val)
+  if (return_val == TRUE)
     {
       /*  set this image to clean  */
       gimage_clean_all (gimage);
@@ -1296,7 +1315,9 @@ file_load_invoker (Argument *args)
   PlugInProcDef *file_proc;
   ProcRecord *proc;
 
-  file_proc = file_proc_find (load_procs, args[2].value.pdb_pointer);
+  /*  by the file's contents, as file_open does: raw_filename is only the
+   *  name as entered, which need not be a path that opens  */
+  file_proc = file_proc_find (load_procs, args[1].value.pdb_pointer);
   if (!file_proc)
     return procedural_db_return_args (&file_load_proc, FALSE);
 

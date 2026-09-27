@@ -55,7 +55,7 @@ glib-compile-schemas "$res/share/glib-2.0/schemas" || true
 
 loaders="$res/lib/gdk-pixbuf-2.0/2.10.0/loaders"
 mkdir -p "$loaders"
-for l in png jpeg gif bmp ico xpm svg; do
+for l in png jpeg gif bmp ico xpm svg ani icns qtif xbm tga pnm; do
   for f in "$prefix"/lib/gdk-pixbuf-2.0/2.10.0/loaders/*"$l"*.so; do
     [ -f "$f" ] && cp "$f" "$loaders/"
   done

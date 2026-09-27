@@ -34,6 +34,7 @@ void file_load_by_extension_callback (GtkWidget *w,
 				      gpointer   client_data);
 void file_save_by_extension_callback (GtkWidget *w,
 				      gpointer   client_data);
+/*  TRUE when done, FALSE when it failed, -1 when the user cancelled  */
 int  file_open                       (char      *filename,
 				      char      *raw_filename);
 int  file_save                       (int        image_ID,

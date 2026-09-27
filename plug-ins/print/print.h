@@ -120,6 +120,10 @@
 #  define MAX(a,b)		((a) > (b) ? (a) : (b))
 #endif /* !MIN */
 
+#define LUM_RED			31	/* RGB to grayscale luminance */
+#define LUM_GREEN		61
+#define LUM_BLUE		8
+
 
 /*
  * Printer driver control structure.  See "print.c" for the actual list...
@@ -165,6 +169,10 @@ extern void	rgb_to_rgb(guchar *, guchar *, int, int, guchar *, guchar *);
 
 extern void	default_media_size(int model, char *ppd_file, char *media_size,
 		                   int *width, int *length);
+extern void	compute_lut(guchar *lut, int brightness, float gamma,
+		            float print_gamma, float density);
+extern guchar	*print_get_cmap(gint32 image_ID);
+extern char	*print_user_filename(const char *name);
 
 extern char	**escp2_parameters(int model, char *ppd_file, char *name,
 		                   int *count);
@@ -199,17 +207,22 @@ extern void	ps_print(int model, char *ppd_file, char *resolution,
 		         GDrawable *drawable, guchar *lut, guchar *cmap);
 
 /*
- * The system printers, through GtkPrintOperation (print-gtk.c).  The
- * image is rendered with cairo instead of a printer language; media_width
- * and media_length (points) pick the default paper, which the system
- * print dialog may change.  Returns TRUE when the job was sent.
+ * The system printers, through GtkPrintOperation (print-gtk.c): the
+ * "file_print_gtk" and "file_page_setup" procedures, and the "System
+ * Printer" entry of file_print's own dialog, which hands its settings
+ * over to the system print dialog (and gets them back when the image
+ * was printed).  gtkprint_legacy() returns FALSE when printing failed.
  */
 
-extern int	gtkprint_print(char *media_size, int media_width,
-		               int media_length, int output_type,
-		               int orientation, float scaling, int left,
-		               int top, int show_dialog, GDrawable *drawable,
-		               guchar *lut, guchar *cmap);
+extern void	gtkprint_query(void);
+extern void	gtkprint_run(char *name, int nparams, GParam *param,
+		             int *nreturn_vals, GParam **return_vals);
+extern int	gtkprint_legacy(gint32 image_ID, GDrawable *drawable,
+		                int show_dialog, char *media_size,
+		                int media_width, int media_length,
+		                int orientation, int *output_type,
+		                int *brightness, float *scaling, int *left,
+		                int *top);
 
 
 /*

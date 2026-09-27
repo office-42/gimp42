@@ -21,7 +21,6 @@ File
 		Patterns	Shift+Ctrl+P
 		Palette		Ctrl+P
 		Gradient Editor Ctrl+G
-		Tool Options	Shift+Ctrl+T	
 
 
 
@@ -117,7 +116,6 @@ Dialogs
 	Palette			Ctrl+P
 	Gradient Editor		Ctrl+G
 	Layers&Channels		Ctrl+L
-	Tool Options		Shift+Ctrl+T	
 	
 
 Gradient Editor

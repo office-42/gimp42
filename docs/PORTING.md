@@ -101,6 +101,10 @@ static void foo_ok_callback (GtkWidget *w, gpointer d)
 
 `plug-ins/sparkle/sparkle.c` is a complete worked example.
 
+A load or save plug-in whose dialog the user cancels returns
+`STATUS_CANCEL`, not `STATUS_SUCCESS` (which would mark the image saved)
+or an error (which would show "Save failed").
+
 Each plug-in directory gets a `meson.build`:
 
 ```meson
@@ -282,11 +286,19 @@ These replace X-era machinery inside `app/`; ported app code uses them.
   (widget, type)`.
 * **Selecting tools**: `tools_select_widget (TOOL)` (interface.h), in
   place of activating the toolbox button.
+* **Tool options** (`tools.h`): `tools_register_options (TOOL, vbox)`
+  adds the vbox as a page of the options panel in the toolbox; its first
+  label (the "... Options" title) becomes the panel's heading.  There is
+  no Tool Options dialog any more; `tools_options_show ()` brings the
+  toolbox forward.
 * **Menus** (`menus.h`): path-based as before (`menus_set_sensitive`,
   `menus_set_state`, and `menus_get_state (path)` to read a toggle).
   Callbacks get `(NULL, callback_data, callback_action)`: a toggle
   callback must read its state with `menus_get_state`, not from the
   widget.  `gdisplay_active ()` is the display the command is for.
+  An entry of type `"<Placeholder>"` keeps a hidden place for an item
+  a plug-in registers later under the same path (plug-in items
+  otherwise go at the end of their menu).
 * **Option menus in dialogs** (`buildmenu.h`): `build_menu (items, NULL)`
   returns a ready option menu (GtkDropDown); pack it directly.
   `menu_item_set_sensitive (&items[i], s)`, `menu_item_set_active

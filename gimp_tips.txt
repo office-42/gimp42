@@ -42,8 +42,8 @@ When trying to save files as GIF, XPM, or any other indexed
 color format, you need to convert the image to indexed using 
 the Image menu.
 
-You can get the Tool Options menu to open by double-clicking 
-any button in the toolbar.
+The options of the active tool are in the toolbox, below the 
+tools.  Double-click a tool to bring the toolbox to the front.
 
 You can change the name of a layer by double-clicking 
 on its name in the Layers dialog box.

@@ -30,6 +30,9 @@
  *   rgb_to_gray()        - Convert RGB image data to grayscale.
  *   rgb_to_rgb()         - Convert RGB image data to RGB.
  *   default_media_size() - Return the size of a default page size.
+ *   compute_lut()        - Compute the brightness lookup table.
+ *   print_get_cmap()     - Get the colormap of an indexed image.
+ *   print_user_filename() - Get the name of a file in the GIMP directory.
  *
  * Revision History:
  *
@@ -105,15 +108,7 @@
  */
 
 #include "print.h"
-
-
-/*
- * RGB to grayscale luminance constants...
- */
-
-#define LUM_RED		31
-#define LUM_GREEN	61
-#define LUM_BLUE	8
+#include <math.h>
 
 
 /*
@@ -457,7 +452,7 @@ gray_to_gray(guchar *grayin,	/* I - RGB pixels */
 
     while (width > 0)
     {
-      *grayout = lut[grayin[0] * grayin[1] / 255] + 255 - grayin[1];
+      *grayout = lut[grayin[0] * grayin[1] / 255 + 255 - grayin[1]];
 
       grayin += bpp;
       grayout ++;
@@ -508,7 +503,7 @@ indexed_to_gray(guchar *indexed,	/* I - Indexed pixels */
 
     while (width > 0)
     {
-      *gray = lut[gray_cmap[indexed[0] * indexed[1] / 255] + 255 - indexed[1]];
+      *gray = lut[gray_cmap[indexed[0]] * indexed[1] / 255 + 255 - indexed[1]];
       indexed += bpp;
       gray ++;
       width --;
@@ -701,6 +696,96 @@ default_media_size(int  model,		/* I - Printer model */
     *width  = 0;
     *length = 0;
   };
+}
+
+
+/*
+ * 'compute_lut()' - Compute the brightness lookup table.
+ *
+ * gamma is the screen gamma correction, print_gamma and density are the
+ * printer's calibration values.  With all three 1.0 and a brightness of
+ * 100% the table leaves the pixels as they are.
+ */
+
+void
+compute_lut(guchar *lut,		/* O - Lookup table (256 entries) */
+            int    brightness,		/* I - Brightness, percent */
+            float  gamma,		/* I - Screen gamma correction */
+            float  print_gamma,		/* I - Printer gamma correction */
+            float  density)		/* I - Printer density */
+{
+  int		i;			/* Looping var */
+  float		scale,			/* Computed brightness */
+		screen_gamma,		/* Screen gamma correction */
+		pixel;			/* Pixel value */
+
+
+  if (brightness < 1)
+    brightness = 1;
+
+  scale        = 100.0 / brightness;
+  screen_gamma = gamma * scale;
+
+  for (i = 0; i < 256; i ++)
+  {
+    pixel = 1.0 - pow((float)i / 255.0, screen_gamma);
+    pixel = 255.5 - 255.0 * density * pow(scale * pixel, print_gamma);
+
+    if (pixel <= 0.0)
+      lut[i] = 0;
+    else if (pixel >= 255.0)
+      lut[i] = 255;
+    else
+      lut[i] = (int)pixel;
+  };
+}
+
+
+/*
+ * 'print_get_cmap()' - Get the colormap of an indexed image (g_free it).
+ *
+ * The conversion functions look up any index, so the map always has 256
+ * entries.
+ */
+
+guchar *
+print_get_cmap(gint32 image_ID)		/* I - Image */
+{
+  guchar	*cmap,			/* Image's colormap */
+		*map;			/* Colormap with 256 entries */
+  int		ncolors;		/* Number of colors in colormap */
+
+
+  map  = g_new0(guchar, 256 * 3);
+  cmap = gimp_image_get_cmap(image_ID, &ncolors);
+
+  if (cmap != NULL)
+  {
+    memcpy(map, cmap, CLAMP(ncolors, 0, 256) * 3);
+    g_free(cmap);
+  };
+
+  return (map);
+}
+
+
+/*
+ * 'print_user_filename()' - Get the name of a file in the user's GIMP
+ *                           directory, next to its gtkrc (g_free it).
+ */
+
+char *
+print_user_filename(const char *name)	/* I - Name of the file */
+{
+  char		*dir,			/* GIMP directory */
+		*filename;		/* File */
+
+
+  dir      = g_path_get_dirname(gimp_gtkrc());
+  filename = g_build_filename(dir, name, NULL);
+  g_free(dir);
+
+  return (filename);
 }
 
 

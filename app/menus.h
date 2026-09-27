@@ -43,7 +43,8 @@ struct _MenuEntry
   char         *accelerator;      /*  "<control>S", "equal", NULL           */
   MenuCallback  callback;
   guint         callback_action;
-  char         *item_type;        /*  NULL, "<Separator>", "<ToggleItem>"   */
+  char         *item_type;        /*  NULL, "<Separator>", "<ToggleItem>",
+				      "<Placeholder>"                     */
   gpointer      callback_data;
 };
 

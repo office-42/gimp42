@@ -52,7 +52,8 @@ typedef enum
   PDB_EXECUTION_ERROR,
   PDB_CALLING_ERROR,
   PDB_PASS_THROUGH,
-  PDB_SUCCESS
+  PDB_SUCCESS,
+  PDB_CANCEL		/*  the user cancelled a dialog  */
 } PDBStatusType;
 
 

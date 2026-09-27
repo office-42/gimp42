@@ -1,3 +1,7 @@
 option('jpeg', type: 'feature', value: 'auto', description: 'JPEG file plug-in')
 option('png',  type: 'feature', value: 'auto', description: 'PNG file plug-in')
 option('tiff', type: 'feature', value: 'auto', description: 'TIFF file plug-in')
+option('webp', type: 'feature', value: 'auto', description: 'WebP file plug-in')
+option('heif', type: 'feature', value: 'auto', description: 'HEIF/AVIF file plug-in')
+option('jxl',  type: 'feature', value: 'auto', description: 'JPEG XL file plug-in')
+option('sane', type: 'feature', value: 'auto', description: 'Scanner support through SANE (Linux, macOS); Windows uses WIA')

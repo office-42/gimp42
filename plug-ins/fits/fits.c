@@ -246,7 +246,11 @@ run (char    *name,
           /*  Possibly retrieve data  */
           gimp_get_data ("file_fits_load", &plvals);
 
-          if (!load_dialog ()) return;
+          if (! load_dialog ())
+	    {
+	      values[0].data.d_status = STATUS_CANCEL;
+	      return;
+	    }
           break;
 
         case RUN_NONINTERACTIVE:

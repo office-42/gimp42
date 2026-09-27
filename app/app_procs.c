@@ -514,8 +514,7 @@ app_init (void)
       create_toolbox ();
       gximage_init ();
       render_setup (transparency_type, transparency_size);
-      tools_options_dialog_new ();
-      tools_select (RECT_SELECT);
+      tools_select_widget (RECT_SELECT);
       message_handler = MESSAGE_BOX;
     }
 
@@ -567,7 +566,7 @@ app_exit_finish (void)
     {
       gximage_free ();
       render_free ();
-      tools_options_dialog_free ();
+      tools_options_free ();
     }
   gimp_main_loop_quit ();
 }
