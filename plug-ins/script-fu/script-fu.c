@@ -791,6 +791,11 @@ marshall_proc_db_call (LISP a)
 	  lprin1s (a_saved, error_str + strlen(error_str));
       return my_err (error_str, NIL);
       break;
+    case STATUS_CANCEL:
+	  strcpy (error_str, "Procedural database execution was cancelled:\n    ");
+	  lprin1s (a_saved, error_str + strlen(error_str));
+      return my_err (error_str, NIL);
+      break;
     case STATUS_SUCCESS:
       return_val = NIL;
 

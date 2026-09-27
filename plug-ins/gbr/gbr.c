@@ -168,8 +168,11 @@ run (char    *name,
 			case RUN_INTERACTIVE:
 				/*  Possibly retrieve data  */
 				gimp_get_data("file_gbr_save", &info);
-				if (!save_dialog())
-					return;
+				if (! save_dialog ())
+				  {
+				    values[0].data.d_status = STATUS_CANCEL;
+				    return;
+				  }
 				break;
 			case RUN_NONINTERACTIVE:  /* FIXME - need a real RUN_NONINTERACTIVE */
 				if (nparams != 7)

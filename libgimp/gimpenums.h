@@ -110,7 +110,8 @@ typedef enum
   STATUS_EXECUTION_ERROR,
   STATUS_CALLING_ERROR,
   STATUS_PASS_THROUGH,
-  STATUS_SUCCESS
+  STATUS_SUCCESS,
+  STATUS_CANCEL		/*  the user cancelled a dialog  */
 } GStatusType;
 
 

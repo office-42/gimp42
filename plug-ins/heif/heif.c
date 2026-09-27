@@ -283,7 +283,7 @@ run (char    *name,
 	   *  not take for success (it would mark the image clean).
 	   */
 	  if (!save_dialog (format, &vals))
-	    values[0].data.d_status = STATUS_EXECUTION_ERROR;
+	    values[0].data.d_status = STATUS_CANCEL;
 	  break;
 
 	case RUN_NONINTERACTIVE:

@@ -575,7 +575,10 @@ run (char    *name,
 	  /*  First acquire information with a dialog  */
 	  if (gimp_drawable_has_alpha(param[2].data.d_int32))
 		  if (! save_dialog ())
-		    return;
+		    {
+		      values[0].data.d_status = STATUS_CANCEL;
+		      return;
+		    }
 	  break;
 
 	case RUN_NONINTERACTIVE:

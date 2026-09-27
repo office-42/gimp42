@@ -186,6 +186,8 @@ run (char    *name,
     save_image (param[3].data.d_string, drawable);
     values[0].data.d_status = STATUS_SUCCESS;  
   }
+  else
+    values[0].data.d_status = STATUS_CANCEL;
 
   gimp_set_data ("file_GTM_save", &gtmvals, sizeof (GTMValues));
 }

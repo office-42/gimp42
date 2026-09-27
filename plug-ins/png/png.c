@@ -341,8 +341,11 @@ run(char   *name,		/* I - Name of filter program. */
           * Then acquire information with a dialog...
           */
 
-          if (!save_dialog())
-            return;
+          if (! save_dialog ())
+	    {
+	      values[0].data.d_status = STATUS_CANCEL;
+	      return;
+	    }
           break;
 
       case RUN_NONINTERACTIVE :
