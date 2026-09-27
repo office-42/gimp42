@@ -110,7 +110,7 @@ query ()
   static int nsave_args = sizeof (save_args) / sizeof (save_args[0]);
 
   gimp_install_procedure ("file_gicon_load",
-                          "loads files of the .ico file format",
+                          "loads GIMP icon files",
                           "FIXME: write help",
 			  "Spencer Kimball",
 			  "Spencer Kimball",
@@ -122,7 +122,7 @@ query ()
                           load_args, load_return_vals);
 
   gimp_install_procedure ("file_gicon_save",
-                          "saves files in the .ico file format",
+                          "saves GIMP icon files",
                           "FIXME: write help",
 			  "Spencer Kimball",
 			  "Spencer Kimball",
@@ -133,8 +133,13 @@ query ()
                           nsave_args, 0,
                           save_args, NULL);
 
-  gimp_register_load_handler ("file_gicon_load", "ico", "");
-  gimp_register_save_handler ("file_gicon_save", "ico", "");
+  /*  ".ico" is a Windows icon today; the GIMP's own icons are known by
+   *  the first line the saver writes (spaces as \040: a magic is split
+   *  at spaces and commas), so old ones named .ico still load.
+   */
+  gimp_register_magic_load_handler ("file_gicon_load", "gicon", "",
+				    "0,string,/*\\040\\040GIMP\\040icon\\040image\\040format");
+  gimp_register_save_handler ("file_gicon_save", "gicon", "");
 }
 
 static void
